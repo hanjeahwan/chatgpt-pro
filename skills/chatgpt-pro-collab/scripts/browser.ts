@@ -587,7 +587,9 @@ function startVerificationScript(contextMarker: string): string {
       });
       return authControls.length === 0;
     }, undefined, { timeout: 60000, polling: 250 });
-    const url = new URL(page.url());
+    const url = await page.evaluate(() => {
+      return { hostname: location.hostname, pathname: location.pathname, href: location.href };
+    });
     if (url.hostname !== 'chatgpt.com' || url.pathname !== '/') {
       throw new Error('page contract drift: new conversation root was not observed');
     }
@@ -651,7 +653,9 @@ function sendScript(prompt: string): string {
         return elements.filter((element) => element.getAttribute('data-turn') === 'user').length > previousCount;
       }, userCount, { timeout: 60000, polling: 100 });
       await page.waitForURL((url) => /^\\/c\\/[^/?#]+\\/?$/.test(url.pathname), { timeout: 60000 });
-      const url = new URL(page.url());
+      const url = await page.evaluate(() => {
+        return { hostname: location.hostname, pathname: location.pathname, origin: location.origin };
+      });
       const match = /^\\/c\\/([^/?#]+)\\/?$/.exec(url.pathname);
       if (url.hostname !== 'chatgpt.com' || match === null) {
         throw new Error('page contract drift: canonical conversation URL was not observed');
@@ -684,7 +688,9 @@ function sendScript(prompt: string): string {
 function waitScript(expectedConversationId: string): string {
   return `async (page) => {
     const expectedConversationId = ${JSON.stringify(expectedConversationId)};
-    const url = new URL(page.url());
+    const url = await page.evaluate(() => {
+      return { hostname: location.hostname, pathname: location.pathname, origin: location.origin };
+    });
     const match = /^\\/c\\/([^/?#]+)\\/?$/.exec(url.pathname);
     if (url.hostname !== 'chatgpt.com' || match === null || match[1] !== expectedConversationId) {
       throw new Error('conversation identity does not match the pending turn');
@@ -774,7 +780,9 @@ function archiveScript(expectedConversationId: string): string {
   return `async (page) => {
     const conversationId = ${JSON.stringify(expectedConversationId)};
     const targetPath = '/c/' + conversationId;
-    const url = new URL(page.url());
+    const url = await page.evaluate(() => {
+      return { hostname: location.hostname, pathname: location.pathname };
+    });
     if (url.hostname !== 'chatgpt.com' || url.pathname.replace(/\\/$/, '') !== targetPath) {
       throw new Error('conversation identity does not match archive target');
     }

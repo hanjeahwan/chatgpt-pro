@@ -53,6 +53,8 @@ describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
     ).not.toContain('state-save');
     const startSource = await lastScript(fixture.invocations);
     expect(startSource).toContain('await page.evaluate((marker) =>');
+    expect(startSource).toContain('hostname: location.hostname');
+    expect(startSource).not.toContain('new URL(page.url())');
     expect(startSource).not.toContain("\n    sessionStorage.setItem('chatgpt-pro-collab-context-id', contextMarker);");
     expectPageFunctionSyntax(startSource);
   });
@@ -109,6 +111,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     expect(sendSource).toContain("page.locator('#prompt-textarea')");
     expect(sendSource).toContain('page.locator(\'[data-testid="send-button"]\')');
     expect(sendSource).toContain('exact prompt');
+    expect(sendSource).not.toContain('new URL(page.url())');
     expectPageFunctionSyntax(sendSource);
   });
 
@@ -132,6 +135,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     expect(source).toContain("name: 'Stop answering', exact: true");
     expect(source).not.toContain('pbpaste');
     expect(source).not.toContain('osascript');
+    expect(source).not.toContain('new URL(page.url())');
     expectPageFunctionSyntax(source);
   });
 
@@ -145,6 +149,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     expect(source).toContain('[data-testid="conversation-options-button"]');
     expect(source).toContain("name: 'Archive', exact: true");
     expect(source).not.toContain('Open conversation options');
+    expect(source).not.toContain('new URL(page.url())');
     expectPageFunctionSyntax(source);
   });
 });
