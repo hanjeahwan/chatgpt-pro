@@ -36,6 +36,32 @@ describe('browser command side-effect gate', () => {
     await expect(readFile(markerPath, 'utf8')).resolves.toBe('yes');
   });
 
+  it('reports a pre-release signal without launching the guarded command', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-command-pre-release-signal-'));
+    const markerPath = join(root, 'must-not-exist');
+    const gatePath = join(
+      import.meta.dirname,
+      '..',
+      'skills',
+      'chatgpt-pro-collab',
+      'scripts',
+      'browser-command-gate.ts',
+    );
+    const gate = spawn(
+      process.execPath,
+      [gatePath, process.execPath, '-e', `require('node:fs').writeFileSync(${JSON.stringify(markerPath)}, 'yes')`],
+      { stdio: ['pipe', 'pipe', 'pipe', 'pipe'] },
+    );
+
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 100);
+    });
+    gate.kill('SIGTERM');
+
+    await expect(waitForExit(gate)).resolves.toBe(128);
+    await expect(access(markerPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('reports when the released command definitely did not spawn', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collab-command-not-spawned-'));
     let released = false;

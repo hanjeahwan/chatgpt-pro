@@ -12,6 +12,8 @@ const CHATGPT_URL = 'https://chatgpt.com/';
 const PROTOCOL = 'chatgpt-pro-collab/v1';
 const BROWSER_COMMAND_GATE_PATH = fileURLToPath(new URL('./browser-command-gate.ts', import.meta.url));
 const COMMAND_PID_NOTIFICATION_FAILED_EXIT_CODE = 70;
+const COMMAND_SPAWN_FAILED_EXIT_CODE = 127;
+const COMMAND_STOPPED_BEFORE_SPAWN_EXIT_CODE = 128;
 
 export interface BrowserCommandInvocation {
   readonly executable: string;
@@ -757,7 +759,10 @@ export function runBrowserCommand(invocation: BrowserCommandInvocation): Promise
         }
         commandObserverError ??= new Error('browser command gate could not report the command PID');
       }
-      if (code === 127 && !commandSpawnObserved) {
+      if (
+        (code === COMMAND_SPAWN_FAILED_EXIT_CODE || code === COMMAND_STOPPED_BEFORE_SPAWN_EXIT_CODE) &&
+        !commandSpawnObserved
+      ) {
         try {
           invocation.onCommandNotSpawned?.();
         } catch (error) {
