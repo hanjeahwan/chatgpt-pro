@@ -116,7 +116,22 @@ describe('BEH-002, BEH-005, and BEH-007 state gates', () => {
 
     expect(() => {
       return new StateStore(databasePath);
-    }).toThrowError(/not ChatGPT Pro Collab V1/);
+    }).toThrowError(/not owned by ChatGPT Pro Collab/);
+    expect(await readFile(databasePath)).toEqual(before);
+  });
+
+  it('rejects a marked database with extra legacy columns instead of migrating it', async () => {
+    const databasePath = join(tmpdir(), `collab-incompatible-${crypto.randomUUID()}.sqlite`);
+    const initialized = new StateStore(databasePath);
+    initialized.close();
+    const incompatible = new DatabaseSync(databasePath);
+    incompatible.exec('ALTER TABLE task ADD COLUMN legacy_extra TEXT');
+    incompatible.close();
+    const before = await readFile(databasePath);
+
+    expect(() => {
+      return new StateStore(databasePath);
+    }).toThrowError(/incompatible task table/);
     expect(await readFile(databasePath)).toEqual(before);
   });
 });

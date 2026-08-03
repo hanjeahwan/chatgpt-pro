@@ -133,7 +133,7 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     expect(fixture.browser.archived).toEqual([]);
   });
 
-  it('rejects a pre-existing seed when no V1 state marker proves setup provenance', async () => {
+  it('rejects a pre-existing seed when no Collab state marker proves setup provenance', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collab-unmarked-seed-'));
     const paths = collabPaths(root);
     await ensureCollabDirectories(paths);

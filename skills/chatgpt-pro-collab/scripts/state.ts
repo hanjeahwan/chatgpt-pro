@@ -1,9 +1,8 @@
 import { existsSync, statSync } from 'node:fs';
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 
-const V1_APPLICATION_ID = 0x43504331;
-const V1_SCHEMA_VERSION = 1;
-const TASK_COLUMNS = [
+const COLLAB_APPLICATION_ID = 0x43504331;
+const CURRENT_TASK_COLUMNS = [
   'id',
   'playwright_session',
   'conversation_id',
@@ -17,7 +16,7 @@ const TASK_COLUMNS = [
   'browser_operation_name',
   'browser_operation_child_pid',
 ] as const;
-const TURN_COLUMNS = [
+const CURRENT_TURN_COLUMNS = [
   'task_id',
   'id',
   'status',
@@ -76,32 +75,32 @@ export class StateStore {
   readonly #database: DatabaseSync;
 
   /**
-   * Rejects an existing non-V1 database before interactive setup changes authentication state.
+   * Rejects foreign or incompatible state before interactive setup changes authentication state.
    *
    * @param databasePath Fixed Collab database path.
-   * @returns Nothing when the path is absent or already belongs to V1.
+   * @returns Nothing when the path is absent or has the exact current Collab schema.
    * @throws {StateError} If an existing database is unmarked or incompatible.
    * @throws {Error} If SQLite cannot read an existing database.
    */
   static assertSetupTarget(databasePath: string): void {
     if (existsSync(databasePath)) {
-      assertV1Database(databasePath);
+      assertCollabDatabase(databasePath);
     }
   }
 
   /**
-   * Opens one process-local SQLite connection after enforcing V1 provenance.
+   * Opens one process-local SQLite connection after enforcing Collab ownership and exact schema.
    *
    * @param databasePath Absolute path to the Collab coordination database.
-   * @param mode Whether a missing database may be initialized as V1.
+   * @param mode Whether a missing database may be initialized with the current schema.
    * @throws {Error} If SQLite cannot open, configure, or initialize the database.
    */
   constructor(databasePath: string, mode: 'initialize' | 'require-existing' = 'initialize') {
     const databaseExists = existsSync(databasePath);
     if (databaseExists) {
-      assertV1Database(databasePath);
+      assertCollabDatabase(databasePath);
     } else if (mode === 'require-existing') {
-      throw new StateError('STATE_NOT_INITIALIZED', `V1 state database does not exist: ${databasePath}`);
+      throw new StateError('STATE_NOT_INITIALIZED', `Collab state database does not exist: ${databasePath}`);
     }
 
     this.#database = new DatabaseSync(databasePath);
@@ -140,8 +139,7 @@ export class StateStore {
           FOREIGN KEY (task_id) REFERENCES task(id)
         ) STRICT;
 
-        PRAGMA user_version = ${V1_SCHEMA_VERSION};
-        PRAGMA application_id = ${V1_APPLICATION_ID};
+        PRAGMA application_id = ${COLLAB_APPLICATION_ID};
       `);
     }
     executeWithBusyRetry(this.#database, 'PRAGMA journal_mode = WAL', 5000);
@@ -714,21 +712,20 @@ export class StateStore {
 /**
  * Verifies marker, version, and required columns through a read-only connection.
  *
- * @param databasePath Existing database path that must belong to this V1 implementation.
+ * @param databasePath Existing database path that must belong to this implementation.
  * @returns Nothing after the provenance and schema checks pass.
  * @throws {StateError} If the database is unmarked, legacy, or structurally incompatible.
  * @throws {Error} If SQLite cannot read the database.
  */
-function assertV1Database(databasePath: string): void {
+function assertCollabDatabase(databasePath: string): void {
   const database = new DatabaseSync(databasePath, { readOnly: true });
   try {
-    const applicationId = pragmaInteger(database, 'application_id');
-    const schemaVersion = pragmaInteger(database, 'user_version');
-    if (applicationId !== V1_APPLICATION_ID || schemaVersion !== V1_SCHEMA_VERSION) {
-      throw new StateError('STATE_INCOMPATIBLE', `state database is not ChatGPT Pro Collab V1: ${databasePath}`);
+    const applicationId = applicationIdFrom(database);
+    if (applicationId !== COLLAB_APPLICATION_ID) {
+      throw new StateError('STATE_INCOMPATIBLE', `state database is not owned by ChatGPT Pro Collab: ${databasePath}`);
     }
-    requireTableColumns(database, 'task', TASK_COLUMNS);
-    requireTableColumns(database, 'turn', TURN_COLUMNS);
+    requireExactTableColumns(database, 'task', CURRENT_TASK_COLUMNS);
+    requireExactTableColumns(database, 'turn', CURRENT_TURN_COLUMNS);
   } finally {
     database.close();
   }
@@ -738,28 +735,27 @@ function assertV1Database(databasePath: string): void {
  * Reads one integer-valued SQLite pragma.
  *
  * @param database Read-only provenance connection.
- * @param name Closed pragma name selected by the caller.
  * @returns The safe integer pragma value.
  * @throws {TypeError} If SQLite returns an unexpected row.
  */
-function pragmaInteger(database: DatabaseSync, name: 'application_id' | 'user_version'): number {
-  const value = record(database.prepare(`PRAGMA ${name}`).get())[name];
+function applicationIdFrom(database: DatabaseSync): number {
+  const value = record(database.prepare('PRAGMA application_id').get()).application_id;
   if (typeof value !== 'number' || !Number.isSafeInteger(value)) {
-    throw new TypeError(`PRAGMA ${name} must return an integer`);
+    throw new TypeError('PRAGMA application_id must return an integer');
   }
   return value;
 }
 
 /**
- * Rejects a marked database whose V1 table shape is incomplete.
+ * Rejects a marked database whose table shape differs from the current implementation.
  *
  * @param database Read-only provenance connection.
- * @param table Closed V1 table name.
- * @param required Required V1 column names.
- * @returns Nothing when every required column exists.
- * @throws {StateError} If the table is absent or incomplete.
+ * @param table Closed current table name.
+ * @param required Exact current column names.
+ * @returns Nothing when no column is missing or extra.
+ * @throws {StateError} If the table is absent or differs from the current schema.
  */
-function requireTableColumns(database: DatabaseSync, table: 'task' | 'turn', required: readonly string[]): void {
+function requireExactTableColumns(database: DatabaseSync, table: 'task' | 'turn', required: readonly string[]): void {
   const columns = new Set(
     database
       .prepare(`PRAGMA table_info(${table})`)
@@ -769,6 +765,7 @@ function requireTableColumns(database: DatabaseSync, table: 'task' | 'turn', req
       }),
   );
   if (
+    columns.size !== required.length ||
     required.some((name) => {
       return !columns.has(name);
     })
