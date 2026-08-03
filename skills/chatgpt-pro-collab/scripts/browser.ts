@@ -523,11 +523,22 @@ function parseProtocolResult<T extends ProtocolResult>(stdout: string, expectedK
       // CLI wrapper lines are not JSON; only the page result envelope is relevant.
     }
   }
-  throw new BrowserError(
-    'PLAYWRIGHT_CONTRACT_DRIFT',
-    `parse ${expectedKind} result`,
-    'protocol envelope was not present',
-  );
+  throw new BrowserError('PLAYWRIGHT_CONTRACT_DRIFT', `parse ${expectedKind} result`, protocolFailureDetail(stdout));
+}
+
+/**
+ * Preserves the fixed CLI's page-script error without returning unrelated snapshots.
+ *
+ * @param stdout Complete `run-code` output whose envelope was absent.
+ * @returns Bounded error detail for the browser boundary.
+ * @throws {Error} This pure formatter does not throw.
+ */
+function protocolFailureDetail(stdout: string): string {
+  const marker = stdout.lastIndexOf('### Error');
+  if (marker < 0) {
+    return 'protocol envelope was not present';
+  }
+  return `protocol envelope was not present; ${stdout.slice(marker).trim().slice(0, 2000)}`;
 }
 
 /**
@@ -580,12 +591,17 @@ function startVerificationScript(contextMarker: string): string {
     if (url.hostname !== 'chatgpt.com' || url.pathname !== '/') {
       throw new Error('page contract drift: new conversation root was not observed');
     }
-    sessionStorage.setItem('chatgpt-pro-collab-context-id', contextMarker);
+    await page.evaluate((marker) => {
+      sessionStorage.setItem('chatgpt-pro-collab-context-id', marker);
+    }, contextMarker);
+    const observedContextMarker = await page.evaluate(() => {
+      return sessionStorage.getItem('chatgpt-pro-collab-context-id');
+    });
     return JSON.stringify({
       protocol: '${PROTOCOL}',
       kind: 'start',
       url: page.url(),
-      contextMarker: sessionStorage.getItem('chatgpt-pro-collab-context-id'),
+      contextMarker: observedContextMarker,
     });
   }`;
 }

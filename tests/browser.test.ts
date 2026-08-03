@@ -51,7 +51,26 @@ describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
         return invocation.arguments;
       }),
     ).not.toContain('state-save');
-    expectPageFunctionSyntax(await lastScript(fixture.invocations));
+    const startSource = await lastScript(fixture.invocations);
+    expect(startSource).toContain('await page.evaluate((marker) =>');
+    expect(startSource).not.toContain("\n    sessionStorage.setItem('chatgpt-pro-collab-context-id', contextMarker);");
+    expectPageFunctionSyntax(startSource);
+  });
+
+  it('preserves page-script errors and closes a failed start session', async () => {
+    const fixture = await browserFixture([
+      output('### Browser `session-a` opened with pid 4123.'),
+      output('state loaded'),
+      output('navigated'),
+      output('### Error\nReferenceError: sessionStorage is not defined'),
+      output("Browser 'session-a' closed"),
+    ]);
+    await writeFile(fixture.paths.seedState, '{}');
+
+    await expect(fixture.browser.startTask('task-a', 'session-a', fixture.paths.seedState)).rejects.toThrow(
+      /sessionStorage is not defined/,
+    );
+    expect(fixture.invocations.at(-1)?.arguments).toContain('close');
   });
 });
 
