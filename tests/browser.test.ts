@@ -134,6 +134,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     expect(source).toContain('[data-testid="copy-turn-action-button"]');
     expect(source).toContain('navigator.clipboard');
     expect(source).toContain("name: 'Stop answering', exact: true");
+    expect(source).toContain('stableCompletedPolls < 6');
     expect(source).not.toContain('pbpaste');
     expect(source).not.toContain('osascript');
     expect(source).not.toContain('new URL(page.url())');

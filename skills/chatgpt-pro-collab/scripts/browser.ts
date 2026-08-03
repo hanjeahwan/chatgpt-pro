@@ -701,8 +701,9 @@ function waitScript(expectedConversationId: string): string {
     const turnSelector = '[data-testid^="conversation-turn-"][data-turn]';
     const copySelector = '[data-testid="copy-turn-action-button"]';
     let assistantIndex = -1;
-    while (assistantIndex < 0) {
-      assistantIndex = await page.locator(turnSelector).evaluateAll((elements) => {
+    let stableCompletedPolls = 0;
+    while (stableCompletedPolls < 6) {
+      const candidateIndex = await page.locator(turnSelector).evaluateAll((elements) => {
         let latestUser = -1;
         for (let index = 0; index < elements.length; index += 1) {
           if (elements[index].getAttribute('data-turn') === 'user') latestUser = index;
@@ -716,12 +717,24 @@ function waitScript(expectedConversationId: string): string {
           : -1;
       });
       const stop = page.getByRole('button', { name: 'Stop answering', exact: true });
-      if (assistantIndex >= 0 && await stop.count() > 0 && await stop.first().isVisible()) assistantIndex = -1;
-      if (assistantIndex < 0) await page.waitForTimeout(500);
+      const stopVisible = await stop.count() > 0 && await stop.first().isVisible();
+      if (candidateIndex >= 0 && !stopVisible) {
+        if (candidateIndex !== assistantIndex) stableCompletedPolls = 0;
+        assistantIndex = candidateIndex;
+        stableCompletedPolls += 1;
+      } else {
+        assistantIndex = -1;
+        stableCompletedPolls = 0;
+      }
+      if (stableCompletedPolls < 6) await page.waitForTimeout(500);
     }
     const assistant = page.locator(turnSelector).nth(assistantIndex);
     const copy = assistant.locator(copySelector);
     if (await copy.count() !== 1) throw new Error('page contract drift: assistant Copy response is not unique');
+    const finalStop = page.getByRole('button', { name: 'Stop answering', exact: true });
+    if (await finalStop.count() > 0 && await finalStop.first().isVisible()) {
+      throw new Error('completion state changed before Copy response capture');
+    }
     await page.evaluate(() => {
       const clipboard = navigator.clipboard;
       if (!clipboard) throw new Error('page clipboard API is unavailable');
