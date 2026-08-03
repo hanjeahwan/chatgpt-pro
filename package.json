@@ -10,6 +10,7 @@
     "format:check": "oxfmt . --check",
     "lint": "oxlint .",
     "lint:all": "oxlint . --fix",
+    "test": "vitest --run",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {
