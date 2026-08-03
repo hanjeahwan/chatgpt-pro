@@ -31,6 +31,7 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     await writeFile(promptPath, 'second prompt');
     const secondTurn = await fixture.service.send(firstTask.taskId, promptPath, []);
     await fixture.service.wait(firstTask.taskId, secondTurn.turnId);
+    expect(fixture.browser.expectedConversationIds).toEqual([null, `conversation-${firstTask.taskId}`]);
     const store = new StateStore(fixture.paths.database);
     const turns = store.listTurns(firstTask.taskId);
     expect(turns).toHaveLength(2);
@@ -74,6 +75,40 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     });
   });
 
+  it('fails the task when an unsubmitted attachment draft cannot be cleared safely', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.service.start();
+    const promptPath = join(fixture.root, 'prompt.md');
+    await writeFile(promptPath, 'unsafe cleanup');
+    fixture.browser.nextSendStatus = 'unsafe-not-submitted';
+
+    await expect(fixture.service.send(task.taskId, promptPath, [])).rejects.toMatchObject({
+      code: 'SUBMISSION_FAILED',
+    });
+    const store = new StateStore(fixture.paths.database);
+    expect(store.requireTask(task.taskId).status).toBe('failed');
+    store.close();
+    await expect(fixture.service.send(task.taskId, promptPath, [])).rejects.toMatchObject({
+      code: 'TASK_NOT_ACTIVE',
+    });
+  });
+
+  it('rejects a concurrent same-task browser operation', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.service.start();
+    const owner = new StateStore(fixture.paths.database);
+    owner.acquireTaskOperation(task.taskId, 'wait', 'external-owner');
+
+    await expect(fixture.service.close(task.taskId)).rejects.toMatchObject({
+      code: 'TASK_OPERATION_IN_PROGRESS',
+    });
+    owner.releaseTaskOperation(task.taskId, 'external-owner');
+    owner.close();
+    await expect(fixture.service.close(task.taskId)).resolves.toMatchObject({ alreadyClosed: false });
+  });
+
   it('prints stable help and JSON usage errors', async () => {
     const fixture = await serviceFixture();
     const output: string[] = [];
@@ -99,7 +134,8 @@ class FakeBrowser implements CollabBrowser {
   readonly conversations = new Map<string, string>();
   readonly closed: string[] = [];
   readonly archived: string[] = [];
-  nextSendStatus: 'submitted' | 'unknown-submission' = 'submitted';
+  readonly expectedConversationIds: Array<string | null> = [];
+  nextSendStatus: 'submitted' | 'unknown-submission' | 'unsafe-not-submitted' = 'submitted';
   startCount = 0;
 
   /**
@@ -147,15 +183,27 @@ class FakeBrowser implements CollabBrowser {
    *
    * @param taskId Task identifier.
    * @param _sessionName Unused named session.
+   * @param expectedConversationId Database-bound conversation, or null for a first turn.
    * @param _prompt Exact prompt under test.
    * @param _attachmentPaths Ordered attachment paths under test.
    * @returns Confirmed or ambiguous fake submission.
    * @throws {Error} This fake send does not throw.
    */
-  send(taskId: string, _sessionName: string, _prompt: string, _attachmentPaths: readonly string[]) {
+  send(
+    taskId: string,
+    _sessionName: string,
+    expectedConversationId: string | null,
+    _prompt: string,
+    _attachmentPaths: readonly string[],
+  ) {
+    this.expectedConversationIds.push(expectedConversationId);
     if (this.nextSendStatus === 'unknown-submission') {
       this.nextSendStatus = 'submitted';
       return Promise.resolve({ status: 'unknown-submission' as const, error: 'transport ended after click' });
+    }
+    if (this.nextSendStatus === 'unsafe-not-submitted') {
+      this.nextSendStatus = 'submitted';
+      return Promise.resolve({ status: 'unsafe-not-submitted' as const, error: 'attachment cleanup failed' });
     }
     const conversationId = this.conversations.get(taskId) ?? `conversation-${taskId}`;
     this.conversations.set(taskId, conversationId);

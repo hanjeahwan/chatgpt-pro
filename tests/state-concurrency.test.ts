@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp } from 'node:fs/promises';
+import { access, mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -33,4 +33,49 @@ describe('VER-011 SQLite cross-process concurrency', () => {
     }
     reopened.close();
   });
+
+  it('rejects a second process while one task browser lease is live', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-operation-concurrency-'));
+    const databasePath = join(root, 'state.sqlite');
+    const readyPath = join(root, 'ready');
+    const store = new StateStore(databasePath);
+    store.createTask('task-a', 'session-a');
+    store.close();
+    const workerPath = join(import.meta.dirname, 'support', 'operation-lease-worker.ts');
+    const worker = execFileAsync(process.execPath, [workerPath, databasePath, readyPath]);
+    await waitForPath(readyPath);
+
+    const contender = new StateStore(databasePath);
+    expect(() => {
+      contender.acquireTaskOperation('task-a', 'close', 'contender');
+    }).toThrowError(/busy with wait/);
+    await worker;
+    contender.acquireTaskOperation('task-a', 'close', 'contender');
+    contender.releaseTaskOperation('task-a', 'contender');
+    contender.close();
+  });
 });
+
+/**
+ * Waits for a worker-owned ready file without assuming process startup latency.
+ *
+ * @param path Ready-file path written after lease acquisition.
+ * @returns Nothing after the file becomes readable.
+ * @throws {Error} If the worker never publishes readiness within five seconds.
+ */
+async function waitForPath(path: string): Promise<void> {
+  const deadline = Date.now() + 5000;
+  while (true) {
+    try {
+      await access(path);
+      return;
+    } catch (error) {
+      if (Date.now() >= deadline) {
+        throw error;
+      }
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 10);
+      });
+    }
+  }
+}

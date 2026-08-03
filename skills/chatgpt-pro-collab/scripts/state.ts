@@ -67,7 +67,10 @@ export class StateStore {
         status TEXT NOT NULL CHECK (status IN ('active', 'closed', 'failed')),
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
-        closed_at TEXT
+        closed_at TEXT,
+        browser_operation_token TEXT,
+        browser_operation_pid INTEGER,
+        browser_operation_name TEXT
       ) STRICT;
 
       CREATE TABLE IF NOT EXISTS turn (
@@ -86,6 +89,7 @@ export class StateStore {
         FOREIGN KEY (task_id) REFERENCES task(id)
       ) STRICT;
     `);
+    ensureTaskOperationColumns(this.#database);
   }
 
   /**
@@ -169,6 +173,73 @@ export class StateStore {
       throw new StateError('TASK_NOT_ACTIVE', `task is ${task.status}: ${taskId}`);
     }
     return task;
+  }
+
+  /**
+   * Acquires the task-local browser-operation lease, reclaiming only an owner whose process is gone.
+   *
+   * @param taskId Task whose named browser session will be operated.
+   * @param operation Human-readable operation name retained for conflict diagnostics.
+   * @param token Collision-resistant owner token for release authorization.
+   * @param ownerPid Process holding the lease; defaults to the current CLI process.
+   * @returns Nothing after the lease is committed.
+   * @throws {StateError} If another live process owns the task browser.
+   * @throws {Error} If SQLite cannot commit the lease.
+   */
+  acquireTaskOperation(taskId: string, operation: string, token: string, ownerPid: number = process.pid): void {
+    this.#transaction(() => {
+      this.requireTask(taskId);
+      const value = this.#database
+        .prepare(
+          `SELECT browser_operation_token, browser_operation_pid, browser_operation_name
+           FROM task WHERE id = ?`,
+        )
+        .get(taskId);
+      const row = record(value);
+      const existingToken = nullableText(row.browser_operation_token, 'task.browser_operation_token');
+      const existingPid = nullableInteger(row.browser_operation_pid, 'task.browser_operation_pid');
+      const existingOperation = nullableText(row.browser_operation_name, 'task.browser_operation_name');
+      if (existingToken !== null && existingPid !== null && isProcessAlive(existingPid)) {
+        throw new StateError(
+          'TASK_OPERATION_IN_PROGRESS',
+          `task browser is busy with ${existingOperation ?? 'another operation'}: ${taskId}`,
+        );
+      }
+      const now = new Date().toISOString();
+      this.#database
+        .prepare(
+          `UPDATE task
+           SET browser_operation_token = ?, browser_operation_pid = ?, browser_operation_name = ?, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(token, ownerPid, operation, now, taskId);
+    });
+  }
+
+  /**
+   * Releases a task-local browser-operation lease owned by the supplied token.
+   *
+   * @param taskId Task whose named browser session was operated.
+   * @param token Lease token returned by the acquiring caller.
+   * @returns Nothing after the lease is cleared.
+   * @throws {StateError} If the token no longer owns the lease.
+   * @throws {Error} If SQLite cannot commit the release.
+   */
+  releaseTaskOperation(taskId: string, token: string): void {
+    this.#transaction(() => {
+      const now = new Date().toISOString();
+      const result = this.#database
+        .prepare(
+          `UPDATE task
+           SET browser_operation_token = NULL, browser_operation_pid = NULL,
+               browser_operation_name = NULL, updated_at = ?
+           WHERE id = ? AND browser_operation_token = ?`,
+        )
+        .run(now, taskId, token);
+      if (result.changes !== 1) {
+        throw new StateError('TASK_OPERATION_NOT_OWNED', `task browser lease is not owned by this process: ${taskId}`);
+      }
+    });
   }
 
   /**
@@ -462,6 +533,65 @@ export class StateStore {
 }
 
 /**
+ * Adds task-operation lease columns to databases created before the lease existed.
+ *
+ * @param database Process-local SQLite connection.
+ * @returns Nothing after the schema is current.
+ * @throws {Error} If SQLite cannot serialize or commit the schema update.
+ */
+function ensureTaskOperationColumns(database: DatabaseSync): void {
+  const required = ['browser_operation_token', 'browser_operation_pid', 'browser_operation_name'] as const;
+  const current = taskColumnNames(database);
+  if (
+    required.every((name) => {
+      return current.has(name);
+    })
+  ) {
+    return;
+  }
+  database.exec('BEGIN IMMEDIATE');
+  try {
+    const columns = taskColumnNames(database);
+    const definitions = [
+      ['browser_operation_token', 'TEXT'],
+      ['browser_operation_pid', 'INTEGER'],
+      ['browser_operation_name', 'TEXT'],
+    ] as const;
+    for (const [name, type] of definitions) {
+      if (!columns.has(name)) {
+        database.exec(`ALTER TABLE task ADD COLUMN ${name} ${type}`);
+      }
+    }
+    database.exec('COMMIT');
+  } catch (error) {
+    try {
+      database.exec('ROLLBACK');
+    } catch {
+      // Preserve the schema-update failure when SQLite already ended the transaction.
+    }
+    throw error;
+  }
+}
+
+/**
+ * Reads task-table column names for the idempotent schema gate.
+ *
+ * @param database Process-local SQLite connection.
+ * @returns Current task-table column names.
+ * @throws {Error} If SQLite cannot inspect or decode the schema.
+ */
+function taskColumnNames(database: DatabaseSync): Set<string> {
+  return new Set(
+    database
+      .prepare('PRAGMA table_info(task)')
+      .all()
+      .map((value) => {
+        return text(record(value).name, 'pragma_table_info.name');
+      }),
+  );
+}
+
+/**
  * Decodes one SQLite task row while keeping storage names out of callers.
  *
  * @param value Raw row returned by `node:sqlite`.
@@ -555,6 +685,40 @@ function nullableText(value: SQLInputValue | undefined, field: string): string |
     return null;
   }
   return text(value, field);
+}
+
+/**
+ * Narrows a nullable SQLite integer column.
+ *
+ * @param value Raw column value.
+ * @param field Diagnostic field name.
+ * @returns The integer or null value.
+ * @throws {TypeError} If the column is neither an integer nor null.
+ */
+function nullableInteger(value: SQLInputValue | undefined, field: string): number | null {
+  if (value === null) {
+    return null;
+  }
+  if (typeof value !== 'number' || !Number.isSafeInteger(value)) {
+    throw new TypeError(`${field} must be an integer or null`);
+  }
+  return value;
+}
+
+/**
+ * Checks whether a lease-owning process still exists without signaling it.
+ *
+ * @param pid Operating-system process identifier stored with the lease.
+ * @returns True when the process exists or cannot be signaled due to permissions.
+ * @throws {Error} This probe converts ordinary process lookup failures to false.
+ */
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return typeof error === 'object' && error !== null && 'code' in error && error.code === 'EPERM';
+  }
 }
 
 /**

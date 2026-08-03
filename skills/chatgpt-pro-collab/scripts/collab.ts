@@ -27,6 +27,7 @@ export interface CollabBrowser {
   send(
     taskId: string,
     sessionName: string,
+    expectedConversationId: string | null,
     prompt: string,
     attachmentPaths: readonly string[],
   ): Promise<BrowserSendResult>;
@@ -157,40 +158,48 @@ export class CollabService {
 
     return this.#withStore(async (store) => {
       const task = store.requireActiveTask(taskId);
-      store.beginTurn(taskId, turnId, input.promptPath, input.attachmentPaths);
-      try {
-        await savePromptCopy(this.#paths, taskId, turnId, input.prompt);
-      } catch (error) {
-        store.failSendingTurn(taskId, turnId, `save prompt copy: ${errorMessage(error)}`);
-        throw error;
-      }
-
-      const browserResult = await this.#browser.send(
-        taskId,
-        task.playwrightSession,
-        input.promptText,
-        input.attachmentPaths,
-      );
-      if (browserResult.status === 'not-submitted') {
-        store.failSendingTurn(taskId, turnId, browserResult.error);
-        throw new CollabError('SUBMISSION_FAILED', browserResult.error);
-      }
-      if (browserResult.status === 'unknown-submission') {
-        store.markUnknownSubmission(taskId, turnId, browserResult.error);
-        throw new CollabError('SUBMISSION_UNKNOWN', browserResult.error);
-      }
-
-      try {
-        store.markTurnPending(taskId, turnId, browserResult.conversationId, browserResult.conversationUrl);
-      } catch (error) {
+      return this.#withTaskOperation(store, taskId, 'send', async () => {
+        store.beginTurn(taskId, turnId, input.promptPath, input.attachmentPaths);
         try {
-          store.markUnknownSubmission(taskId, turnId, `bind conversation: ${errorMessage(error)}`);
-        } catch {
-          // Preserve the binding failure when SQLite itself prevents ambiguity recording.
+          await savePromptCopy(this.#paths, taskId, turnId, input.prompt);
+        } catch (error) {
+          store.failSendingTurn(taskId, turnId, `save prompt copy: ${errorMessage(error)}`);
+          throw error;
         }
-        throw error;
-      }
-      return { taskId, turnId };
+
+        const browserResult = await this.#browser.send(
+          taskId,
+          task.playwrightSession,
+          task.conversationId,
+          input.promptText,
+          input.attachmentPaths,
+        );
+        if (browserResult.status === 'unsafe-not-submitted') {
+          store.failSendingTurn(taskId, turnId, browserResult.error);
+          store.failTask(taskId);
+          throw new CollabError('SUBMISSION_FAILED', browserResult.error);
+        }
+        if (browserResult.status === 'not-submitted') {
+          store.failSendingTurn(taskId, turnId, browserResult.error);
+          throw new CollabError('SUBMISSION_FAILED', browserResult.error);
+        }
+        if (browserResult.status === 'unknown-submission') {
+          store.markUnknownSubmission(taskId, turnId, browserResult.error);
+          throw new CollabError('SUBMISSION_UNKNOWN', browserResult.error);
+        }
+
+        try {
+          store.markTurnPending(taskId, turnId, browserResult.conversationId, browserResult.conversationUrl);
+        } catch (error) {
+          try {
+            store.markUnknownSubmission(taskId, turnId, `bind conversation: ${errorMessage(error)}`);
+          } catch {
+            // Preserve the binding failure when SQLite itself prevents ambiguity recording.
+          }
+          throw error;
+        }
+        return { taskId, turnId };
+      });
     });
   }
 
@@ -223,17 +232,19 @@ export class CollabService {
       if (turn.status !== 'pending') {
         throw new CollabError('TURN_NOT_PENDING', `turn is ${turn.status}: ${turnId}`);
       }
-      if (task.conversationId === null || task.conversationUrl === null) {
-        throw new CollabError('TRANSCRIPT_INCONSISTENT', `pending task has no conversation: ${taskId}`);
-      }
+      return this.#withTaskOperation(store, taskId, 'wait', async () => {
+        if (task.conversationId === null || task.conversationUrl === null) {
+          throw new CollabError('TRANSCRIPT_INCONSISTENT', `pending task has no conversation: ${taskId}`);
+        }
 
-      const captured = await this.#browser.waitForResponse(taskId, task.playwrightSession, task.conversationId);
-      if (captured.conversationId !== task.conversationId || captured.conversationUrl !== task.conversationUrl) {
-        throw new CollabError('CONVERSATION_MISMATCH', `wait observed a different conversation: ${taskId}`);
-      }
-      const responsePath = await saveResponse(this.#paths, taskId, turnId, captured.response);
-      store.completeTurn(taskId, turnId, responsePath);
-      return { taskId, turnId, responsePath };
+        const captured = await this.#browser.waitForResponse(taskId, task.playwrightSession, task.conversationId);
+        if (captured.conversationId !== task.conversationId || captured.conversationUrl !== task.conversationUrl) {
+          throw new CollabError('CONVERSATION_MISMATCH', `wait observed a different conversation: ${taskId}`);
+        }
+        const responsePath = await saveResponse(this.#paths, taskId, turnId, captured.response);
+        store.completeTurn(taskId, turnId, responsePath);
+        return { taskId, turnId, responsePath };
+      });
     });
   }
 
@@ -252,9 +263,11 @@ export class CollabService {
       if (task.status === 'closed') {
         return { taskId, wasOpen: false, alreadyClosed: true };
       }
-      const result = await this.#browser.closeTask(taskId, task.playwrightSession);
-      store.closeTask(taskId);
-      return { taskId, wasOpen: result.wasOpen, alreadyClosed: false };
+      return this.#withTaskOperation(store, taskId, 'close', async () => {
+        const result = await this.#browser.closeTask(taskId, task.playwrightSession);
+        store.closeTask(taskId);
+        return { taskId, wasOpen: result.wasOpen, alreadyClosed: false };
+      });
     });
   }
 
@@ -272,9 +285,37 @@ export class CollabService {
       if (task.conversationId === null) {
         throw new CollabError('CONVERSATION_NOT_ESTABLISHED', `task has no submitted conversation: ${taskId}`);
       }
-      const result = await this.#browser.archive(taskId, task.playwrightSession, task.conversationId);
-      return { taskId, conversationId: result.conversationId };
+      const conversationId = task.conversationId;
+      return this.#withTaskOperation(store, taskId, 'archive', async () => {
+        const result = await this.#browser.archive(taskId, task.playwrightSession, conversationId);
+        return { taskId, conversationId: result.conversationId };
+      });
     });
+  }
+
+  /**
+   * Serializes browser side effects for one task across independent CLI processes.
+   *
+   * @param store Current process-local state connection.
+   * @param taskId Task whose named browser session will be used.
+   * @param operation Browser operation retained for conflict diagnostics.
+   * @param action Side effect and state transition performed while the lease is held.
+   * @returns The action result after the lease is released.
+   * @throws {Error} If lease acquisition, the action, or lease release fails.
+   */
+  async #withTaskOperation<T>(
+    store: StateStore,
+    taskId: string,
+    operation: string,
+    action: () => Promise<T>,
+  ): Promise<T> {
+    const token = randomUUID();
+    store.acquireTaskOperation(taskId, operation, token);
+    try {
+      return await action();
+    } finally {
+      store.releaseTaskOperation(taskId, token);
+    }
   }
 
   /**

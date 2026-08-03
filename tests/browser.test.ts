@@ -79,6 +79,7 @@ describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
 describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
   it('uploads explicit attachments in order before returning a confirmed conversation', async () => {
     const fixture = await browserFixture([
+      pageResult({ protocol, kind: 'send-ready' }),
       pageResult({ protocol, kind: 'upload-ready' }),
       output('first uploaded'),
       pageResult({ protocol, kind: 'upload-ready' }),
@@ -92,7 +93,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
       }),
     ]);
 
-    const result = await fixture.browser.send('task-a', 'session-a', 'exact prompt', ['/tmp/a', '/tmp/b']);
+    const result = await fixture.browser.send('task-a', 'session-a', null, 'exact prompt', ['/tmp/a', '/tmp/b']);
 
     expect(result).toEqual({
       status: 'submitted',
@@ -111,9 +112,33 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     expect(sendSource).toContain("page.locator('#prompt-textarea')");
     expect(sendSource).toContain('page.locator(\'[data-testid="send-button"]\')');
     expect(sendSource).toContain('exact prompt');
+    expect(sendSource).toContain('const expectedConversationId = null');
     expect(sendSource).toContain("!match[1].startsWith('WEB:')");
     expect(sendSource).not.toContain('new URL(page.url())');
     expectPageFunctionSyntax(sendSource);
+  });
+
+  it('reloads a changed attachment draft after a pre-submit upload failure', async () => {
+    const fixture = await browserFixture([
+      pageResult({ protocol, kind: 'send-ready' }),
+      pageResult({ protocol, kind: 'upload-ready' }),
+      output('first uploaded'),
+      output('### Error\nError: second chooser failed'),
+      pageResult({ protocol, kind: 'draft-cleared' }),
+    ]);
+
+    await expect(
+      fixture.browser.send('task-a', 'session-a', 'conversation-a', 'exact prompt', ['/tmp/a', '/tmp/b']),
+    ).resolves.toEqual({ status: 'not-submitted', error: expect.stringContaining('second chooser failed') });
+    const cleanupInvocation = fixture.invocations.at(-1);
+    expect(cleanupInvocation?.arguments).toContain('run-code');
+    const preflightSource = await scriptForInvocation(fixture.invocations[0]);
+    expect(preflightSource).toContain('const expectedConversationId = "conversation-a"');
+    expect(preflightSource).toContain('conversation identity does not match the send target');
+    const cleanupSource = await scriptForInvocation(cleanupInvocation);
+    expect(cleanupSource).toContain("page.reload({ waitUntil: 'domcontentloaded' })");
+    expect(cleanupSource).toContain('const expectedConversationId = "conversation-a"');
+    expectPageFunctionSyntax(cleanupSource);
   });
 
   it('captures Copy response inside the page and never invokes an OS clipboard command', async () => {
@@ -136,6 +161,8 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     expect(source).toContain("name: 'Stop answering', exact: true");
     expect(source).toContain('stableCompletedPolls < 6');
     expect(source).toContain('copy.click({ force: true })');
+    expect(source).toContain('const capturedUrl = await page.evaluate');
+    expect(source).toContain('capturedMatch[1] !== expectedConversationId');
     expect(source).not.toContain('pbpaste');
     expect(source).not.toContain('osascript');
     expect(source).not.toContain('new URL(page.url())');
@@ -214,6 +241,17 @@ async function lastScript(invocations: readonly BrowserCommandInvocation[]): Pro
   const invocation = [...invocations].reverse().find((candidate) => {
     return candidate.arguments.includes('run-code');
   });
+  return scriptForInvocation(invocation);
+}
+
+/**
+ * Reads one captured `run-code --filename` source.
+ *
+ * @param invocation Captured browser command.
+ * @returns The generated JavaScript source.
+ * @throws {Error} If the invocation has no script path or the file cannot be read.
+ */
+async function scriptForInvocation(invocation: BrowserCommandInvocation | undefined): Promise<string> {
   const marker = invocation?.arguments.indexOf('--filename') ?? -1;
   const scriptPath = marker < 0 ? undefined : invocation?.arguments[marker + 1];
   if (scriptPath === undefined) {

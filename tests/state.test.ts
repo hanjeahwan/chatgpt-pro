@@ -1,6 +1,7 @@
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 
 import { describe, expect, it } from 'vitest';
 
@@ -50,5 +51,49 @@ describe('BEH-002, BEH-005, and BEH-007 state gates', () => {
       },
     ]);
     reopened.close();
+  });
+
+  it('serializes same-task browser operations and reclaims a dead process lease', () => {
+    const databasePath = join(tmpdir(), `collab-lease-${crypto.randomUUID()}.sqlite`);
+    const first = new StateStore(databasePath);
+    const second = new StateStore(databasePath);
+    first.createTask('task-a', 'session-a');
+    first.acquireTaskOperation('task-a', 'wait', 'live-owner');
+
+    expect(() => {
+      second.acquireTaskOperation('task-a', 'close', 'contender');
+    }).toThrowError(/busy with wait/);
+    first.releaseTaskOperation('task-a', 'live-owner');
+    first.acquireTaskOperation('task-a', 'wait', 'dead-owner', 999_999);
+    second.acquireTaskOperation('task-a', 'close', 'recovered-owner');
+    second.releaseTaskOperation('task-a', 'recovered-owner');
+    first.close();
+    second.close();
+  });
+
+  it('adds operation leases to an existing two-table task schema', () => {
+    const databasePath = join(tmpdir(), `collab-migration-${crypto.randomUUID()}.sqlite`);
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec(`
+      CREATE TABLE task (
+        id TEXT PRIMARY KEY,
+        playwright_session TEXT NOT NULL UNIQUE,
+        conversation_id TEXT,
+        conversation_url TEXT,
+        status TEXT NOT NULL CHECK (status IN ('active', 'closed', 'failed')),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        closed_at TEXT
+      ) STRICT;
+    `);
+    legacy.close();
+
+    const migrated = new StateStore(databasePath);
+    migrated.createTask('task-a', 'session-a');
+    expect(() => {
+      migrated.acquireTaskOperation('task-a', 'send', 'owner');
+    }).not.toThrow();
+    migrated.releaseTaskOperation('task-a', 'owner');
+    migrated.close();
   });
 });

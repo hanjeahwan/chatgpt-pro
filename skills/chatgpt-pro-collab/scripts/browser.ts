@@ -41,6 +41,10 @@ export type BrowserSendResult =
       readonly error: string;
     }
   | {
+      readonly status: 'unsafe-not-submitted';
+      readonly error: string;
+    }
+  | {
       readonly status: 'unknown-submission';
       readonly error: string;
     };
@@ -64,6 +68,14 @@ interface StartProtocolResult extends ProtocolResult {
 
 interface UploadReadyProtocolResult extends ProtocolResult {
   readonly kind: 'upload-ready';
+}
+
+interface SendReadyProtocolResult extends ProtocolResult {
+  readonly kind: 'send-ready';
+}
+
+interface DraftClearedProtocolResult extends ProtocolResult {
+  readonly kind: 'draft-cleared';
 }
 
 interface SendProtocolResult extends ProtocolResult {
@@ -231,6 +243,7 @@ export class PlaywrightBrowser {
    *
    * @param taskId Owning task identifier.
    * @param sessionName Owning Playwright named session.
+   * @param expectedConversationId Existing bound conversation, or null for a first turn.
    * @param prompt Exact UTF-8 prompt copied into the turn transcript.
    * @param attachmentPaths Explicit ordered absolute attachment paths.
    * @returns Confirmed conversation identity or a precise submission classification.
@@ -239,11 +252,27 @@ export class PlaywrightBrowser {
   async send(
     taskId: string,
     sessionName: string,
+    expectedConversationId: string | null,
     prompt: string,
     attachmentPaths: readonly string[],
   ): Promise<BrowserSendResult> {
     try {
+      await this.#runCode<SendReadyProtocolResult>(
+        sessionName,
+        taskId,
+        'verify-send-target',
+        sendTargetVerificationScript(expectedConversationId),
+        'verify send conversation',
+        'send-ready',
+      );
+    } catch (error) {
+      return { status: 'not-submitted', error: errorMessage(error) };
+    }
+
+    let attachmentPreparationStarted = false;
+    try {
       for (const attachmentPath of attachmentPaths) {
+        attachmentPreparationStarted = true;
         await this.#runCode<UploadReadyProtocolResult>(
           sessionName,
           taskId,
@@ -255,12 +284,34 @@ export class PlaywrightBrowser {
         await this.#invoke(sessionName, taskId, ['upload', attachmentPath], `upload attachment ${attachmentPath}`);
       }
     } catch (error) {
+      if (attachmentPreparationStarted) {
+        try {
+          await this.#runCode<DraftClearedProtocolResult>(
+            sessionName,
+            taskId,
+            'clear-upload-draft',
+            clearUploadDraftScript(expectedConversationId),
+            'clear unsubmitted attachment draft',
+            'draft-cleared',
+          );
+        } catch (cleanupError) {
+          return {
+            status: 'unsafe-not-submitted',
+            error: `${errorMessage(error)}; attachment cleanup failed: ${errorMessage(cleanupError)}`,
+          };
+        }
+      }
       return { status: 'not-submitted', error: errorMessage(error) };
     }
 
     let commandStarted = false;
     try {
-      const scriptPath = await savePlaywrightScript(this.#paths, taskId, 'send', sendScript(prompt));
+      const scriptPath = await savePlaywrightScript(
+        this.#paths,
+        taskId,
+        'send',
+        sendScript(expectedConversationId, prompt),
+      );
       commandStarted = true;
       const output = await this.#invoke(sessionName, taskId, ['run-code', '--filename', scriptPath], 'submit prompt');
       const result = parseProtocolResult<SendProtocolResult>(output.stdout, 'send');
@@ -609,6 +660,56 @@ function startVerificationScript(contextMarker: string): string {
 }
 
 /**
+ * Builds the pre-upload conversation and composer identity gate.
+ *
+ * @param expectedConversationId Existing bound conversation, or null for a new task.
+ * @returns A Playwright page function source.
+ * @throws {Error} This pure source builder does not throw.
+ */
+function sendTargetVerificationScript(expectedConversationId: string | null): string {
+  return `async (page) => {
+    const expectedConversationId = ${JSON.stringify(expectedConversationId)};
+    const url = await page.evaluate(() => {
+      return { hostname: location.hostname, pathname: location.pathname };
+    });
+    const targetPath = expectedConversationId === null ? '/' : '/c/' + expectedConversationId;
+    if (url.hostname !== 'chatgpt.com' || url.pathname.replace(/\\/$/, '') !== targetPath.replace(/\\/$/, '')) {
+      throw new Error('conversation identity does not match the send target');
+    }
+    const composer = page.locator('#prompt-textarea');
+    if (await composer.count() !== 1 || !(await composer.isVisible())) {
+      throw new Error('page contract drift: composer is not unique and visible');
+    }
+    return JSON.stringify({ protocol: '${PROTOCOL}', kind: 'send-ready' });
+  }`;
+}
+
+/**
+ * Builds a reload-based cleanup for any attachment chooser or draft changed before submission.
+ *
+ * @param expectedConversationId Existing bound conversation, or null for a new task.
+ * @returns A Playwright page function source.
+ * @throws {Error} This pure source builder does not throw.
+ */
+function clearUploadDraftScript(expectedConversationId: string | null): string {
+  return `async (page) => {
+    const expectedConversationId = ${JSON.stringify(expectedConversationId)};
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    const composer = page.locator('#prompt-textarea');
+    await composer.waitFor({ state: 'visible', timeout: 60000 });
+    if (await composer.count() !== 1) throw new Error('page contract drift: composer is not unique after reload');
+    const url = await page.evaluate(() => {
+      return { hostname: location.hostname, pathname: location.pathname };
+    });
+    const targetPath = expectedConversationId === null ? '/' : '/c/' + expectedConversationId;
+    if (url.hostname !== 'chatgpt.com' || url.pathname.replace(/\\/$/, '') !== targetPath.replace(/\\/$/, '')) {
+      throw new Error('conversation identity changed while clearing attachment draft');
+    }
+    return JSON.stringify({ protocol: '${PROTOCOL}', kind: 'draft-cleared' });
+  }`;
+}
+
+/**
  * Builds the exact file-chooser action required before each CLI `upload` command.
  *
  * @returns A Playwright page function source.
@@ -629,14 +730,26 @@ function uploadPreparationScript(): string {
 /**
  * Builds the single-message submission script with an explicit ambiguity boundary.
  *
+ * @param expectedConversationId Existing bound conversation, or null for a new task.
  * @param prompt Exact prompt text to fill into the composer.
  * @returns A Playwright page function source.
  * @throws {Error} This pure source builder does not throw.
  */
-function sendScript(prompt: string): string {
+function sendScript(expectedConversationId: string | null, prompt: string): string {
   return `async (page) => {
     let clicked = false;
     try {
+      const expectedConversationId = ${JSON.stringify(expectedConversationId)};
+      const initialUrl = await page.evaluate(() => {
+        return { hostname: location.hostname, pathname: location.pathname };
+      });
+      const targetPath = expectedConversationId === null ? '/' : '/c/' + expectedConversationId;
+      if (
+        initialUrl.hostname !== 'chatgpt.com' ||
+        initialUrl.pathname.replace(/\\/$/, '') !== targetPath.replace(/\\/$/, '')
+      ) {
+        throw new Error('conversation identity changed before prompt submission');
+      }
       const composer = page.locator('#prompt-textarea');
       const send = page.locator('[data-testid="send-button"]');
       const turns = page.locator('[data-testid^="conversation-turn-"][data-turn]');
@@ -662,6 +775,9 @@ function sendScript(prompt: string): string {
       const match = /^\\/c\\/([^/?#]+)\\/?$/.exec(url.pathname);
       if (url.hostname !== 'chatgpt.com' || match === null || match[1].startsWith('WEB:')) {
         throw new Error('page contract drift: canonical conversation URL was not observed');
+      }
+      if (expectedConversationId !== null && match[1] !== expectedConversationId) {
+        throw new Error('submitted conversation identity differs from the bound task');
       }
       return JSON.stringify({
         protocol: '${PROTOCOL}',
@@ -775,12 +891,23 @@ function waitScript(expectedConversationId: string): string {
         delete globalThis.__chatgptProCollabClipboard;
       });
     }
+    const capturedUrl = await page.evaluate(() => {
+      return { hostname: location.hostname, pathname: location.pathname, origin: location.origin };
+    });
+    const capturedMatch = /^\\/c\\/([^/?#]+)\\/?$/.exec(capturedUrl.pathname);
+    if (
+      capturedUrl.hostname !== 'chatgpt.com' ||
+      capturedMatch === null ||
+      capturedMatch[1] !== expectedConversationId
+    ) {
+      throw new Error('conversation identity changed before response capture completed');
+    }
     return JSON.stringify({
       protocol: '${PROTOCOL}',
       kind: 'wait',
       response,
-      conversationId: expectedConversationId,
-      conversationUrl: url.origin + '/c/' + expectedConversationId,
+      conversationId: capturedMatch[1],
+      conversationUrl: capturedUrl.origin + '/c/' + capturedMatch[1],
     });
   }`;
 }
