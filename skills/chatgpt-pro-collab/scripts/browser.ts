@@ -1277,10 +1277,10 @@ function archiveScript(expectedConversationId: string): string {
       return { hostname: location.hostname, pathname: location.pathname };
     });
     if (restoredUrl.hostname !== 'chatgpt.com' || restoredUrl.pathname.replace(/\\/$/, '') !== targetPath) {
-      throw new Error('archived conversation could not be restored as the active task page');
+      throw new Error('archived conversation could not be restored as the task page');
     }
-    const composer = page.locator('#prompt-textarea');
-    await composer.waitFor({ state: 'visible', timeout: 60000 });
+    const restoredTurn = page.locator('[data-testid^="conversation-turn-"][data-turn]').first();
+    await restoredTurn.waitFor({ state: 'attached', timeout: 60000 });
     return JSON.stringify({ protocol: '${PROTOCOL}', kind: 'archive', conversationId });
   }`;
 }

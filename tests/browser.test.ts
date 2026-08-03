@@ -339,6 +339,8 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     expect(source).toContain("targetLink.first().waitFor({ state: 'attached', timeout: 60000 })");
     expect(source).toContain('while (absentPolls < 6 && verificationPolls < 120)');
     expect(source).toContain("page.goto('https://chatgpt.com' + targetPath");
+    expect(source).toContain('page.locator(\'[data-testid^="conversation-turn-"][data-turn]\').first()');
+    expect(source).not.toContain("const composer = page.locator('#prompt-textarea')");
     expect(source).not.toContain('Open conversation options');
     expect(source).not.toContain('new URL(page.url())');
     expectPageFunctionSyntax(source);
