@@ -5,6 +5,7 @@
   "description": "",
   "type": "module",
   "scripts": {
+    "collab": "node skills/chatgpt-pro-collab/scripts/collab.ts",
     "format": "oxfmt",
     "format:all": "oxfmt .",
     "format:check": "oxfmt . --check",

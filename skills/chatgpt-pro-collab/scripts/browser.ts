@@ -37,7 +37,11 @@ export type BrowserSendResult =
       readonly conversationUrl: string;
     }
   | {
-      readonly status: 'not-submitted' | 'unknown-submission';
+      readonly status: 'not-submitted';
+      readonly error: string;
+    }
+  | {
+      readonly status: 'unknown-submission';
       readonly error: string;
     };
 
@@ -572,6 +576,10 @@ function startVerificationScript(contextMarker: string): string {
       });
       return authControls.length === 0;
     }, undefined, { timeout: 60000, polling: 250 });
+    const url = new URL(page.url());
+    if (url.hostname !== 'chatgpt.com' || url.pathname !== '/') {
+      throw new Error('page contract drift: new conversation root was not observed');
+    }
     sessionStorage.setItem('chatgpt-pro-collab-context-id', contextMarker);
     return JSON.stringify({
       protocol: '${PROTOCOL}',
@@ -637,7 +645,7 @@ function sendScript(prompt: string): string {
         kind: 'send',
         status: 'submitted',
         conversationId: match[1],
-        conversationUrl: url.href,
+        conversationUrl: url.origin + '/c/' + match[1],
       });
     } catch (error) {
       return JSON.stringify({
@@ -734,7 +742,7 @@ function waitScript(expectedConversationId: string): string {
       kind: 'wait',
       response,
       conversationId: expectedConversationId,
-      conversationUrl: page.url(),
+      conversationUrl: url.origin + '/c/' + expectedConversationId,
     });
   }`;
 }

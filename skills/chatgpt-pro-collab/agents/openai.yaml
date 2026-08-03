@@ -1,0 +1,4 @@
+interface:
+  display_name: 'ChatGPT Pro Collab'
+  short_description: '通过独立浏览器任务与 ChatGPT Pro Web 多轮协作'
+  default_prompt: 'Use $chatgpt-pro-collab to start an isolated ChatGPT Pro Web collaboration task.'
