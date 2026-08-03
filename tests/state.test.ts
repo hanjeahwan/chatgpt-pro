@@ -1,7 +1,6 @@
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
 
 import { describe, expect, it } from 'vitest';
 
@@ -94,44 +93,5 @@ describe('BEH-002, BEH-005, and BEH-007 state gates', () => {
     });
     contender.releaseTaskOperation('task-a', 'contender');
     contender.close();
-  });
-
-  it('rejects an unmarked legacy database without modifying its bytes', async () => {
-    const databasePath = join(tmpdir(), `collab-legacy-${crypto.randomUUID()}.sqlite`);
-    const legacy = new DatabaseSync(databasePath);
-    legacy.exec(`
-      CREATE TABLE task (
-        id TEXT PRIMARY KEY,
-        playwright_session TEXT NOT NULL UNIQUE,
-        conversation_id TEXT,
-        conversation_url TEXT,
-        status TEXT NOT NULL CHECK (status IN ('active', 'closed', 'failed')),
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        closed_at TEXT
-      ) STRICT;
-    `);
-    legacy.close();
-    const before = await readFile(databasePath);
-
-    expect(() => {
-      return new StateStore(databasePath);
-    }).toThrowError(/not owned by ChatGPT Pro Collab/);
-    expect(await readFile(databasePath)).toEqual(before);
-  });
-
-  it('rejects a marked database with extra legacy columns instead of migrating it', async () => {
-    const databasePath = join(tmpdir(), `collab-incompatible-${crypto.randomUUID()}.sqlite`);
-    const initialized = new StateStore(databasePath);
-    initialized.close();
-    const incompatible = new DatabaseSync(databasePath);
-    incompatible.exec('ALTER TABLE task ADD COLUMN legacy_extra TEXT');
-    incompatible.close();
-    const before = await readFile(databasePath);
-
-    expect(() => {
-      return new StateStore(databasePath);
-    }).toThrowError(/incompatible task table/);
-    expect(await readFile(databasePath)).toEqual(before);
   });
 });

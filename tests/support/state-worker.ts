@@ -9,7 +9,7 @@ if (databasePath === undefined || taskId === undefined || turnId === undefined) 
 }
 
 const suffix = taskId.at(-1);
-const store = new StateStore(databasePath, 'require-existing');
+const store = new StateStore(databasePath);
 store.createTask(taskId, `session-${suffix}`);
 store.beginTurn(taskId, turnId, `/prompt-${suffix}.md`, [`/attachment-${suffix}`]);
 store.markSubmissionAttempting(taskId, turnId);

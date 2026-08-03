@@ -1,33 +1,6 @@
 import { existsSync, statSync } from 'node:fs';
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 
-const COLLAB_APPLICATION_ID = 0x43504331;
-const CURRENT_TASK_COLUMNS = [
-  'id',
-  'playwright_session',
-  'conversation_id',
-  'conversation_url',
-  'status',
-  'created_at',
-  'updated_at',
-  'closed_at',
-  'browser_operation_token',
-  'browser_operation_pid',
-  'browser_operation_name',
-  'browser_operation_child_pid',
-] as const;
-const CURRENT_TURN_COLUMNS = [
-  'task_id',
-  'id',
-  'status',
-  'prompt_path',
-  'attachments_json',
-  'response_path',
-  'error',
-  'created_at',
-  'updated_at',
-] as const;
-
 export type TaskStatus = 'active' | 'closed' | 'failed';
 export type TurnStatus = 'sending' | 'pending' | 'completed' | 'failed' | 'unknown-submission';
 
@@ -75,74 +48,48 @@ export class StateStore {
   readonly #database: DatabaseSync;
 
   /**
-   * Rejects foreign or incompatible state before interactive setup changes authentication state.
-   *
-   * @param databasePath Fixed Collab database path.
-   * @returns Nothing when the path is absent or has the exact current Collab schema.
-   * @throws {StateError} If an existing database is unmarked or incompatible.
-   * @throws {Error} If SQLite cannot read an existing database.
-   */
-  static assertSetupTarget(databasePath: string): void {
-    if (existsSync(databasePath)) {
-      assertCollabDatabase(databasePath);
-    }
-  }
-
-  /**
-   * Opens one process-local SQLite connection after enforcing Collab ownership and exact schema.
+   * Opens one process-local SQLite connection and installs the current schema.
    *
    * @param databasePath Absolute path to the Collab coordination database.
-   * @param mode Whether a missing database may be initialized with the current schema.
    * @throws {Error} If SQLite cannot open, configure, or initialize the database.
    */
-  constructor(databasePath: string, mode: 'initialize' | 'require-existing' = 'initialize') {
-    const databaseExists = existsSync(databasePath);
-    if (databaseExists) {
-      assertCollabDatabase(databasePath);
-    } else if (mode === 'require-existing') {
-      throw new StateError('STATE_NOT_INITIALIZED', `Collab state database does not exist: ${databasePath}`);
-    }
-
+  constructor(databasePath: string) {
     this.#database = new DatabaseSync(databasePath);
     this.#database.exec('PRAGMA busy_timeout = 5000');
     this.#database.exec('PRAGMA foreign_keys = ON');
-    if (!databaseExists) {
-      this.#database.exec(`
-        CREATE TABLE task (
-          id TEXT PRIMARY KEY,
-          playwright_session TEXT NOT NULL UNIQUE,
-          conversation_id TEXT,
-          conversation_url TEXT,
-          status TEXT NOT NULL CHECK (status IN ('active', 'closed', 'failed')),
-          created_at TEXT NOT NULL,
-          updated_at TEXT NOT NULL,
-          closed_at TEXT,
-          browser_operation_token TEXT,
-          browser_operation_pid INTEGER,
-          browser_operation_name TEXT,
-          browser_operation_child_pid INTEGER
-        ) STRICT;
-
-        CREATE TABLE turn (
-          task_id TEXT NOT NULL,
-          id TEXT NOT NULL,
-          status TEXT NOT NULL CHECK (
-            status IN ('sending', 'pending', 'completed', 'failed', 'unknown-submission')
-          ),
-          prompt_path TEXT NOT NULL,
-          attachments_json TEXT NOT NULL,
-          response_path TEXT,
-          error TEXT,
-          created_at TEXT NOT NULL,
-          updated_at TEXT NOT NULL,
-          PRIMARY KEY (task_id, id),
-          FOREIGN KEY (task_id) REFERENCES task(id)
-        ) STRICT;
-
-        PRAGMA application_id = ${COLLAB_APPLICATION_ID};
-      `);
-    }
     executeWithBusyRetry(this.#database, 'PRAGMA journal_mode = WAL', 5000);
+    this.#database.exec(`
+      CREATE TABLE IF NOT EXISTS task (
+        id TEXT PRIMARY KEY,
+        playwright_session TEXT NOT NULL UNIQUE,
+        conversation_id TEXT,
+        conversation_url TEXT,
+        status TEXT NOT NULL CHECK (status IN ('active', 'closed', 'failed')),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        closed_at TEXT,
+        browser_operation_token TEXT,
+        browser_operation_pid INTEGER,
+        browser_operation_name TEXT,
+        browser_operation_child_pid INTEGER
+      ) STRICT;
+
+      CREATE TABLE IF NOT EXISTS turn (
+        task_id TEXT NOT NULL,
+        id TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (
+          status IN ('sending', 'pending', 'completed', 'failed', 'unknown-submission')
+        ),
+        prompt_path TEXT NOT NULL,
+        attachments_json TEXT NOT NULL,
+        response_path TEXT,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (task_id, id),
+        FOREIGN KEY (task_id) REFERENCES task(id)
+      ) STRICT;
+    `);
   }
 
   /**
@@ -706,71 +653,6 @@ export class StateStore {
       }
       throw error;
     }
-  }
-}
-
-/**
- * Verifies marker, version, and required columns through a read-only connection.
- *
- * @param databasePath Existing database path that must belong to this implementation.
- * @returns Nothing after the provenance and schema checks pass.
- * @throws {StateError} If the database is unmarked, legacy, or structurally incompatible.
- * @throws {Error} If SQLite cannot read the database.
- */
-function assertCollabDatabase(databasePath: string): void {
-  const database = new DatabaseSync(databasePath, { readOnly: true });
-  try {
-    const applicationId = applicationIdFrom(database);
-    if (applicationId !== COLLAB_APPLICATION_ID) {
-      throw new StateError('STATE_INCOMPATIBLE', `state database is not owned by ChatGPT Pro Collab: ${databasePath}`);
-    }
-    requireExactTableColumns(database, 'task', CURRENT_TASK_COLUMNS);
-    requireExactTableColumns(database, 'turn', CURRENT_TURN_COLUMNS);
-  } finally {
-    database.close();
-  }
-}
-
-/**
- * Reads one integer-valued SQLite pragma.
- *
- * @param database Read-only provenance connection.
- * @returns The safe integer pragma value.
- * @throws {TypeError} If SQLite returns an unexpected row.
- */
-function applicationIdFrom(database: DatabaseSync): number {
-  const value = record(database.prepare('PRAGMA application_id').get()).application_id;
-  if (typeof value !== 'number' || !Number.isSafeInteger(value)) {
-    throw new TypeError('PRAGMA application_id must return an integer');
-  }
-  return value;
-}
-
-/**
- * Rejects a marked database whose table shape differs from the current implementation.
- *
- * @param database Read-only provenance connection.
- * @param table Closed current table name.
- * @param required Exact current column names.
- * @returns Nothing when no column is missing or extra.
- * @throws {StateError} If the table is absent or differs from the current schema.
- */
-function requireExactTableColumns(database: DatabaseSync, table: 'task' | 'turn', required: readonly string[]): void {
-  const columns = new Set(
-    database
-      .prepare(`PRAGMA table_info(${table})`)
-      .all()
-      .map((value) => {
-        return text(record(value).name, `pragma_table_info(${table}).name`);
-      }),
-  );
-  if (
-    columns.size !== required.length ||
-    required.some((name) => {
-      return !columns.has(name);
-    })
-  ) {
-    throw new StateError('STATE_INCOMPATIBLE', `state database has an incompatible ${table} table`);
   }
 }
 

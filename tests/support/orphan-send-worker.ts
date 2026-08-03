@@ -9,7 +9,7 @@ if (databasePath === undefined || readyPath === undefined || gatePath === undefi
   throw new Error('usage: orphan-send-worker <databasePath> <readyPath> <gatePath>');
 }
 
-const store = new StateStore(databasePath, 'require-existing');
+const store = new StateStore(databasePath);
 store.acquireTaskOperation('task-a', 'send', 'orphan-send-owner');
 store.beginTurn('task-a', 'turn-a', '/prompt.md', []);
 store.markSubmissionAttempting('task-a', 'turn-a');
