@@ -82,7 +82,7 @@
 - Collab 只操作由 BEH-001、BEH-002 和 BEH-009 指定的 ChatGPT Web 页面，不代替用户进行仓库修改、命令执行、patch 应用、提交、合并或发布。
 - Pro 回复是原始协作输出。Collab 不要求固定回复格式，不识别 diff、digest、receipt 或成功标记，不自动重发 prompt，也不根据回复内容阻塞后续宿主行为。
 - 认证源只保存在本机，不作为附件上传。各任务只读加载同一认证源，运行期间产生的 cookie 或 Web Storage 变化只保留在各自的内存 browser context；本版不新增 Unix 权限模式合同。
-- 本版不兼容、不迁移也不读取旧 `chatgpt-pro-collab` 实现的 task、bundle、SQLite 或浏览器状态；旧项目只作为被替代背景，不是新实现的运行依赖。
+- 本版不兼容、不迁移，也不以旧 `chatgpt-pro-collab` 实现的 task、bundle、SQLite 或浏览器状态作为运行输入。开发与验收产生的临时数据由执行环境在运行前备份或重建；实现不得为这些临时数据增加运行时来源标记、版本识别、拒绝或 migration gate。旧项目只作为被替代背景，不是新实现的运行依赖。
 - 浏览器可见性、自动最小化、Dock 图标管理和进程崩溃后的 conversation 恢复不在本版产品合同内。需要这些行为时必须新增或修订 `BEH-*`。
 
 ## 技术基线
