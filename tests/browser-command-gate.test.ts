@@ -51,7 +51,7 @@ describe('browser command side-effect gate', () => {
     await expect(access(markerPath)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it('stays alive with the guarded command when its PID notification reader disappears', async () => {
+  it('stays alive with the guarded command when its parent output readers disappear', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collab-command-notification-'));
     const markerPath = join(root, 'command-started');
     const gatePath = join(
@@ -64,6 +64,7 @@ describe('browser command side-effect gate', () => {
     );
     const commandSource = [
       `require('node:fs').writeFileSync(${JSON.stringify(markerPath)}, 'started');`,
+      "setTimeout(() => { process.stdout.write('late stdout'); process.stderr.write('late stderr'); }, 100);",
       'setTimeout(() => {}, 750);',
     ].join('');
     const gate = spawn(process.execPath, [gatePath, process.execPath, '-e', commandSource], {
@@ -74,10 +75,10 @@ describe('browser command side-effect gate', () => {
     if (commandEvents === null || commandEvents === undefined) {
       throw new Error('gate command notification pipe was not created');
     }
+    gate.stdout.destroy();
+    gate.stderr.destroy();
     commandEvents.destroy();
-    await new Promise<void>((resolve) => {
-      commandEvents.once('close', resolve);
-    });
+    await Promise.all([waitForClose(gate.stdout), waitForClose(gate.stderr), waitForClose(commandEvents)]);
 
     gate.stdin.end('go\n');
     await waitForPath(markerPath);
@@ -96,6 +97,7 @@ describe('browser command side-effect gate', () => {
     const root = await mkdtemp(join(tmpdir(), 'collab-post-release-death-'));
     const readyPath = join(root, 'ready');
     const markerPath = join(root, 'command-started');
+    const completedPath = join(root, 'command-completed');
     const gatePath = join(
       import.meta.dirname,
       '..',
@@ -105,7 +107,9 @@ describe('browser command side-effect gate', () => {
       'browser-command-gate.ts',
     );
     const workerPath = join(import.meta.dirname, 'support', 'post-release-browser-worker.ts');
-    const worker = spawn(process.execPath, [workerPath, gatePath, readyPath, markerPath], { stdio: 'ignore' });
+    const worker = spawn(process.execPath, [workerPath, gatePath, readyPath, markerPath, completedPath], {
+      stdio: 'ignore',
+    });
 
     await expect(waitForExit(worker)).resolves.toBe(0);
     const gatePid = Number(await readFile(readyPath, 'utf8'));
@@ -116,8 +120,28 @@ describe('browser command side-effect gate', () => {
 
     await waitForPidExit(gatePid);
     await expect(readFile(markerPath, 'utf8')).resolves.toBe('started');
+    await expect(readFile(completedPath, 'utf8')).resolves.toBe('completed');
   });
 });
+
+/**
+ * Waits until one explicitly destroyed stream closes.
+ *
+ * @param stream Destroyed child-process output stream.
+ * @returns Nothing after the close event, or immediately if already closed.
+ * @throws {Error} This helper does not reject.
+ */
+function waitForClose(stream: {
+  readonly closed: boolean;
+  once(event: 'close', listener: () => void): unknown;
+}): Promise<void> {
+  if (stream.closed) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    stream.once('close', resolve);
+  });
+}
 
 /**
  * Resolves one spawned test process to its numeric exit code.
