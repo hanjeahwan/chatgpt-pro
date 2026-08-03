@@ -148,6 +148,23 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     await expect(access(paths.database)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it('does not certify a pre-existing seed when interactive setup fails', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-failed-setup-'));
+    const paths = collabPaths(root);
+    await ensureCollabDirectories(paths);
+    await writeFile(paths.seedState, '{"legacy":true}');
+    const browser = new FakeBrowser(paths);
+    browser.failSetup = true;
+    const service = new CollabService(paths, browser, () => {
+      return new StateStore(paths.database, 'require-existing');
+    });
+
+    await expect(service.setup()).rejects.toThrowError(/injected setup failure/);
+    await expect(service.start()).rejects.toMatchObject({ code: 'STATE_NOT_INITIALIZED' });
+    expect(await readFile(paths.seedState, 'utf8')).toBe('{"legacy":true}');
+    await expect(access(paths.database)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('prints stable help and JSON usage errors', async () => {
     const fixture = await serviceFixture();
     const output: string[] = [];
@@ -200,6 +217,7 @@ class FakeBrowser implements CollabBrowser {
   readonly expectedConversationIds: Array<string | null> = [];
   observedOperations = 0;
   nextSendStatus: 'submitted' | 'unknown-submission' | 'unsafe-not-submitted' = 'submitted';
+  failSetup = false;
   startCount = 0;
   nextChildPid = 20_000;
 
@@ -220,6 +238,9 @@ class FakeBrowser implements CollabBrowser {
    * @throws {Error} If the test file cannot be written.
    */
   async setup(): Promise<string> {
+    if (this.failSetup) {
+      throw new Error('injected setup failure');
+    }
     await writeFile(this.paths.seedState, '{}');
     return this.paths.seedState;
   }

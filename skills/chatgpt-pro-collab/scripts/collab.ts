@@ -124,10 +124,12 @@ export class CollabService {
    */
   async setup(): Promise<{ readonly seedPath: string }> {
     await ensureCollabDirectories(this.#paths);
+    StateStore.assertSetupTarget(this.#paths.database);
+    await this.#browser.setup();
+    const seedPath = await requireSeedState(this.#paths);
     const store = new StateStore(this.#paths.database, 'initialize');
     store.close();
-    await this.#browser.setup();
-    return { seedPath: await requireSeedState(this.#paths) };
+    return { seedPath };
   }
 
   /**

@@ -76,6 +76,20 @@ export class StateStore {
   readonly #database: DatabaseSync;
 
   /**
+   * Rejects an existing non-V1 database before interactive setup changes authentication state.
+   *
+   * @param databasePath Fixed Collab database path.
+   * @returns Nothing when the path is absent or already belongs to V1.
+   * @throws {StateError} If an existing database is unmarked or incompatible.
+   * @throws {Error} If SQLite cannot read an existing database.
+   */
+  static assertSetupTarget(databasePath: string): void {
+    if (existsSync(databasePath)) {
+      assertV1Database(databasePath);
+    }
+  }
+
+  /**
    * Opens one process-local SQLite connection after enforcing V1 provenance.
    *
    * @param databasePath Absolute path to the Collab coordination database.
