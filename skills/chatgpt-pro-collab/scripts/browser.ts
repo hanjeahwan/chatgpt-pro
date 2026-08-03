@@ -701,8 +701,8 @@ export function runBrowserCommand(invocation: BrowserCommandInvocation): Promise
       }
       commandSpawnObserved = true;
       try {
-        invocation.onCommandSpawned?.(childCommandPid);
         invocation.onCommandStarted?.();
+        invocation.onCommandSpawned?.(childCommandPid);
       } catch (error) {
         commandObserverError = error;
         child.kill('SIGTERM');

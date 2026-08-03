@@ -196,6 +196,41 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     });
   });
 
+  it('keeps submission ambiguous when command PID persistence fails after spawn', async () => {
+    const fixture = await browserFixture([
+      pageResult({ protocol, kind: 'send-ready' }),
+      pageResult({
+        protocol,
+        kind: 'send',
+        status: 'submitted',
+        conversationId: 'conversation-a',
+        conversationUrl: 'https://chatgpt.com/c/conversation-a',
+      }),
+    ]);
+    let commandCount = 0;
+    let ambiguityPersisted = false;
+    const observer: BrowserOperationObserver = {
+      childSpawned() {},
+      childExited() {},
+      commandSpawned() {
+        commandCount += 1;
+        if (commandCount === 2) {
+          throw new Error('simulated SQLite attach failure after command spawn');
+        }
+      },
+    };
+
+    await expect(
+      fixture.browser.send('task-a', 'session-a', null, 'exact prompt', [], observer, () => {
+        ambiguityPersisted = true;
+      }),
+    ).resolves.toEqual({
+      status: 'unknown-submission',
+      error: expect.stringContaining('simulated SQLite attach failure after command spawn'),
+    });
+    expect(ambiguityPersisted).toBe(true);
+  });
+
   it('reports every browser-command child to the task lease observer', async () => {
     const fixture = await browserFixture([
       pageResult({ protocol, kind: 'send-ready' }),
@@ -302,14 +337,14 @@ async function browserFixture(outputs: readonly (BrowserCommandOutput | Error)[]
     }
     if (next instanceof Error) {
       if (next instanceof CommandStartedError) {
-        invocation.onCommandSpawned?.(invocationChildPid + 1000);
         invocation.onCommandStarted?.();
+        invocation.onCommandSpawned?.(invocationChildPid + 1000);
       }
       invocation.onChildExited?.(invocationChildPid);
       return Promise.reject(next);
     }
-    invocation.onCommandSpawned?.(invocationChildPid + 1000);
     invocation.onCommandStarted?.();
+    invocation.onCommandSpawned?.(invocationChildPid + 1000);
     invocation.onChildExited?.(invocationChildPid);
     return Promise.resolve(next);
   });
