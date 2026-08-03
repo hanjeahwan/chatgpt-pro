@@ -14,6 +14,8 @@ import { collabPaths, ensureCollabDirectories } from '../skills/chatgpt-pro-coll
 
 const protocol = 'chatgpt-pro-collab/v1';
 
+class CommandStartedError extends Error {}
+
 describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
   it('uses the fixed CLI prefix, task output directory, and shared seed without persistence', async () => {
     const fixture = await browserFixture([
@@ -182,6 +184,18 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     expect(cleanupSource).toContain('const attachmentFileNames = ["attachment.txt"]');
   });
 
+  it('marks submission unknown when a started command fails without a page result', async () => {
+    const fixture = await browserFixture([
+      pageResult({ protocol, kind: 'send-ready' }),
+      new CommandStartedError('command PID notification failed'),
+    ]);
+
+    await expect(fixture.browser.send('task-a', 'session-a', null, 'exact prompt', [])).resolves.toEqual({
+      status: 'unknown-submission',
+      error: expect.stringContaining('command PID notification failed'),
+    });
+  });
+
   it('reports every browser-command child to the task lease observer', async () => {
     const fixture = await browserFixture([
       pageResult({ protocol, kind: 'send-ready' }),
@@ -275,10 +289,13 @@ async function browserFixture(outputs: readonly (BrowserCommandOutput | Error)[]
       return Promise.reject(new Error('unexpected browser invocation'));
     }
     if (next instanceof Error) {
+      if (next instanceof CommandStartedError) {
+        invocation.onCommandSpawned?.();
+      }
       invocation.onChildExited?.(invocationChildPid);
       return Promise.reject(next);
     }
-    invocation.onCommandSpawned?.(invocationChildPid + 100_000);
+    invocation.onCommandSpawned?.();
     invocation.onChildExited?.(invocationChildPid);
     return Promise.resolve(next);
   });

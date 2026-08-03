@@ -11,6 +11,7 @@ const PLAYWRIGHT_CLI_PACKAGE = '@playwright/cli@0.1.17';
 const CHATGPT_URL = 'https://chatgpt.com/';
 const PROTOCOL = 'chatgpt-pro-collab/v1';
 const BROWSER_COMMAND_GATE_PATH = fileURLToPath(new URL('./browser-command-gate.ts', import.meta.url));
+const COMMAND_PID_NOTIFICATION_FAILED_EXIT_CODE = 70;
 
 export interface BrowserCommandInvocation {
   readonly executable: string;
@@ -19,7 +20,7 @@ export interface BrowserCommandInvocation {
   readonly environment: Readonly<NodeJS.ProcessEnv>;
   readonly onChildSpawned?: (pid: number) => void;
   readonly onChildExited?: (pid: number) => void;
-  readonly onCommandSpawned?: (pid: number) => void;
+  readonly onCommandSpawned?: () => void;
 }
 
 export interface BrowserCommandOutput {
@@ -669,7 +670,7 @@ export function runBrowserCommand(invocation: BrowserCommandInvocation): Promise
       }
       commandSpawnObserved = true;
       try {
-        invocation.onCommandSpawned?.(childCommandPid);
+        invocation.onCommandSpawned?.();
       } catch (error) {
         commandObserverError = error;
         child.kill('SIGTERM');
@@ -698,6 +699,14 @@ export function runBrowserCommand(invocation: BrowserCommandInvocation): Promise
         stdout: Buffer.concat(stdout).toString('utf8'),
         stderr: Buffer.concat(stderr).toString('utf8'),
       };
+      if (code === COMMAND_PID_NOTIFICATION_FAILED_EXIT_CODE && !commandSpawnObserved) {
+        commandSpawnObserved = true;
+        try {
+          invocation.onCommandSpawned?.();
+        } catch (error) {
+          commandObserverError = error;
+        }
+      }
       if (commandObserverError !== undefined) {
         rejectOnce(commandObserverError);
         return;

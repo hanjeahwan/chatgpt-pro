@@ -50,6 +50,73 @@ describe('browser command side-effect gate', () => {
 
     await expect(access(markerPath)).rejects.toMatchObject({ code: 'ENOENT' });
   });
+
+  it('stays alive with the guarded command when its PID notification reader disappears', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-command-notification-'));
+    const markerPath = join(root, 'command-started');
+    const gatePath = join(
+      import.meta.dirname,
+      '..',
+      'skills',
+      'chatgpt-pro-collab',
+      'scripts',
+      'browser-command-gate.ts',
+    );
+    const commandSource = [
+      `require('node:fs').writeFileSync(${JSON.stringify(markerPath)}, 'started');`,
+      'setTimeout(() => {}, 750);',
+    ].join('');
+    const gate = spawn(process.execPath, [gatePath, process.execPath, '-e', commandSource], {
+      stdio: ['pipe', 'pipe', 'pipe', 'pipe'],
+    });
+    const completion = waitForExit(gate);
+    const commandEvents = gate.stdio[3];
+    if (commandEvents === null || commandEvents === undefined) {
+      throw new Error('gate command notification pipe was not created');
+    }
+    commandEvents.destroy();
+    await new Promise<void>((resolve) => {
+      commandEvents.once('close', resolve);
+    });
+
+    gate.stdin.end('go\n');
+    await waitForPath(markerPath);
+    expect(() => {
+      if (gate.pid === undefined) {
+        throw new Error('gate PID was not assigned');
+      }
+      process.kill(gate.pid, 0);
+    }).not.toThrow();
+
+    await expect(completion).resolves.toBe(70);
+    await expect(readFile(markerPath, 'utf8')).resolves.toBe('started');
+  });
+
+  it('guards the real command until exit when its parent dies after release', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-post-release-death-'));
+    const readyPath = join(root, 'ready');
+    const markerPath = join(root, 'command-started');
+    const gatePath = join(
+      import.meta.dirname,
+      '..',
+      'skills',
+      'chatgpt-pro-collab',
+      'scripts',
+      'browser-command-gate.ts',
+    );
+    const workerPath = join(import.meta.dirname, 'support', 'post-release-browser-worker.ts');
+    const worker = spawn(process.execPath, [workerPath, gatePath, readyPath, markerPath], { stdio: 'ignore' });
+
+    await expect(waitForExit(worker)).resolves.toBe(0);
+    const gatePid = Number(await readFile(readyPath, 'utf8'));
+    await waitForPath(markerPath);
+    expect(() => {
+      process.kill(gatePid, 0);
+    }).not.toThrow();
+
+    await waitForPidExit(gatePid);
+    await expect(readFile(markerPath, 'utf8')).resolves.toBe('started');
+  });
 });
 
 /**

@@ -8,6 +8,7 @@ if (executable === undefined) {
 
 let command: ChildProcess | undefined;
 let commandSettled = false;
+let commandPidNotificationFailed = false;
 let gateBuffer = '';
 
 process.stdin.setEncoding('utf8');
@@ -53,8 +54,18 @@ function launchCommand(): void {
     stdio: ['ignore', 'inherit', 'inherit'],
   });
   if (command.pid !== undefined) {
-    writeFileSync(3, `${command.pid}\n`);
-    closeSync(3);
+    try {
+      writeFileSync(3, `${command.pid}\n`);
+      closeSync(3);
+    } catch (error) {
+      commandPidNotificationFailed = true;
+      process.stderr.write(`guarded command PID notification failed: ${errorMessage(error)}\n`);
+      try {
+        closeSync(3);
+      } catch {
+        // The notification descriptor may already be closed by the failed write.
+      }
+    }
   }
   command.on('error', (error) => {
     if (commandSettled) {
@@ -62,13 +73,17 @@ function launchCommand(): void {
     }
     commandSettled = true;
     process.stderr.write(`guarded command failed to start: ${error.message}\n`);
-    process.exitCode = 127;
+    process.exitCode = commandPidNotificationFailed ? 70 : 127;
   });
   command.on('close', (code, signal) => {
     if (commandSettled) {
       return;
     }
     commandSettled = true;
+    if (commandPidNotificationFailed) {
+      process.exitCode = 70;
+      return;
+    }
     if (code === 0) {
       process.exitCode = 0;
       return;
@@ -78,4 +93,15 @@ function launchCommand(): void {
     );
     process.exitCode = code ?? 1;
   });
+}
+
+/**
+ * Converts an unknown notification failure to a stable diagnostic.
+ *
+ * @param error Unknown synchronous file-descriptor error.
+ * @returns Human-readable failure detail.
+ * @throws {Error} This helper does not throw.
+ */
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
