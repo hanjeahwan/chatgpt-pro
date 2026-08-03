@@ -759,7 +759,7 @@ function waitScript(expectedConversationId: string): string {
     });
     let response;
     try {
-      await copy.click();
+      await copy.click({ force: true });
       await page.waitForFunction(() => {
         return globalThis.__chatgptProCollabClipboard?.captured !== undefined;
       }, undefined, { timeout: 0, polling: 25 });
