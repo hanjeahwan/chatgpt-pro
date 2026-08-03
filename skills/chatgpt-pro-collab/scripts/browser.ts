@@ -22,6 +22,7 @@ export interface BrowserCommandInvocation {
   readonly onChildExited?: (pid: number) => void;
   readonly onCommandSpawned?: (pid: number) => void;
   readonly onCommandStarted?: () => void;
+  readonly onCommandNotSpawned?: () => void;
   readonly beforeCommandRelease?: () => void;
 }
 
@@ -341,7 +342,9 @@ export class PlaywrightBrowser {
       return { status: 'not-submitted', error: errorMessage(error) };
     }
 
+    let commandReleased = false;
     let commandStarted = false;
+    let commandNotSpawned = false;
     try {
       const scriptPath = await savePlaywrightScript(
         this.#paths,
@@ -357,9 +360,13 @@ export class PlaywrightBrowser {
         observer,
         () => {
           beforeSubmissionRelease?.();
+          commandReleased = true;
         },
         () => {
           commandStarted = true;
+        },
+        () => {
+          commandNotSpawned = true;
         },
       );
       const result = parseProtocolResult<SendProtocolResult>(output.stdout, 'send');
@@ -398,7 +405,8 @@ export class PlaywrightBrowser {
         conversationUrl: result.conversationUrl,
       };
     } catch (error) {
-      if (!commandStarted && attachmentPreparationStarted) {
+      const definitelyNotSubmitted = commandNotSpawned || (!commandReleased && !commandStarted);
+      if (definitelyNotSubmitted && attachmentPreparationStarted) {
         try {
           await this.#runCode<DraftClearedProtocolResult>(
             sessionName,
@@ -422,7 +430,7 @@ export class PlaywrightBrowser {
         }
       }
       return {
-        status: commandStarted ? 'unknown-submission' : 'not-submitted',
+        status: definitelyNotSubmitted ? 'not-submitted' : 'unknown-submission',
         error: errorMessage(error),
       };
     }
@@ -525,6 +533,7 @@ export class PlaywrightBrowser {
    * @param observer Task-lease child-process observer.
    * @param beforeCommandRelease Called after the gate is durably observed and immediately before command release.
    * @param onCommandStarted Called after a command PID or equivalent conservative start evidence is observed.
+   * @param onCommandNotSpawned Called only when the gate proves the guarded command did not spawn.
    * @returns Captured stdout and stderr.
    * @throws {BrowserError} If `npx` exits unsuccessfully or cannot start.
    */
@@ -536,6 +545,7 @@ export class PlaywrightBrowser {
     observer?: BrowserOperationObserver,
     beforeCommandRelease?: () => void,
     onCommandStarted?: () => void,
+    onCommandNotSpawned?: () => void,
   ): Promise<BrowserCommandOutput> {
     const outputDirectory = join(taskDirectory(this.#paths, taskId), 'playwright');
     try {
@@ -566,6 +576,13 @@ export class PlaywrightBrowser {
           : {
               onCommandStarted: () => {
                 onCommandStarted();
+              },
+            }),
+        ...(onCommandNotSpawned === undefined
+          ? {}
+          : {
+              onCommandNotSpawned: () => {
+                onCommandNotSpawned();
               },
             }),
         ...(beforeCommandRelease === undefined
@@ -739,6 +756,13 @@ export function runBrowserCommand(invocation: BrowserCommandInvocation): Promise
           commandObserverError = error;
         }
         commandObserverError ??= new Error('browser command gate could not report the command PID');
+      }
+      if (code === 127 && !commandSpawnObserved) {
+        try {
+          invocation.onCommandNotSpawned?.();
+        } catch (error) {
+          commandObserverError = error;
+        }
       }
       if (commandObserverError !== undefined) {
         rejectOnce(commandObserverError);

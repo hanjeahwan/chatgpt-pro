@@ -5,6 +5,8 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { runBrowserCommand } from '../skills/chatgpt-pro-collab/scripts/browser.ts';
+
 describe('browser command side-effect gate', () => {
   it('does not launch the guarded command until the parent releases it', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collab-command-gate-'));
@@ -32,6 +34,30 @@ describe('browser command side-effect gate', () => {
     gate.stdin.end('go\n');
     await expect(completion).resolves.toBe(0);
     await expect(readFile(markerPath, 'utf8')).resolves.toBe('yes');
+  });
+
+  it('reports when the released command definitely did not spawn', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-command-not-spawned-'));
+    let released = false;
+    let commandNotSpawned = false;
+
+    await expect(
+      runBrowserCommand({
+        executable: join(root, 'missing-command'),
+        arguments: [],
+        cwd: root,
+        environment: process.env,
+        beforeCommandRelease() {
+          released = true;
+        },
+        onCommandNotSpawned() {
+          commandNotSpawned = true;
+        },
+      }),
+    ).rejects.toThrow(/code 127/);
+
+    expect(released).toBe(true);
+    expect(commandNotSpawned).toBe(true);
   });
 
   it('cannot create a browser side effect when the parent dies before child attachment', async () => {

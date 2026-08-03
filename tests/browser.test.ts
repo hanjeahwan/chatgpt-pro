@@ -14,7 +14,11 @@ import { collabPaths, ensureCollabDirectories } from '../skills/chatgpt-pro-coll
 
 const protocol = 'chatgpt-pro-collab/v1';
 
+class CommandReleasedError extends Error {}
+
 class CommandStartedError extends Error {}
+
+class CommandNotSpawnedError extends Error {}
 
 describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
   it('uses the fixed CLI prefix, task output directory, and shared seed without persistence', async () => {
@@ -168,12 +172,12 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     expect(cleanupSource).toContain('attachment draft remained after reload');
   });
 
-  it('cleans uploaded attachments when the guarded submit command never starts', async () => {
+  it('cleans uploaded attachments when the gate proves the guarded submit command did not spawn', async () => {
     const fixture = await browserFixture([
       pageResult({ protocol, kind: 'send-ready' }),
       pageResult({ protocol, kind: 'upload-ready' }),
       output('uploaded'),
-      new Error('spawn npx ENOENT'),
+      new CommandNotSpawnedError('spawn npx ENOENT'),
       pageResult({ protocol, kind: 'draft-cleared' }),
     ]);
 
@@ -182,6 +186,36 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     ).resolves.toEqual({ status: 'not-submitted', error: expect.stringContaining('spawn npx ENOENT') });
     const cleanupSource = await lastScript(fixture.invocations);
     expect(cleanupSource).toContain('const attachmentFileNames = ["attachment.txt"]');
+  });
+
+  it('keeps submission ambiguous when the released gate exits before reporting a command PID', async () => {
+    const fixture = await browserFixture([
+      pageResult({ protocol, kind: 'send-ready' }),
+      pageResult({ protocol, kind: 'upload-ready' }),
+      output('uploaded'),
+      new CommandReleasedError('gate exited before command PID notification'),
+    ]);
+    let ambiguityPersisted = false;
+
+    await expect(
+      fixture.browser.send(
+        'task-a',
+        'session-a',
+        'conversation-a',
+        'exact prompt',
+        ['/tmp/attachment.txt'],
+        undefined,
+        () => {
+          ambiguityPersisted = true;
+        },
+      ),
+    ).resolves.toEqual({
+      status: 'unknown-submission',
+      error: expect.stringContaining('gate exited before command PID notification'),
+    });
+    expect(ambiguityPersisted).toBe(true);
+    expect(fixture.invocations).toHaveLength(4);
+    expect(await lastScript(fixture.invocations)).not.toContain('attachment draft remained after reload');
   });
 
   it('marks submission unknown when a started command fails without a page result', async () => {
@@ -330,19 +364,29 @@ async function browserFixture(outputs: readonly (BrowserCommandOutput | Error)[]
     const invocationChildPid = childPid;
     childPid += 1;
     invocation.onChildSpawned?.(invocationChildPid);
-    invocation.beforeCommandRelease?.();
     const next = queue.shift();
     if (next === undefined) {
       return Promise.reject(new Error('unexpected browser invocation'));
     }
     if (next instanceof Error) {
+      if (
+        next instanceof CommandReleasedError ||
+        next instanceof CommandStartedError ||
+        next instanceof CommandNotSpawnedError
+      ) {
+        invocation.beforeCommandRelease?.();
+      }
       if (next instanceof CommandStartedError) {
         invocation.onCommandStarted?.();
         invocation.onCommandSpawned?.(invocationChildPid + 1000);
       }
+      if (next instanceof CommandNotSpawnedError) {
+        invocation.onCommandNotSpawned?.();
+      }
       invocation.onChildExited?.(invocationChildPid);
       return Promise.reject(next);
     }
+    invocation.beforeCommandRelease?.();
     invocation.onCommandStarted?.();
     invocation.onCommandSpawned?.(invocationChildPid + 1000);
     invocation.onChildExited?.(invocationChildPid);
