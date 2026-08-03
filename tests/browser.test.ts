@@ -8,6 +8,7 @@ import {
   PlaywrightBrowser,
   type BrowserCommandInvocation,
   type BrowserCommandOutput,
+  type BrowserOperationObserver,
 } from '../skills/chatgpt-pro-collab/scripts/browser.ts';
 import { collabPaths, ensureCollabDirectories } from '../skills/chatgpt-pro-collab/scripts/session.ts';
 
@@ -138,7 +139,56 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     const cleanupSource = await scriptForInvocation(cleanupInvocation);
     expect(cleanupSource).toContain("page.reload({ waitUntil: 'domcontentloaded' })");
     expect(cleanupSource).toContain('const expectedConversationId = "conversation-a"');
+    expect(cleanupSource).toContain('input[type="file"]');
+    expect(cleanupSource).toContain('getByText(fileName, { exact: true })');
+    expect(cleanupSource).toContain('attachment draft remained after reload');
+    expect(cleanupSource).toContain('const attachmentFileNames = ["a","b"]');
+    const uploadPreparationSource = await scriptForInvocation(fixture.invocations[1]);
+    expect(uploadPreparationSource).toContain('conversation identity changed before attachment preparation');
     expectPageFunctionSyntax(cleanupSource);
+  });
+
+  it('clears uploaded attachments when a later known pre-submit check fails', async () => {
+    const fixture = await browserFixture([
+      pageResult({ protocol, kind: 'send-ready' }),
+      pageResult({ protocol, kind: 'upload-ready' }),
+      output('uploaded'),
+      pageResult({ protocol, kind: 'send', status: 'not-submitted', error: 'composer drift' }),
+      pageResult({ protocol, kind: 'draft-cleared' }),
+    ]);
+
+    await expect(
+      fixture.browser.send('task-a', 'session-a', 'conversation-a', 'exact prompt', ['/tmp/attachment.txt']),
+    ).resolves.toEqual({ status: 'not-submitted', error: 'composer drift' });
+    const cleanupSource = await lastScript(fixture.invocations);
+    expect(cleanupSource).toContain('const attachmentFileNames = ["attachment.txt"]');
+    expect(cleanupSource).toContain('attachment draft remained after reload');
+  });
+
+  it('reports every browser-command child to the task lease observer', async () => {
+    const fixture = await browserFixture([
+      pageResult({ protocol, kind: 'send-ready' }),
+      pageResult({
+        protocol,
+        kind: 'send',
+        status: 'submitted',
+        conversationId: 'conversation-a',
+        conversationUrl: 'https://chatgpt.com/c/conversation-a',
+      }),
+    ]);
+    const events: string[] = [];
+    const observer: BrowserOperationObserver = {
+      childSpawned(pid) {
+        events.push(`spawn:${pid}`);
+      },
+      childExited(pid) {
+        events.push(`exit:${pid}`);
+      },
+    };
+
+    await fixture.browser.send('task-a', 'session-a', null, 'exact prompt', [], observer);
+
+    expect(events).toEqual(['spawn:5000', 'exit:5000', 'spawn:5001', 'exit:5001']);
   });
 
   it('captures Copy response inside the page and never invokes an OS clipboard command', async () => {
@@ -197,12 +247,17 @@ async function browserFixture(outputs: readonly BrowserCommandOutput[]) {
   await ensureCollabDirectories(paths);
   const invocations: BrowserCommandInvocation[] = [];
   const queue = [...outputs];
+  let childPid = 5000;
   const browser = new PlaywrightBrowser(paths, root, (invocation) => {
     invocations.push(invocation);
+    const invocationChildPid = childPid;
+    childPid += 1;
+    invocation.onChildSpawned?.(invocationChildPid);
     const next = queue.shift();
     if (next === undefined) {
       return Promise.reject(new Error('unexpected browser invocation'));
     }
+    invocation.onChildExited?.(invocationChildPid);
     return Promise.resolve(next);
   });
   return { browser, invocations, paths };

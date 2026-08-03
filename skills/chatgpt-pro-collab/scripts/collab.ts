@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   PlaywrightBrowser,
+  type BrowserOperationObserver,
   type BrowserSendResult,
   type BrowserSessionInfo,
   type BrowserWaitResult,
@@ -30,10 +31,25 @@ export interface CollabBrowser {
     expectedConversationId: string | null,
     prompt: string,
     attachmentPaths: readonly string[],
+    observer?: BrowserOperationObserver,
   ): Promise<BrowserSendResult>;
-  waitForResponse(taskId: string, sessionName: string, expectedConversationId: string): Promise<BrowserWaitResult>;
-  closeTask(taskId: string, sessionName: string): Promise<{ readonly wasOpen: boolean }>;
-  archive(taskId: string, sessionName: string, conversationId: string): Promise<{ readonly conversationId: string }>;
+  waitForResponse(
+    taskId: string,
+    sessionName: string,
+    expectedConversationId: string,
+    observer?: BrowserOperationObserver,
+  ): Promise<BrowserWaitResult>;
+  closeTask(
+    taskId: string,
+    sessionName: string,
+    observer?: BrowserOperationObserver,
+  ): Promise<{ readonly wasOpen: boolean }>;
+  archive(
+    taskId: string,
+    sessionName: string,
+    conversationId: string,
+    observer?: BrowserOperationObserver,
+  ): Promise<{ readonly conversationId: string }>;
 }
 
 export interface StartResult {
@@ -158,7 +174,7 @@ export class CollabService {
 
     return this.#withStore(async (store) => {
       const task = store.requireActiveTask(taskId);
-      return this.#withTaskOperation(store, taskId, 'send', async () => {
+      return this.#withTaskOperation(store, taskId, 'send', async (observer) => {
         store.beginTurn(taskId, turnId, input.promptPath, input.attachmentPaths);
         try {
           await savePromptCopy(this.#paths, taskId, turnId, input.prompt);
@@ -173,6 +189,7 @@ export class CollabService {
           task.conversationId,
           input.promptText,
           input.attachmentPaths,
+          observer,
         );
         if (browserResult.status === 'unsafe-not-submitted') {
           store.failSendingTurn(taskId, turnId, browserResult.error);
@@ -232,12 +249,17 @@ export class CollabService {
       if (turn.status !== 'pending') {
         throw new CollabError('TURN_NOT_PENDING', `turn is ${turn.status}: ${turnId}`);
       }
-      return this.#withTaskOperation(store, taskId, 'wait', async () => {
+      return this.#withTaskOperation(store, taskId, 'wait', async (observer) => {
         if (task.conversationId === null || task.conversationUrl === null) {
           throw new CollabError('TRANSCRIPT_INCONSISTENT', `pending task has no conversation: ${taskId}`);
         }
 
-        const captured = await this.#browser.waitForResponse(taskId, task.playwrightSession, task.conversationId);
+        const captured = await this.#browser.waitForResponse(
+          taskId,
+          task.playwrightSession,
+          task.conversationId,
+          observer,
+        );
         if (captured.conversationId !== task.conversationId || captured.conversationUrl !== task.conversationUrl) {
           throw new CollabError('CONVERSATION_MISMATCH', `wait observed a different conversation: ${taskId}`);
         }
@@ -263,8 +285,8 @@ export class CollabService {
       if (task.status === 'closed') {
         return { taskId, wasOpen: false, alreadyClosed: true };
       }
-      return this.#withTaskOperation(store, taskId, 'close', async () => {
-        const result = await this.#browser.closeTask(taskId, task.playwrightSession);
+      return this.#withTaskOperation(store, taskId, 'close', async (observer) => {
+        const result = await this.#browser.closeTask(taskId, task.playwrightSession, observer);
         store.closeTask(taskId);
         return { taskId, wasOpen: result.wasOpen, alreadyClosed: false };
       });
@@ -286,8 +308,8 @@ export class CollabService {
         throw new CollabError('CONVERSATION_NOT_ESTABLISHED', `task has no submitted conversation: ${taskId}`);
       }
       const conversationId = task.conversationId;
-      return this.#withTaskOperation(store, taskId, 'archive', async () => {
-        const result = await this.#browser.archive(taskId, task.playwrightSession, conversationId);
+      return this.#withTaskOperation(store, taskId, 'archive', async (observer) => {
+        const result = await this.#browser.archive(taskId, task.playwrightSession, conversationId, observer);
         return { taskId, conversationId: result.conversationId };
       });
     });
@@ -307,12 +329,20 @@ export class CollabService {
     store: StateStore,
     taskId: string,
     operation: string,
-    action: () => Promise<T>,
+    action: (observer: BrowserOperationObserver) => Promise<T>,
   ): Promise<T> {
     const token = randomUUID();
     store.acquireTaskOperation(taskId, operation, token);
+    const observer: BrowserOperationObserver = {
+      childSpawned(pid) {
+        store.attachTaskOperationChild(taskId, token, pid);
+      },
+      childExited(pid) {
+        store.detachTaskOperationChild(taskId, token, pid);
+      },
+    };
     try {
-      return await action();
+      return await action(observer);
     } finally {
       store.releaseTaskOperation(taskId, token);
     }

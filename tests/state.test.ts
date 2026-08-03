@@ -65,6 +65,11 @@ describe('BEH-002, BEH-005, and BEH-007 state gates', () => {
     }).toThrowError(/busy with wait/);
     first.releaseTaskOperation('task-a', 'live-owner');
     first.acquireTaskOperation('task-a', 'wait', 'dead-owner', 999_999);
+    first.attachTaskOperationChild('task-a', 'dead-owner', process.pid);
+    expect(() => {
+      second.acquireTaskOperation('task-a', 'close', 'contender');
+    }).toThrowError(/busy with wait/);
+    first.detachTaskOperationChild('task-a', 'dead-owner', process.pid);
     second.acquireTaskOperation('task-a', 'close', 'recovered-owner');
     second.releaseTaskOperation('task-a', 'recovered-owner');
     first.close();

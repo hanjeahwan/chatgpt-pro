@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import type { BrowserOperationObserver } from '../skills/chatgpt-pro-collab/scripts/browser.ts';
 import { CollabService, runCli, type CliIo, type CollabBrowser } from '../skills/chatgpt-pro-collab/scripts/collab.ts';
 import { collabPaths, ensureCollabDirectories } from '../skills/chatgpt-pro-collab/scripts/session.ts';
 import { StateStore } from '../skills/chatgpt-pro-collab/scripts/state.ts';
@@ -55,6 +56,7 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     await expect(fixture.service.close(firstTask.taskId)).resolves.toMatchObject({ alreadyClosed: false });
     await expect(fixture.service.close(firstTask.taskId)).resolves.toMatchObject({ alreadyClosed: true });
     expect(fixture.browser.closed).toEqual([firstTask.taskId]);
+    expect(fixture.browser.observedOperations).toBe(6);
     await expect(fixture.service.wait(firstTask.taskId, firstTurn.turnId)).resolves.toEqual(repeated);
     await expect(fixture.service.archive(firstTask.taskId)).rejects.toMatchObject({ code: 'TASK_NOT_ACTIVE' });
   });
@@ -135,8 +137,10 @@ class FakeBrowser implements CollabBrowser {
   readonly closed: string[] = [];
   readonly archived: string[] = [];
   readonly expectedConversationIds: Array<string | null> = [];
+  observedOperations = 0;
   nextSendStatus: 'submitted' | 'unknown-submission' | 'unsafe-not-submitted' = 'submitted';
   startCount = 0;
+  nextChildPid = 20_000;
 
   /**
    * Creates a deterministic browser boundary rooted in the test data directory.
@@ -186,6 +190,7 @@ class FakeBrowser implements CollabBrowser {
    * @param expectedConversationId Database-bound conversation, or null for a first turn.
    * @param _prompt Exact prompt under test.
    * @param _attachmentPaths Ordered attachment paths under test.
+   * @param observer Task-lease child-process observer.
    * @returns Confirmed or ambiguous fake submission.
    * @throws {Error} This fake send does not throw.
    */
@@ -195,7 +200,9 @@ class FakeBrowser implements CollabBrowser {
     expectedConversationId: string | null,
     _prompt: string,
     _attachmentPaths: readonly string[],
+    observer?: BrowserOperationObserver,
   ) {
+    this.observe(observer);
     this.expectedConversationIds.push(expectedConversationId);
     if (this.nextSendStatus === 'unknown-submission') {
       this.nextSendStatus = 'submitted';
@@ -220,10 +227,17 @@ class FakeBrowser implements CollabBrowser {
    * @param taskId Task identifier.
    * @param _sessionName Unused named session.
    * @param expectedConversationId Database-bound identity.
+   * @param observer Task-lease child-process observer.
    * @returns Fake copied response and unchanged conversation.
    * @throws {Error} This fake wait does not throw.
    */
-  waitForResponse(taskId: string, _sessionName: string, expectedConversationId: string) {
+  waitForResponse(
+    taskId: string,
+    _sessionName: string,
+    expectedConversationId: string,
+    observer?: BrowserOperationObserver,
+  ) {
+    this.observe(observer);
     return Promise.resolve({
       response: `response for ${taskId}`,
       conversationId: expectedConversationId,
@@ -236,10 +250,12 @@ class FakeBrowser implements CollabBrowser {
    *
    * @param taskId Task identifier.
    * @param _sessionName Unused named session.
+   * @param observer Task-lease child-process observer.
    * @returns An open-session cleanup result.
    * @throws {Error} This fake close does not throw.
    */
-  closeTask(taskId: string, _sessionName: string) {
+  closeTask(taskId: string, _sessionName: string, observer?: BrowserOperationObserver) {
+    this.observe(observer);
     this.closed.push(taskId);
     return Promise.resolve({ wasOpen: true });
   }
@@ -250,12 +266,32 @@ class FakeBrowser implements CollabBrowser {
    * @param taskId Task identifier.
    * @param _sessionName Unused named session.
    * @param conversationId Database-bound identity.
+   * @param observer Task-lease child-process observer.
    * @returns The same conversation identity.
    * @throws {Error} This fake archive does not throw.
    */
-  archive(taskId: string, _sessionName: string, conversationId: string) {
+  archive(taskId: string, _sessionName: string, conversationId: string, observer?: BrowserOperationObserver) {
+    this.observe(observer);
     this.archived.push(taskId);
     return Promise.resolve({ conversationId });
+  }
+
+  /**
+   * Simulates one complete spawned browser command under the service lease.
+   *
+   * @param observer Observer passed through the production service boundary.
+   * @returns Nothing after the fake child is attached and detached.
+   * @throws {Error} If the service omitted the required operation observer.
+   */
+  observe(observer: BrowserOperationObserver | undefined): void {
+    if (observer === undefined) {
+      throw new Error('task operation observer was not supplied');
+    }
+    const pid = this.nextChildPid;
+    this.nextChildPid += 1;
+    observer.childSpawned(pid);
+    observer.childExited(pid);
+    this.observedOperations += 1;
   }
 }
 

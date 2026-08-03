@@ -70,7 +70,8 @@ export class StateStore {
         closed_at TEXT,
         browser_operation_token TEXT,
         browser_operation_pid INTEGER,
-        browser_operation_name TEXT
+        browser_operation_name TEXT,
+        browser_operation_child_pid INTEGER
       ) STRICT;
 
       CREATE TABLE IF NOT EXISTS turn (
@@ -191,7 +192,8 @@ export class StateStore {
       this.requireTask(taskId);
       const value = this.#database
         .prepare(
-          `SELECT browser_operation_token, browser_operation_pid, browser_operation_name
+          `SELECT browser_operation_token, browser_operation_pid, browser_operation_name,
+                  browser_operation_child_pid
            FROM task WHERE id = ?`,
         )
         .get(taskId);
@@ -199,7 +201,12 @@ export class StateStore {
       const existingToken = nullableText(row.browser_operation_token, 'task.browser_operation_token');
       const existingPid = nullableInteger(row.browser_operation_pid, 'task.browser_operation_pid');
       const existingOperation = nullableText(row.browser_operation_name, 'task.browser_operation_name');
-      if (existingToken !== null && existingPid !== null && isProcessAlive(existingPid)) {
+      const existingChildPid = nullableInteger(row.browser_operation_child_pid, 'task.browser_operation_child_pid');
+      if (
+        existingToken !== null &&
+        ((existingPid !== null && isProcessAlive(existingPid)) ||
+          (existingChildPid !== null && isProcessAlive(existingChildPid)))
+      ) {
         throw new StateError(
           'TASK_OPERATION_IN_PROGRESS',
           `task browser is busy with ${existingOperation ?? 'another operation'}: ${taskId}`,
@@ -209,10 +216,59 @@ export class StateStore {
       this.#database
         .prepare(
           `UPDATE task
-           SET browser_operation_token = ?, browser_operation_pid = ?, browser_operation_name = ?, updated_at = ?
+           SET browser_operation_token = ?, browser_operation_pid = ?, browser_operation_name = ?,
+               browser_operation_child_pid = NULL, updated_at = ?
            WHERE id = ?`,
         )
         .run(token, ownerPid, operation, now, taskId);
+    });
+  }
+
+  /**
+   * Records the exact spawned browser-command child under the current task lease.
+   *
+   * @param taskId Task whose named browser session is being operated.
+   * @param token Current lease token.
+   * @param childPid Spawned npx process identifier.
+   * @returns Nothing after the child PID is committed.
+   * @throws {StateError} If the caller no longer owns the lease.
+   * @throws {Error} If SQLite cannot commit the child process.
+   */
+  attachTaskOperationChild(taskId: string, token: string, childPid: number): void {
+    this.#transaction(() => {
+      const result = this.#database
+        .prepare(
+          `UPDATE task SET browser_operation_child_pid = ?
+           WHERE id = ? AND browser_operation_token = ? AND browser_operation_child_pid IS NULL`,
+        )
+        .run(childPid, taskId, token);
+      if (result.changes !== 1) {
+        throw new StateError('TASK_OPERATION_NOT_OWNED', `cannot attach child to task browser lease: ${taskId}`);
+      }
+    });
+  }
+
+  /**
+   * Clears the exact browser-command child after it exits.
+   *
+   * @param taskId Task whose named browser session was operated.
+   * @param token Current lease token.
+   * @param childPid Spawned npx process identifier that exited.
+   * @returns Nothing after the child PID is cleared.
+   * @throws {StateError} If the caller no longer owns this child slot.
+   * @throws {Error} If SQLite cannot commit the child exit.
+   */
+  detachTaskOperationChild(taskId: string, token: string, childPid: number): void {
+    this.#transaction(() => {
+      const result = this.#database
+        .prepare(
+          `UPDATE task SET browser_operation_child_pid = NULL
+           WHERE id = ? AND browser_operation_token = ? AND browser_operation_child_pid = ?`,
+        )
+        .run(taskId, token, childPid);
+      if (result.changes !== 1) {
+        throw new StateError('TASK_OPERATION_NOT_OWNED', `cannot detach child from task browser lease: ${taskId}`);
+      }
     });
   }
 
@@ -232,7 +288,7 @@ export class StateStore {
         .prepare(
           `UPDATE task
            SET browser_operation_token = NULL, browser_operation_pid = NULL,
-               browser_operation_name = NULL, updated_at = ?
+               browser_operation_name = NULL, browser_operation_child_pid = NULL, updated_at = ?
            WHERE id = ? AND browser_operation_token = ?`,
         )
         .run(now, taskId, token);
@@ -540,7 +596,12 @@ export class StateStore {
  * @throws {Error} If SQLite cannot serialize or commit the schema update.
  */
 function ensureTaskOperationColumns(database: DatabaseSync): void {
-  const required = ['browser_operation_token', 'browser_operation_pid', 'browser_operation_name'] as const;
+  const required = [
+    'browser_operation_token',
+    'browser_operation_pid',
+    'browser_operation_name',
+    'browser_operation_child_pid',
+  ] as const;
   const current = taskColumnNames(database);
   if (
     required.every((name) => {
@@ -556,6 +617,7 @@ function ensureTaskOperationColumns(database: DatabaseSync): void {
       ['browser_operation_token', 'TEXT'],
       ['browser_operation_pid', 'INTEGER'],
       ['browser_operation_name', 'TEXT'],
+      ['browser_operation_child_pid', 'INTEGER'],
     ] as const;
     for (const [name, type] of definitions) {
       if (!columns.has(name)) {

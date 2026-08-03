@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { access, mkdtemp } from 'node:fs/promises';
+import { access, mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -54,6 +54,29 @@ describe('VER-011 SQLite cross-process concurrency', () => {
     contender.releaseTaskOperation('task-a', 'contender');
     contender.close();
   });
+
+  it('keeps an orphan browser-command child fenced after its CLI parent exits', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-orphan-operation-'));
+    const databasePath = join(root, 'state.sqlite');
+    const readyPath = join(root, 'ready');
+    const store = new StateStore(databasePath);
+    store.createTask('task-a', 'session-a');
+    store.close();
+    const workerPath = join(import.meta.dirname, 'support', 'orphan-operation-worker.ts');
+
+    await execFileAsync(process.execPath, [workerPath, databasePath, readyPath]);
+    const childPid = Number(await readFile(readyPath, 'utf8'));
+    expect(Number.isSafeInteger(childPid)).toBe(true);
+
+    const contender = new StateStore(databasePath);
+    expect(() => {
+      contender.acquireTaskOperation('task-a', 'close', 'contender');
+    }).toThrowError(/busy with wait/);
+    await waitForPidExit(childPid);
+    contender.acquireTaskOperation('task-a', 'close', 'contender');
+    contender.releaseTaskOperation('task-a', 'contender');
+    contender.close();
+  });
 });
 
 /**
@@ -78,4 +101,42 @@ async function waitForPath(path: string): Promise<void> {
       });
     }
   }
+}
+
+/**
+ * Waits until an intentionally orphaned test child is no longer alive.
+ *
+ * @param pid Positive child process identifier published by the worker.
+ * @returns Nothing after the operating system reports that the process is gone.
+ * @throws {Error} If the child remains alive beyond five seconds.
+ */
+async function waitForPidExit(pid: number): Promise<void> {
+  const deadline = Date.now() + 5000;
+  while (true) {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if (isMissingProcess(error)) {
+        return;
+      }
+      throw error;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`orphan test child remained alive: ${pid}`);
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 25);
+    });
+  }
+}
+
+/**
+ * Distinguishes a missing process from permission and argument failures.
+ *
+ * @param error Unknown exception from the process signal probe.
+ * @returns Whether the operating system reported ESRCH.
+ * @throws {Error} This predicate does not throw.
+ */
+function isMissingProcess(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && error.code === 'ESRCH';
 }

@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 import type { CollabPaths } from './session.ts';
 import { ensureTaskDirectories, savePlaywrightScript, taskDirectory } from './session.ts';
@@ -14,6 +14,8 @@ export interface BrowserCommandInvocation {
   readonly arguments: readonly string[];
   readonly cwd: string;
   readonly environment: Readonly<NodeJS.ProcessEnv>;
+  readonly onChildSpawned?: (pid: number) => void;
+  readonly onChildExited?: (pid: number) => void;
 }
 
 export interface BrowserCommandOutput {
@@ -22,6 +24,11 @@ export interface BrowserCommandOutput {
 }
 
 export type BrowserCommandRunner = (invocation: BrowserCommandInvocation) => Promise<BrowserCommandOutput>;
+
+export interface BrowserOperationObserver {
+  childSpawned(pid: number): void;
+  childExited(pid: number): void;
+}
 
 export interface BrowserSessionInfo {
   readonly pid: number;
@@ -246,6 +253,7 @@ export class PlaywrightBrowser {
    * @param expectedConversationId Existing bound conversation, or null for a first turn.
    * @param prompt Exact UTF-8 prompt copied into the turn transcript.
    * @param attachmentPaths Explicit ordered absolute attachment paths.
+   * @param observer Task-lease child-process observer.
    * @returns Confirmed conversation identity or a precise submission classification.
    * @throws {Error} Only for local artifact failures before a browser submission can start.
    */
@@ -255,6 +263,7 @@ export class PlaywrightBrowser {
     expectedConversationId: string | null,
     prompt: string,
     attachmentPaths: readonly string[],
+    observer?: BrowserOperationObserver,
   ): Promise<BrowserSendResult> {
     try {
       await this.#runCode<SendReadyProtocolResult>(
@@ -264,6 +273,7 @@ export class PlaywrightBrowser {
         sendTargetVerificationScript(expectedConversationId),
         'verify send conversation',
         'send-ready',
+        observer,
       );
     } catch (error) {
       return { status: 'not-submitted', error: errorMessage(error) };
@@ -277,11 +287,18 @@ export class PlaywrightBrowser {
           sessionName,
           taskId,
           'prepare-upload',
-          uploadPreparationScript(),
+          uploadPreparationScript(expectedConversationId),
           'open attachment file chooser',
           'upload-ready',
+          observer,
         );
-        await this.#invoke(sessionName, taskId, ['upload', attachmentPath], `upload attachment ${attachmentPath}`);
+        await this.#invoke(
+          sessionName,
+          taskId,
+          ['upload', attachmentPath],
+          `upload attachment ${attachmentPath}`,
+          observer,
+        );
       }
     } catch (error) {
       if (attachmentPreparationStarted) {
@@ -290,9 +307,15 @@ export class PlaywrightBrowser {
             sessionName,
             taskId,
             'clear-upload-draft',
-            clearUploadDraftScript(expectedConversationId),
+            clearUploadDraftScript(
+              expectedConversationId,
+              attachmentPaths.map((attachmentPath) => {
+                return basename(attachmentPath);
+              }),
+            ),
             'clear unsubmitted attachment draft',
             'draft-cleared',
+            observer,
           );
         } catch (cleanupError) {
           return {
@@ -313,9 +336,38 @@ export class PlaywrightBrowser {
         sendScript(expectedConversationId, prompt),
       );
       commandStarted = true;
-      const output = await this.#invoke(sessionName, taskId, ['run-code', '--filename', scriptPath], 'submit prompt');
+      const output = await this.#invoke(
+        sessionName,
+        taskId,
+        ['run-code', '--filename', scriptPath],
+        'submit prompt',
+        observer,
+      );
       const result = parseProtocolResult<SendProtocolResult>(output.stdout, 'send');
       if (result.status !== 'submitted') {
+        if (result.status === 'not-submitted' && attachmentPreparationStarted) {
+          try {
+            await this.#runCode<DraftClearedProtocolResult>(
+              sessionName,
+              taskId,
+              'clear-upload-draft',
+              clearUploadDraftScript(
+                expectedConversationId,
+                attachmentPaths.map((attachmentPath) => {
+                  return basename(attachmentPath);
+                }),
+              ),
+              'clear unsubmitted attachment draft',
+              'draft-cleared',
+              observer,
+            );
+          } catch (cleanupError) {
+            return {
+              status: 'unsafe-not-submitted',
+              error: `${result.error ?? 'prompt was not submitted'}; attachment cleanup failed: ${errorMessage(cleanupError)}`,
+            };
+          }
+        }
         return { status: result.status, error: result.error ?? 'page did not report a cause' };
       }
       if (result.conversationId === undefined || result.conversationUrl === undefined) {
@@ -327,6 +379,29 @@ export class PlaywrightBrowser {
         conversationUrl: result.conversationUrl,
       };
     } catch (error) {
+      if (!commandStarted && attachmentPreparationStarted) {
+        try {
+          await this.#runCode<DraftClearedProtocolResult>(
+            sessionName,
+            taskId,
+            'clear-upload-draft',
+            clearUploadDraftScript(
+              expectedConversationId,
+              attachmentPaths.map((attachmentPath) => {
+                return basename(attachmentPath);
+              }),
+            ),
+            'clear unsubmitted attachment draft',
+            'draft-cleared',
+            observer,
+          );
+        } catch (cleanupError) {
+          return {
+            status: 'unsafe-not-submitted',
+            error: `${errorMessage(error)}; attachment cleanup failed: ${errorMessage(cleanupError)}`,
+          };
+        }
+      }
       return {
         status: commandStarted ? 'unknown-submission' : 'not-submitted',
         error: errorMessage(error),
@@ -340,6 +415,7 @@ export class PlaywrightBrowser {
    * @param taskId Owning task identifier.
    * @param sessionName Owning Playwright named session.
    * @param expectedConversationId Database-bound conversation identity.
+   * @param observer Task-lease child-process observer.
    * @returns Exact page-local copied text and the re-observed conversation identity.
    * @throws {BrowserError} If the session exits or the page contract cannot be verified.
    * @throws {Error} If a local Playwright artifact cannot be written.
@@ -348,6 +424,7 @@ export class PlaywrightBrowser {
     taskId: string,
     sessionName: string,
     expectedConversationId: string,
+    observer?: BrowserOperationObserver,
   ): Promise<BrowserWaitResult> {
     const result = await this.#runCode<WaitProtocolResult>(
       sessionName,
@@ -356,6 +433,7 @@ export class PlaywrightBrowser {
       waitScript(expectedConversationId),
       'wait for and copy response',
       'wait',
+      observer,
     );
     return {
       response: result.response,
@@ -369,11 +447,16 @@ export class PlaywrightBrowser {
    *
    * @param taskId Owning task identifier.
    * @param sessionName Owning Playwright named session.
+   * @param observer Task-lease child-process observer.
    * @returns Whether Playwright reported an open session before cleanup.
    * @throws {BrowserError} If Playwright cannot complete the close command.
    */
-  async closeTask(taskId: string, sessionName: string): Promise<{ readonly wasOpen: boolean }> {
-    const output = await this.#invoke(sessionName, taskId, ['close'], 'close task browser');
+  async closeTask(
+    taskId: string,
+    sessionName: string,
+    observer?: BrowserOperationObserver,
+  ): Promise<{ readonly wasOpen: boolean }> {
+    const output = await this.#invoke(sessionName, taskId, ['close'], 'close task browser', observer);
     return { wasOpen: !output.stdout.includes(`Browser '${sessionName}' is not open.`) };
   }
 
@@ -383,6 +466,7 @@ export class PlaywrightBrowser {
    * @param taskId Owning task identifier.
    * @param sessionName Owning Playwright named session.
    * @param conversationId Canonical conversation identity to archive.
+   * @param observer Task-lease child-process observer.
    * @returns The confirmed archived conversation identity.
    * @throws {BrowserError} If selectors drift, the target differs, or archive cannot be observed.
    * @throws {Error} If a local Playwright artifact cannot be written.
@@ -391,6 +475,7 @@ export class PlaywrightBrowser {
     taskId: string,
     sessionName: string,
     conversationId: string,
+    observer?: BrowserOperationObserver,
   ): Promise<{ readonly conversationId: string }> {
     const result = await this.#runCode<ArchiveProtocolResult>(
       sessionName,
@@ -399,6 +484,7 @@ export class PlaywrightBrowser {
       archiveScript(conversationId),
       'archive conversation',
       'archive',
+      observer,
     );
     return { conversationId: result.conversationId };
   }
@@ -410,6 +496,7 @@ export class PlaywrightBrowser {
    * @param taskId Local task or setup directory identifier.
    * @param command Command and arguments after the fixed CLI prefix.
    * @param operation Concrete operation for failures.
+   * @param observer Task-lease child-process observer.
    * @returns Captured stdout and stderr.
    * @throws {BrowserError} If `npx` exits unsuccessfully or cannot start.
    */
@@ -418,6 +505,7 @@ export class PlaywrightBrowser {
     taskId: string,
     command: readonly string[],
     operation: string,
+    observer?: BrowserOperationObserver,
   ): Promise<BrowserCommandOutput> {
     const outputDirectory = join(taskDirectory(this.#paths, taskId), 'playwright');
     try {
@@ -430,6 +518,16 @@ export class PlaywrightBrowser {
           PLAYWRIGHT_MCP_ALLOW_UNRESTRICTED_FILE_ACCESS: 'true',
           PLAYWRIGHT_MCP_OUTPUT_DIR: outputDirectory,
         },
+        ...(observer === undefined
+          ? {}
+          : {
+              onChildSpawned: (pid: number) => {
+                observer.childSpawned(pid);
+              },
+              onChildExited: (pid: number) => {
+                observer.childExited(pid);
+              },
+            }),
       });
     } catch (error) {
       throw new BrowserError('BROWSER_COMMAND_FAILED', operation, errorMessage(error));
@@ -445,6 +543,7 @@ export class PlaywrightBrowser {
    * @param source Page function source.
    * @param operation Concrete operation for failures.
    * @param expectedKind Required result kind.
+   * @param observer Task-lease child-process observer.
    * @returns The decoded page result.
    * @throws {BrowserError} If the command or protocol result fails.
    * @throws {Error} If the script file cannot be written.
@@ -456,9 +555,10 @@ export class PlaywrightBrowser {
     source: string,
     operation: string,
     expectedKind: T['kind'],
+    observer?: BrowserOperationObserver,
   ): Promise<T> {
     const scriptPath = await savePlaywrightScript(this.#paths, taskId, action, source);
-    const output = await this.#invoke(sessionName, taskId, ['run-code', '--filename', scriptPath], operation);
+    const output = await this.#invoke(sessionName, taskId, ['run-code', '--filename', scriptPath], operation, observer);
     return parseProtocolResult<T>(output.stdout, expectedKind);
   }
 
@@ -502,23 +602,60 @@ export function runBrowserCommand(invocation: BrowserCommandInvocation): Promise
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
+    const childPid = child.pid;
+    let childObserved = false;
+    let settled = false;
+
+    const rejectOnce = (error: unknown): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      reject(error);
+    };
+    const detachObservedChild = (): void => {
+      if (!childObserved || childPid === undefined) {
+        return;
+      }
+      childObserved = false;
+      invocation.onChildExited?.(childPid);
+    };
+
     child.stdout.on('data', (chunk: Buffer) => {
       stdout.push(chunk);
     });
     child.stderr.on('data', (chunk: Buffer) => {
       stderr.push(chunk);
     });
-    child.on('error', reject);
+    child.on('error', (error) => {
+      try {
+        detachObservedChild();
+      } catch (detachError) {
+        rejectOnce(detachError);
+        return;
+      }
+      rejectOnce(error);
+    });
     child.on('close', (code, signal) => {
+      if (settled) {
+        return;
+      }
+      try {
+        detachObservedChild();
+      } catch (error) {
+        rejectOnce(error);
+        return;
+      }
       const output = {
         stdout: Buffer.concat(stdout).toString('utf8'),
         stderr: Buffer.concat(stderr).toString('utf8'),
       };
       if (code === 0) {
+        settled = true;
         resolve(output);
         return;
       }
-      reject(
+      rejectOnce(
         new Error(
           `npx exited with ${code === null ? `signal ${String(signal)}` : `code ${code}`}: ${
             output.stderr || output.stdout
@@ -526,6 +663,16 @@ export function runBrowserCommand(invocation: BrowserCommandInvocation): Promise
         ),
       );
     });
+
+    if (childPid !== undefined && invocation.onChildSpawned !== undefined) {
+      try {
+        invocation.onChildSpawned(childPid);
+        childObserved = true;
+      } catch (error) {
+        child.kill('SIGTERM');
+        rejectOnce(error);
+      }
+    }
   });
 }
 
@@ -688,16 +835,33 @@ function sendTargetVerificationScript(expectedConversationId: string | null): st
  * Builds a reload-based cleanup for any attachment chooser or draft changed before submission.
  *
  * @param expectedConversationId Existing bound conversation, or null for a new task.
+ * @param attachmentFileNames Basenames that must disappear from the composer after reload.
  * @returns A Playwright page function source.
  * @throws {Error} This pure source builder does not throw.
  */
-function clearUploadDraftScript(expectedConversationId: string | null): string {
+function clearUploadDraftScript(expectedConversationId: string | null, attachmentFileNames: readonly string[]): string {
   return `async (page) => {
     const expectedConversationId = ${JSON.stringify(expectedConversationId)};
+    const attachmentFileNames = ${JSON.stringify(attachmentFileNames)};
     await page.reload({ waitUntil: 'domcontentloaded' });
     const composer = page.locator('#prompt-textarea');
     await composer.waitFor({ state: 'visible', timeout: 60000 });
     if (await composer.count() !== 1) throw new Error('page contract drift: composer is not unique after reload');
+    const composerForm = page.locator('form').filter({ has: composer });
+    if (await composerForm.count() !== 1) throw new Error('page contract drift: composer form is not unique');
+    const populatedFileInputCount = await composerForm.locator('input[type="file"]').evaluateAll((elements) => {
+      return elements.filter((element) => element instanceof HTMLInputElement && element.value !== '').length;
+    });
+    const visibleAttachmentFileNames = [];
+    for (const fileName of attachmentFileNames) {
+      const visible = await composerForm.getByText(fileName, { exact: true }).evaluateAll((elements) => {
+        return elements.some((element) => element instanceof HTMLElement && element.getClientRects().length > 0);
+      });
+      if (visible) visibleAttachmentFileNames.push(fileName);
+    }
+    if (populatedFileInputCount !== 0 || visibleAttachmentFileNames.length !== 0) {
+      throw new Error('attachment draft remained after reload');
+    }
     const url = await page.evaluate(() => {
       return { hostname: location.hostname, pathname: location.pathname };
     });
@@ -710,13 +874,22 @@ function clearUploadDraftScript(expectedConversationId: string | null): string {
 }
 
 /**
- * Builds the exact file-chooser action required before each CLI `upload` command.
+ * Builds the exact file-chooser action required before each CLI upload command.
  *
+ * @param expectedConversationId Existing bound conversation, or null for a new task.
  * @returns A Playwright page function source.
  * @throws {Error} This pure source builder does not throw.
  */
-function uploadPreparationScript(): string {
+function uploadPreparationScript(expectedConversationId: string | null): string {
   return `async (page) => {
+    const expectedConversationId = ${JSON.stringify(expectedConversationId)};
+    const url = await page.evaluate(() => {
+      return { hostname: location.hostname, pathname: location.pathname };
+    });
+    const targetPath = expectedConversationId === null ? '/' : '/c/' + expectedConversationId;
+    if (url.hostname !== 'chatgpt.com' || url.pathname.replace(/\\/$/, '') !== targetPath.replace(/\\/$/, '')) {
+      throw new Error('conversation identity changed before attachment preparation');
+    }
     const plus = page.locator('[data-testid="composer-plus-btn"]');
     if (await plus.count() !== 1) throw new Error('page contract drift: composer plus button is not unique');
     await plus.click();
