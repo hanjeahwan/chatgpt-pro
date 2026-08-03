@@ -215,11 +215,14 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
       childExited(pid) {
         events.push(`exit:${pid}`);
       },
+      commandSpawned(pid) {
+        events.push(`command:${pid}`);
+      },
     };
 
     await fixture.browser.send('task-a', 'session-a', null, 'exact prompt', [], observer);
 
-    expect(events).toEqual(['spawn:5000', 'exit:5000', 'spawn:5001', 'exit:5001']);
+    expect(events).toEqual(['spawn:5000', 'command:6000', 'exit:5000', 'spawn:5001', 'command:6001', 'exit:5001']);
   });
 
   it('captures Copy response inside the page and never invokes an OS clipboard command', async () => {
@@ -227,6 +230,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
       pageResult({
         protocol,
         kind: 'wait',
+        status: 'completed',
         response: 'full response\n```ts\nconst value = 1;\n```',
         conversationId: 'conversation-a',
         conversationUrl: 'https://chatgpt.com/c/conversation-a',
@@ -236,12 +240,16 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     const result = await fixture.browser.waitForResponse('task-a', 'session-a', 'conversation-a');
     const source = await lastScript(fixture.invocations);
 
-    expect(result.response).toBe('full response\n```ts\nconst value = 1;\n```');
+    expect(result).toMatchObject({
+      status: 'completed',
+      response: 'full response\n```ts\nconst value = 1;\n```',
+    });
     expect(source).toContain('[data-testid="copy-turn-action-button"]');
     expect(source).toContain('navigator.clipboard');
     expect(source).toContain("name: 'Stop answering', exact: true");
     expect(source).toContain('stableCompletedPolls < 6');
-    expect(source).toContain('copy.click({ force: true })');
+    expect(source).toContain('copy.click({ force: true, timeout: 5000 })');
+    expect(source).toContain("kind: 'wait', status: 'pending'");
     expect(source).toContain('const capturedUrl = await page.evaluate');
     expect(source).toContain('capturedMatch[1] !== expectedConversationId');
     expect(source).not.toContain('pbpaste');
@@ -259,6 +267,9 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     const source = await lastScript(fixture.invocations);
     expect(source).toContain('[data-testid="conversation-options-button"]');
     expect(source).toContain("name: 'Archive', exact: true");
+    expect(source).toContain("targetLink.first().waitFor({ state: 'attached', timeout: 60000 })");
+    expect(source).toContain('while (absentPolls < 6 && verificationPolls < 120)');
+    expect(source).toContain("page.goto('https://chatgpt.com' + targetPath");
     expect(source).not.toContain('Open conversation options');
     expect(source).not.toContain('new URL(page.url())');
     expectPageFunctionSyntax(source);
@@ -284,18 +295,21 @@ async function browserFixture(outputs: readonly (BrowserCommandOutput | Error)[]
     const invocationChildPid = childPid;
     childPid += 1;
     invocation.onChildSpawned?.(invocationChildPid);
+    invocation.beforeCommandRelease?.();
     const next = queue.shift();
     if (next === undefined) {
       return Promise.reject(new Error('unexpected browser invocation'));
     }
     if (next instanceof Error) {
       if (next instanceof CommandStartedError) {
-        invocation.onCommandSpawned?.();
+        invocation.onCommandSpawned?.(invocationChildPid + 1000);
+        invocation.onCommandStarted?.();
       }
       invocation.onChildExited?.(invocationChildPid);
       return Promise.reject(next);
     }
-    invocation.onCommandSpawned?.();
+    invocation.onCommandSpawned?.(invocationChildPid + 1000);
+    invocation.onCommandStarted?.();
     invocation.onChildExited?.(invocationChildPid);
     return Promise.resolve(next);
   });

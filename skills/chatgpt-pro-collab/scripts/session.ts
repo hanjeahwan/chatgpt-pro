@@ -100,7 +100,7 @@ export async function prepareInputs(promptPath: string, attachmentPaths: readonl
   return {
     promptPath: absolutePromptPath,
     prompt,
-    promptText: prompt.toString('utf8'),
+    promptText: new TextDecoder('utf-8', { fatal: true }).decode(prompt),
     attachmentPaths: absoluteAttachmentPaths,
   };
 }

@@ -32,6 +32,7 @@ export interface CollabBrowser {
     prompt: string,
     attachmentPaths: readonly string[],
     observer?: BrowserOperationObserver,
+    beforeSubmissionRelease?: () => void,
   ): Promise<BrowserSendResult>;
   waitForResponse(
     taskId: string,
@@ -181,8 +182,6 @@ export class CollabService {
           store.failSendingTurn(taskId, turnId, `save prompt copy: ${errorMessage(error)}`);
           throw error;
         }
-        store.markSubmissionAttempting(taskId, turnId);
-
         const browserResult = await this.#browser.send(
           taskId,
           task.playwrightSession,
@@ -190,14 +189,17 @@ export class CollabService {
           input.promptText,
           input.attachmentPaths,
           observer,
+          () => {
+            store.markSubmissionAttempting(taskId, turnId);
+          },
         );
         if (browserResult.status === 'unsafe-not-submitted') {
-          store.failSubmissionAttempt(taskId, turnId, browserResult.error);
+          failUnsubmittedTurn(store, taskId, turnId, browserResult.error);
           store.failTask(taskId);
           throw new CollabError('SUBMISSION_FAILED', browserResult.error);
         }
         if (browserResult.status === 'not-submitted') {
-          store.failSubmissionAttempt(taskId, turnId, browserResult.error);
+          failUnsubmittedTurn(store, taskId, turnId, browserResult.error);
           throw new CollabError('SUBMISSION_FAILED', browserResult.error);
         }
         if (browserResult.status === 'unknown-submission') {
@@ -231,42 +233,50 @@ export class CollabService {
    */
   async wait(taskId: string, turnId: string): Promise<WaitResult> {
     return this.#withStore(async (store) => {
-      return this.#withTaskOperation(store, taskId, 'wait', async (observer) => {
-        const task = store.requireTask(taskId);
-        const turn = store.requireTurn(taskId, turnId);
-        if (turn.status === 'completed') {
-          if (turn.responsePath === null) {
-            throw new CollabError('TRANSCRIPT_INCONSISTENT', `completed turn has no response path: ${turnId}`);
-          }
-          return {
-            taskId,
-            turnId,
-            responsePath: await requireResponse(turn.responsePath),
-          };
-        }
-        if (task.status !== 'active') {
-          throw new CollabError('TASK_NOT_ACTIVE', `task is ${task.status}: ${taskId}`);
-        }
-        if (turn.status !== 'pending') {
-          throw new CollabError('TURN_NOT_PENDING', `turn is ${turn.status}: ${turnId}`);
-        }
-        if (task.conversationId === null || task.conversationUrl === null) {
-          throw new CollabError('TRANSCRIPT_INCONSISTENT', `pending task has no conversation: ${taskId}`);
-        }
+      const completed = await completedWaitResult(store, taskId, turnId);
+      if (completed !== null) {
+        return completed;
+      }
 
-        const captured = await this.#browser.waitForResponse(
-          taskId,
-          task.playwrightSession,
-          task.conversationId,
-          observer,
-        );
-        if (captured.conversationId !== task.conversationId || captured.conversationUrl !== task.conversationUrl) {
-          throw new CollabError('CONVERSATION_MISMATCH', `wait observed a different conversation: ${taskId}`);
+      while (true) {
+        const result = await this.#withTaskOperation(store, taskId, 'wait', async (observer) => {
+          const afterLease = await completedWaitResult(store, taskId, turnId);
+          if (afterLease !== null) {
+            return afterLease;
+          }
+          const task = store.requireTask(taskId);
+          const turn = store.requireTurn(taskId, turnId);
+          if (task.status !== 'active') {
+            throw new CollabError('TASK_NOT_ACTIVE', `task is ${task.status}: ${taskId}`);
+          }
+          if (turn.status !== 'pending') {
+            throw new CollabError('TURN_NOT_PENDING', `turn is ${turn.status}: ${turnId}`);
+          }
+          if (task.conversationId === null || task.conversationUrl === null) {
+            throw new CollabError('TRANSCRIPT_INCONSISTENT', `pending task has no conversation: ${taskId}`);
+          }
+
+          const captured = await this.#browser.waitForResponse(
+            taskId,
+            task.playwrightSession,
+            task.conversationId,
+            observer,
+          );
+          if (captured.status === 'pending') {
+            return null;
+          }
+          if (captured.conversationId !== task.conversationId || captured.conversationUrl !== task.conversationUrl) {
+            throw new CollabError('CONVERSATION_MISMATCH', `wait observed a different conversation: ${taskId}`);
+          }
+          const responsePath = await saveResponse(this.#paths, taskId, turnId, captured.response);
+          store.completeTurn(taskId, turnId, responsePath);
+          return { taskId, turnId, responsePath };
+        });
+        if (result !== null) {
+          return result;
         }
-        const responsePath = await saveResponse(this.#paths, taskId, turnId, captured.response);
-        store.completeTurn(taskId, turnId, responsePath);
-        return { taskId, turnId, responsePath };
-      });
+        await yieldTaskOperation();
+      }
     });
   }
 
@@ -281,15 +291,28 @@ export class CollabService {
     taskId: string,
   ): Promise<{ readonly taskId: string; readonly wasOpen: boolean; readonly alreadyClosed: boolean }> {
     return this.#withStore(async (store) => {
-      return this.#withTaskOperation(store, taskId, 'close', async (observer) => {
-        const task = store.requireTask(taskId);
-        if (task.status === 'closed') {
-          return { taskId, wasOpen: false, alreadyClosed: true };
+      while (true) {
+        try {
+          return await this.#withTaskOperation(store, taskId, 'close', async (observer) => {
+            const task = store.requireTask(taskId);
+            if (task.status === 'closed') {
+              return { taskId, wasOpen: false, alreadyClosed: true };
+            }
+            const result = await this.#browser.closeTask(taskId, task.playwrightSession, observer);
+            store.closeTask(taskId);
+            return { taskId, wasOpen: result.wasOpen, alreadyClosed: false };
+          });
+        } catch (error) {
+          if (!(error instanceof StateError) || error.code !== 'TASK_OPERATION_IN_PROGRESS') {
+            throw error;
+          }
+          const operation = store.getTaskOperation(taskId);
+          if (operation !== null && operation !== 'wait') {
+            throw error;
+          }
+          await yieldTaskOperation();
         }
-        const result = await this.#browser.closeTask(taskId, task.playwrightSession, observer);
-        store.closeTask(taskId);
-        return { taskId, wasOpen: result.wasOpen, alreadyClosed: false };
-      });
+      }
     });
   }
 
@@ -340,6 +363,9 @@ export class CollabService {
       childExited(pid) {
         store.detachTaskOperationChild(taskId, token, pid);
       },
+      commandSpawned(pid) {
+        store.attachTaskOperationCommand(taskId, token, pid);
+      },
     };
     try {
       return await action(observer);
@@ -363,6 +389,62 @@ export class CollabService {
       store.close();
     }
   }
+}
+
+/**
+ * Returns a completed turn without acquiring the task's browser lease.
+ *
+ * @param store Current process-local state connection.
+ * @param taskId Owning task identifier.
+ * @param turnId Completed or unfinished turn identifier.
+ * @returns Idempotent wait result, or null when browser polling is still required.
+ * @throws {CollabError} If a completed row lacks its immutable response path.
+ * @throws {Error} If the turn or recorded response cannot be read.
+ */
+async function completedWaitResult(store: StateStore, taskId: string, turnId: string): Promise<WaitResult | null> {
+  const turn = store.requireTurn(taskId, turnId);
+  if (turn.status !== 'completed') {
+    return null;
+  }
+  if (turn.responsePath === null) {
+    throw new CollabError('TRANSCRIPT_INCONSISTENT', `completed turn has no response path: ${turnId}`);
+  }
+  return {
+    taskId,
+    turnId,
+    responsePath: await requireResponse(turn.responsePath),
+  };
+}
+
+/**
+ * Reconciles a proven non-submission from either side of the guarded release boundary.
+ *
+ * @param store Current process-local state connection.
+ * @param taskId Owning task identifier.
+ * @param turnId Sending or ambiguity-marked turn identifier.
+ * @param reason Concrete browser failure.
+ * @returns Nothing after the turn is terminally failed.
+ * @throws {StateError} If the turn is in any other lifecycle state.
+ */
+function failUnsubmittedTurn(store: StateStore, taskId: string, turnId: string, reason: string): void {
+  const turn = store.requireTurn(taskId, turnId);
+  if (turn.status === 'sending') {
+    store.failSendingTurn(taskId, turnId, reason);
+    return;
+  }
+  store.failSubmissionAttempt(taskId, turnId, reason);
+}
+
+/**
+ * Gives a waiting close command a scheduling window between bounded browser polls.
+ *
+ * @returns A promise resolved on a later event-loop turn.
+ * @throws {Error} Timers do not ordinarily throw.
+ */
+async function yieldTaskOperation(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 50);
+  });
 }
 
 export interface CliIo {

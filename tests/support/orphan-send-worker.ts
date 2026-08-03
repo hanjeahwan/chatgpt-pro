@@ -25,8 +25,13 @@ if (!(commandEvents instanceof Readable)) {
   throw new Error('orphan send gate did not expose its command event pipe');
 }
 store.attachTaskOperationChild('task-a', 'orphan-send-owner', gate.pid);
-commandEvents.once('data', () => {
-  writeFileSync(readyPath, String(gate.pid), { flag: 'wx' });
+commandEvents.once('data', (chunk: Buffer) => {
+  const commandPid = Number(chunk.toString('utf8').trim());
+  if (!Number.isSafeInteger(commandPid) || commandPid <= 0) {
+    throw new Error('orphan send gate reported an invalid command PID');
+  }
+  store.attachTaskOperationCommand('task-a', 'orphan-send-owner', commandPid);
+  writeFileSync(readyPath, JSON.stringify({ gatePid: gate.pid, commandPid }), { flag: 'wx' });
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60_000);
 });
 gate.stdin.end('go\n');

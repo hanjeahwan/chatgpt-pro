@@ -91,6 +91,7 @@ describe('BEH-002, BEH-005, and BEH-007 state gates', () => {
       status: 'failed',
       error: 'send owner exited before recording a browser submission attempt',
     });
+    expect(contender.requireTask('task-a').status).toBe('failed');
     contender.releaseTaskOperation('task-a', 'contender');
     contender.close();
   });

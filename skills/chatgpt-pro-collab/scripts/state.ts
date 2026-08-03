@@ -71,7 +71,8 @@ export class StateStore {
         browser_operation_token TEXT,
         browser_operation_pid INTEGER,
         browser_operation_name TEXT,
-        browser_operation_child_pid INTEGER
+        browser_operation_child_pid INTEGER,
+        browser_operation_command_pid INTEGER
       ) STRICT;
 
       CREATE TABLE IF NOT EXISTS turn (
@@ -176,7 +177,7 @@ export class StateStore {
   }
 
   /**
-   * Acquires the task-local browser-operation lease, reclaiming only an owner whose process is gone.
+   * Acquires the task-local browser-operation lease after every recorded owner and command has exited.
    *
    * @param taskId Task whose named browser session will be operated.
    * @param operation Human-readable operation name retained for conflict diagnostics.
@@ -192,7 +193,7 @@ export class StateStore {
       const value = this.#database
         .prepare(
           `SELECT browser_operation_token, browser_operation_pid, browser_operation_name,
-                  browser_operation_child_pid
+                  browser_operation_child_pid, browser_operation_command_pid
            FROM task WHERE id = ?`,
         )
         .get(taskId);
@@ -201,10 +202,15 @@ export class StateStore {
       const existingPid = nullableInteger(row.browser_operation_pid, 'task.browser_operation_pid');
       const existingOperation = nullableText(row.browser_operation_name, 'task.browser_operation_name');
       const existingChildPid = nullableInteger(row.browser_operation_child_pid, 'task.browser_operation_child_pid');
+      const existingCommandPid = nullableInteger(
+        row.browser_operation_command_pid,
+        'task.browser_operation_command_pid',
+      );
       if (
         existingToken !== null &&
         ((existingPid !== null && isProcessAlive(existingPid)) ||
-          (existingChildPid !== null && isProcessAlive(existingChildPid)))
+          (existingChildPid !== null && isProcessAlive(existingChildPid)) ||
+          (existingCommandPid !== null && isProcessAlive(existingCommandPid)))
       ) {
         throw new StateError(
           'TASK_OPERATION_IN_PROGRESS',
@@ -212,18 +218,21 @@ export class StateStore {
         );
       }
       const now = new Date().toISOString();
-      this.#database
+      const orphanedSending = this.#database
         .prepare(
           `UPDATE turn
            SET status = 'failed', error = ?, updated_at = ?
            WHERE task_id = ? AND status = 'sending'`,
         )
         .run('send owner exited before recording a browser submission attempt', now, taskId);
+      if (orphanedSending.changes > 0) {
+        this.#database.prepare("UPDATE task SET status = 'failed', updated_at = ? WHERE id = ?").run(now, taskId);
+      }
       this.#database
         .prepare(
           `UPDATE task
            SET browser_operation_token = ?, browser_operation_pid = ?, browser_operation_name = ?,
-               browser_operation_child_pid = NULL, updated_at = ?
+               browser_operation_child_pid = NULL, browser_operation_command_pid = NULL, updated_at = ?
            WHERE id = ?`,
         )
         .run(token, ownerPid, operation, now, taskId);
@@ -279,6 +288,65 @@ export class StateStore {
   }
 
   /**
+   * Records the exact command process started behind the browser-command gate.
+   *
+   * @param taskId Task whose named browser session is being operated.
+   * @param token Current lease token.
+   * @param commandPid Spawned command process identifier.
+   * @returns Nothing after the command PID is committed.
+   * @throws {StateError} If the caller no longer owns the lease or command slot.
+   * @throws {Error} If SQLite cannot commit the command process.
+   */
+  attachTaskOperationCommand(taskId: string, token: string, commandPid: number): void {
+    this.#transaction(() => {
+      const value = this.#database
+        .prepare(
+          `SELECT browser_operation_token, browser_operation_command_pid
+           FROM task WHERE id = ?`,
+        )
+        .get(taskId);
+      const row = record(value);
+      if (nullableText(row.browser_operation_token, 'task.browser_operation_token') !== token) {
+        throw new StateError('TASK_OPERATION_NOT_OWNED', `cannot attach command to task browser lease: ${taskId}`);
+      }
+      const previousPid = nullableInteger(row.browser_operation_command_pid, 'task.browser_operation_command_pid');
+      if (previousPid !== null && isProcessAlive(previousPid)) {
+        throw new StateError(
+          'TASK_OPERATION_CHILD_ACTIVE',
+          `previous task browser command is still running: ${taskId}`,
+        );
+      }
+      const result = this.#database
+        .prepare(
+          `UPDATE task SET browser_operation_command_pid = ?
+           WHERE id = ? AND browser_operation_token = ?`,
+        )
+        .run(commandPid, taskId, token);
+      if (result.changes !== 1) {
+        throw new StateError('TASK_OPERATION_NOT_OWNED', `cannot attach command to task browser lease: ${taskId}`);
+      }
+    });
+  }
+
+  /**
+   * Returns the operation currently holding a task browser lease.
+   *
+   * @param taskId Task whose operation is queried.
+   * @returns Operation name, or null when no lease is present.
+   * @throws {StateError} If the task does not exist.
+   * @throws {Error} If SQLite cannot execute or decode the query.
+   */
+  getTaskOperation(taskId: string): string | null {
+    this.requireTask(taskId);
+    const value = this.#database
+      .prepare('SELECT browser_operation_token, browser_operation_name FROM task WHERE id = ?')
+      .get(taskId);
+    const row = record(value);
+    const token = nullableText(row.browser_operation_token, 'task.browser_operation_token');
+    return token === null ? null : nullableText(row.browser_operation_name, 'task.browser_operation_name');
+  }
+
+  /**
    * Releases a task-local browser-operation lease owned by the supplied token.
    *
    * @param taskId Task whose named browser session was operated.
@@ -289,12 +357,27 @@ export class StateStore {
    */
   releaseTaskOperation(taskId: string, token: string): void {
     this.#transaction(() => {
+      const value = this.#database
+        .prepare(
+          `SELECT browser_operation_token, browser_operation_command_pid
+           FROM task WHERE id = ?`,
+        )
+        .get(taskId);
+      const row = record(value);
+      if (nullableText(row.browser_operation_token, 'task.browser_operation_token') !== token) {
+        throw new StateError('TASK_OPERATION_NOT_OWNED', `task browser lease is not owned by this process: ${taskId}`);
+      }
+      const commandPid = nullableInteger(row.browser_operation_command_pid, 'task.browser_operation_command_pid');
+      if (commandPid !== null && isProcessAlive(commandPid)) {
+        throw new StateError('TASK_OPERATION_CHILD_ACTIVE', `task browser command is still running: ${taskId}`);
+      }
       const now = new Date().toISOString();
       const result = this.#database
         .prepare(
           `UPDATE task
            SET browser_operation_token = NULL, browser_operation_pid = NULL,
-               browser_operation_name = NULL, browser_operation_child_pid = NULL, updated_at = ?
+               browser_operation_name = NULL, browser_operation_child_pid = NULL,
+               browser_operation_command_pid = NULL, updated_at = ?
            WHERE id = ? AND browser_operation_token = ?`,
         )
         .run(now, taskId, token);

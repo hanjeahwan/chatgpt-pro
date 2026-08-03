@@ -20,7 +20,9 @@ export interface BrowserCommandInvocation {
   readonly environment: Readonly<NodeJS.ProcessEnv>;
   readonly onChildSpawned?: (pid: number) => void;
   readonly onChildExited?: (pid: number) => void;
-  readonly onCommandSpawned?: () => void;
+  readonly onCommandSpawned?: (pid: number) => void;
+  readonly onCommandStarted?: () => void;
+  readonly beforeCommandRelease?: () => void;
 }
 
 export interface BrowserCommandOutput {
@@ -33,6 +35,7 @@ export type BrowserCommandRunner = (invocation: BrowserCommandInvocation) => Pro
 export interface BrowserOperationObserver {
   childSpawned(pid: number): void;
   childExited(pid: number): void;
+  commandSpawned(pid: number): void;
 }
 
 export interface BrowserSessionInfo {
@@ -61,11 +64,14 @@ export type BrowserSendResult =
       readonly error: string;
     };
 
-export interface BrowserWaitResult {
-  readonly response: string;
-  readonly conversationId: string;
-  readonly conversationUrl: string;
-}
+export type BrowserWaitResult =
+  | { readonly status: 'pending' }
+  | {
+      readonly status: 'completed';
+      readonly response: string;
+      readonly conversationId: string;
+      readonly conversationUrl: string;
+    };
 
 interface ProtocolResult {
   readonly protocol: typeof PROTOCOL;
@@ -100,9 +106,10 @@ interface SendProtocolResult extends ProtocolResult {
 
 interface WaitProtocolResult extends ProtocolResult {
   readonly kind: 'wait';
-  readonly response: string;
-  readonly conversationId: string;
-  readonly conversationUrl: string;
+  readonly status: BrowserWaitResult['status'];
+  readonly response?: string;
+  readonly conversationId?: string;
+  readonly conversationUrl?: string;
 }
 
 interface ArchiveProtocolResult extends ProtocolResult {
@@ -259,6 +266,7 @@ export class PlaywrightBrowser {
    * @param prompt Exact UTF-8 prompt copied into the turn transcript.
    * @param attachmentPaths Explicit ordered absolute attachment paths.
    * @param observer Task-lease child-process observer.
+   * @param beforeSubmissionRelease Persists ambiguity immediately before the guarded submit command is released.
    * @returns Confirmed conversation identity or a precise submission classification.
    * @throws {Error} Only for local artifact failures before a browser submission can start.
    */
@@ -269,6 +277,7 @@ export class PlaywrightBrowser {
     prompt: string,
     attachmentPaths: readonly string[],
     observer?: BrowserOperationObserver,
+    beforeSubmissionRelease?: () => void,
   ): Promise<BrowserSendResult> {
     try {
       await this.#runCode<SendReadyProtocolResult>(
@@ -347,6 +356,9 @@ export class PlaywrightBrowser {
         'submit prompt',
         observer,
         () => {
+          beforeSubmissionRelease?.();
+        },
+        () => {
           commandStarted = true;
         },
       );
@@ -417,13 +429,13 @@ export class PlaywrightBrowser {
   }
 
   /**
-   * Waits indefinitely for the assistant turn after the latest user turn and captures Copy response.
+   * Polls once for the assistant turn after the latest user turn and captures Copy response when complete.
    *
    * @param taskId Owning task identifier.
    * @param sessionName Owning Playwright named session.
    * @param expectedConversationId Database-bound conversation identity.
    * @param observer Task-lease child-process observer.
-   * @returns Exact page-local copied text and the re-observed conversation identity.
+   * @returns Pending, or exact page-local copied text and the re-observed conversation identity.
    * @throws {BrowserError} If the session exits or the page contract cannot be verified.
    * @throws {Error} If a local Playwright artifact cannot be written.
    */
@@ -442,7 +454,14 @@ export class PlaywrightBrowser {
       'wait',
       observer,
     );
+    if (result.status === 'pending') {
+      return { status: 'pending' };
+    }
+    if (result.response === undefined || result.conversationId === undefined || result.conversationUrl === undefined) {
+      throw new BrowserError('BROWSER_PROTOCOL_ERROR', 'wait for and copy response', 'completed wait omitted fields');
+    }
     return {
+      status: 'completed',
       response: result.response,
       conversationId: result.conversationId,
       conversationUrl: result.conversationUrl,
@@ -504,7 +523,8 @@ export class PlaywrightBrowser {
    * @param command Command and arguments after the fixed CLI prefix.
    * @param operation Concrete operation for failures.
    * @param observer Task-lease child-process observer.
-   * @param onCommandSpawned Called only after the guarded command has an operating-system PID.
+   * @param beforeCommandRelease Called after the gate is durably observed and immediately before command release.
+   * @param onCommandStarted Called after a command PID or equivalent conservative start evidence is observed.
    * @returns Captured stdout and stderr.
    * @throws {BrowserError} If `npx` exits unsuccessfully or cannot start.
    */
@@ -514,7 +534,8 @@ export class PlaywrightBrowser {
     command: readonly string[],
     operation: string,
     observer?: BrowserOperationObserver,
-    onCommandSpawned?: () => void,
+    beforeCommandRelease?: () => void,
+    onCommandStarted?: () => void,
   ): Promise<BrowserCommandOutput> {
     const outputDirectory = join(taskDirectory(this.#paths, taskId), 'playwright');
     try {
@@ -536,12 +557,22 @@ export class PlaywrightBrowser {
               onChildExited: (pid: number) => {
                 observer.childExited(pid);
               },
+              onCommandSpawned: (pid: number) => {
+                observer.commandSpawned(pid);
+              },
             }),
-        ...(onCommandSpawned === undefined
+        ...(onCommandStarted === undefined
           ? {}
           : {
-              onCommandSpawned: () => {
-                onCommandSpawned();
+              onCommandStarted: () => {
+                onCommandStarted();
+              },
+            }),
+        ...(beforeCommandRelease === undefined
+          ? {}
+          : {
+              beforeCommandRelease: () => {
+                beforeCommandRelease();
               },
             }),
       });
@@ -670,7 +701,8 @@ export function runBrowserCommand(invocation: BrowserCommandInvocation): Promise
       }
       commandSpawnObserved = true;
       try {
-        invocation.onCommandSpawned?.();
+        invocation.onCommandSpawned?.(childCommandPid);
+        invocation.onCommandStarted?.();
       } catch (error) {
         commandObserverError = error;
         child.kill('SIGTERM');
@@ -702,10 +734,11 @@ export function runBrowserCommand(invocation: BrowserCommandInvocation): Promise
       if (code === COMMAND_PID_NOTIFICATION_FAILED_EXIT_CODE && !commandSpawnObserved) {
         commandSpawnObserved = true;
         try {
-          invocation.onCommandSpawned?.();
+          invocation.onCommandStarted?.();
         } catch (error) {
           commandObserverError = error;
         }
+        commandObserverError ??= new Error('browser command gate could not report the command PID');
       }
       if (commandObserverError !== undefined) {
         rejectOnce(commandObserverError);
@@ -733,13 +766,20 @@ export function runBrowserCommand(invocation: BrowserCommandInvocation): Promise
       try {
         invocation.onChildSpawned(childPid);
         childObserved = true;
+        invocation.beforeCommandRelease?.();
         child.stdin.end('go\n');
       } catch (error) {
         child.kill('SIGTERM');
         rejectOnce(error);
       }
     } else if (childPid !== undefined) {
-      child.stdin.end('go\n');
+      try {
+        invocation.beforeCommandRelease?.();
+        child.stdin.end('go\n');
+      } catch (error) {
+        child.kill('SIGTERM');
+        rejectOnce(error);
+      }
     }
   });
 }
@@ -1059,7 +1099,9 @@ function waitScript(expectedConversationId: string): string {
     const copySelector = '[data-testid="copy-turn-action-button"]';
     let assistantIndex = -1;
     let stableCompletedPolls = 0;
-    while (stableCompletedPolls < 6) {
+    let polls = 0;
+    while (stableCompletedPolls < 6 && polls < 10) {
+      polls += 1;
       const candidateIndex = await page.locator(turnSelector).evaluateAll((elements) => {
         let latestUser = -1;
         for (let index = 0; index < elements.length; index += 1) {
@@ -1084,6 +1126,9 @@ function waitScript(expectedConversationId: string): string {
         stableCompletedPolls = 0;
       }
       if (stableCompletedPolls < 6) await page.waitForTimeout(500);
+    }
+    if (stableCompletedPolls < 6) {
+      return JSON.stringify({ protocol: '${PROTOCOL}', kind: 'wait', status: 'pending' });
     }
     const assistant = page.locator(turnSelector).nth(assistantIndex);
     const copy = assistant.locator(copySelector);
@@ -1116,10 +1161,10 @@ function waitScript(expectedConversationId: string): string {
     });
     let response;
     try {
-      await copy.click({ force: true });
+      await copy.click({ force: true, timeout: 5000 });
       await page.waitForFunction(() => {
         return globalThis.__chatgptProCollabClipboard?.captured !== undefined;
-      }, undefined, { timeout: 0, polling: 25 });
+      }, undefined, { timeout: 5000, polling: 25 });
       response = await page.evaluate(() => globalThis.__chatgptProCollabClipboard.captured);
     } finally {
       await page.evaluate(() => {
@@ -1146,6 +1191,7 @@ function waitScript(expectedConversationId: string): string {
     return JSON.stringify({
       protocol: '${PROTOCOL}',
       kind: 'wait',
+      status: 'completed',
       response,
       conversationId: capturedMatch[1],
       conversationUrl: capturedUrl.origin + '/c/' + capturedMatch[1],
@@ -1170,6 +1216,9 @@ function archiveScript(expectedConversationId: string): string {
     if (url.hostname !== 'chatgpt.com' || url.pathname.replace(/\\/$/, '') !== targetPath) {
       throw new Error('conversation identity does not match archive target');
     }
+    const targetLink = page.locator('a[href="' + targetPath + '"]');
+    await targetLink.first().waitFor({ state: 'attached', timeout: 60000 });
+    if (await targetLink.count() !== 1) throw new Error('page contract drift: archive target link is not unique');
     const options = page.locator('[data-testid="conversation-options-button"]');
     if (await options.count() !== 1) throw new Error('page contract drift: conversation options is not unique');
     let archive = page.getByRole('menuitem', { name: 'Archive', exact: true });
@@ -1182,9 +1231,27 @@ function archiveScript(expectedConversationId: string): string {
     }
     await archive.click();
     await page.waitForURL((nextUrl) => nextUrl.pathname.replace(/\\/$/, '') !== targetPath, { timeout: 60000 });
-    await page.reload();
-    const targetLink = page.locator('a[href="' + targetPath + '"]');
-    if (await targetLink.count() !== 0) throw new Error('archive was not visible after sidebar refresh');
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    const sidebar = page.locator('nav').first();
+    await sidebar.waitFor({ state: 'visible', timeout: 60000 });
+    let absentPolls = 0;
+    let verificationPolls = 0;
+    while (absentPolls < 6 && verificationPolls < 120) {
+      verificationPolls += 1;
+      if (await targetLink.count() === 0) absentPolls += 1;
+      else absentPolls = 0;
+      if (absentPolls < 6) await page.waitForTimeout(500);
+    }
+    if (absentPolls < 6) throw new Error('archive was not visible after sidebar refresh');
+    await page.goto('https://chatgpt.com' + targetPath, { waitUntil: 'domcontentloaded' });
+    const restoredUrl = await page.evaluate(() => {
+      return { hostname: location.hostname, pathname: location.pathname };
+    });
+    if (restoredUrl.hostname !== 'chatgpt.com' || restoredUrl.pathname.replace(/\\/$/, '') !== targetPath) {
+      throw new Error('archived conversation could not be restored as the active task page');
+    }
+    const composer = page.locator('#prompt-textarea');
+    await composer.waitFor({ state: 'visible', timeout: 60000 });
     return JSON.stringify({ protocol: '${PROTOCOL}', kind: 'archive', conversationId });
   }`;
 }

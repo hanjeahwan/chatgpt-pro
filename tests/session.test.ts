@@ -49,4 +49,12 @@ describe('BEH-003 and BEH-007 artifact boundaries', () => {
     expect(await readFile(promptPath, 'utf8')).toBe('first');
     expect(await readFile(responsePath, 'utf8')).toBe('response');
   });
+
+  it('rejects invalid UTF-8 instead of changing the submitted prompt bytes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-invalid-utf8-'));
+    const promptPath = join(root, 'prompt.md');
+    await writeFile(promptPath, Buffer.from([0x66, 0x80, 0x6f]));
+
+    await expect(prepareInputs(promptPath, [])).rejects.toThrow(/encoded data/i);
+  });
 });

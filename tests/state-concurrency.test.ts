@@ -80,7 +80,7 @@ describe('VER-011 SQLite cross-process concurrency', () => {
     contender.close();
   });
 
-  it('retains submission ambiguity when a send parent dies after command release', async () => {
+  it('keeps the real command fenced when both its send parent and gate are killed', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collab-orphan-send-'));
     const databasePath = join(root, 'state.sqlite');
     const readyPath = join(root, 'ready');
@@ -99,15 +99,20 @@ describe('VER-011 SQLite cross-process concurrency', () => {
     const worker = spawn(process.execPath, [workerPath, databasePath, readyPath, gatePath], { stdio: 'ignore' });
     const workerCompletion = waitForExit(worker);
     await waitForPath(readyPath);
-    const gatePid = Number(await readFile(readyPath, 'utf8'));
+    const processRecord = JSON.parse(await readFile(readyPath, 'utf8')) as {
+      readonly gatePid: number;
+      readonly commandPid: number;
+    };
 
+    process.kill(processRecord.gatePid, 'SIGKILL');
     worker.kill('SIGKILL');
     await workerCompletion;
+    await waitForPidExit(processRecord.gatePid);
     const contender = new StateStore(databasePath);
     expect(() => {
       contender.acquireTaskOperation('task-a', 'send', 'contender');
     }).toThrowError(/busy with send/);
-    await waitForPidExit(gatePid);
+    await waitForPidExit(processRecord.commandPid);
     contender.acquireTaskOperation('task-a', 'send', 'contender');
     expect(contender.requireTurn('task-a', 'turn-a')).toMatchObject({ status: 'unknown-submission' });
     contender.releaseTaskOperation('task-a', 'contender');

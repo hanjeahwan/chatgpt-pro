@@ -25,7 +25,11 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     await Promise.all([writeFile(promptPath, 'first prompt'), writeFile(attachmentPath, 'opaque')]);
     const firstTurn = await fixture.service.send(firstTask.taskId, promptPath, [attachmentPath]);
     const waited = await fixture.service.wait(firstTask.taskId, firstTurn.turnId);
+    const externalOwner = new StateStore(fixture.paths.database);
+    externalOwner.acquireTaskOperation(firstTask.taskId, 'send', 'idempotent-read-owner');
     const repeated = await fixture.service.wait(firstTask.taskId, firstTurn.turnId);
+    externalOwner.releaseTaskOperation(firstTask.taskId, 'idempotent-read-owner');
+    externalOwner.close();
     expect(repeated.responsePath).toBe(waited.responsePath);
     expect(await readFile(waited.responsePath, 'utf8')).toBe(`response for ${firstTask.taskId}`);
 
@@ -53,10 +57,14 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
 
     await expect(fixture.service.archive(firstTask.taskId)).resolves.toMatchObject({ taskId: firstTask.taskId });
     expect(fixture.browser.archived).toEqual([firstTask.taskId]);
+    await writeFile(promptPath, 'after archive');
+    const afterArchiveTurn = await fixture.service.send(firstTask.taskId, promptPath, []);
+    await fixture.service.wait(firstTask.taskId, afterArchiveTurn.turnId);
+    expect(fixture.browser.expectedConversationIds.at(-1)).toBe(`conversation-${firstTask.taskId}`);
     await expect(fixture.service.close(firstTask.taskId)).resolves.toMatchObject({ alreadyClosed: false });
     await expect(fixture.service.close(firstTask.taskId)).resolves.toMatchObject({ alreadyClosed: true });
     expect(fixture.browser.closed).toEqual([firstTask.taskId]);
-    expect(fixture.browser.observedOperations).toBe(6);
+    expect(fixture.browser.observedOperations).toBe(8);
     await expect(fixture.service.wait(firstTask.taskId, firstTurn.turnId)).resolves.toEqual(repeated);
     await expect(fixture.service.archive(firstTask.taskId)).rejects.toMatchObject({ code: 'TASK_NOT_ACTIVE' });
   });
@@ -96,12 +104,42 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     });
   });
 
-  it('rejects a concurrent same-task browser operation', async () => {
+  it('fails a known pre-submission error without creating submission ambiguity', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.service.start();
+    const promptPath = join(fixture.root, 'prompt.md');
+    await writeFile(promptPath, 'known preflight failure');
+    fixture.browser.nextSendStatus = 'not-submitted';
+
+    await expect(fixture.service.send(task.taskId, promptPath, [])).rejects.toMatchObject({
+      code: 'SUBMISSION_FAILED',
+    });
+    const store = new StateStore(fixture.paths.database);
+    expect(store.listTurns(task.taskId)).toMatchObject([{ status: 'failed', error: 'preflight failed' }]);
+    expect(store.requireTask(task.taskId).status).toBe('active');
+    store.close();
+  });
+
+  it('restores the bound conversation so a pending turn can be captured after archive', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.service.start();
+    const promptPath = join(fixture.root, 'prompt.md');
+    await writeFile(promptPath, 'pending archive');
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+
+    await expect(fixture.service.archive(task.taskId)).resolves.toMatchObject({ taskId: task.taskId });
+    await expect(fixture.service.wait(task.taskId, turn.turnId)).resolves.toMatchObject({ turnId: turn.turnId });
+    expect(fixture.browser.archived).toEqual([task.taskId]);
+  });
+
+  it('rejects a concurrent non-wait same-task browser operation', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
     const task = await fixture.service.start();
     const owner = new StateStore(fixture.paths.database);
-    owner.acquireTaskOperation(task.taskId, 'wait', 'external-owner');
+    owner.acquireTaskOperation(task.taskId, 'send', 'external-owner');
 
     await expect(fixture.service.close(task.taskId)).rejects.toMatchObject({
       code: 'TASK_OPERATION_IN_PROGRESS',
@@ -109,6 +147,24 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     owner.releaseTaskOperation(task.taskId, 'external-owner');
     owner.close();
     await expect(fixture.service.close(task.taskId)).resolves.toMatchObject({ alreadyClosed: false });
+  });
+
+  it('lets close take the task between bounded wait polls', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.service.start();
+    const promptPath = join(fixture.root, 'prompt.md');
+    await writeFile(promptPath, 'long response');
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+    fixture.browser.pendingWaitPolls = 1;
+    fixture.browser.waitPollDelayMs = 100;
+
+    const waiting = fixture.service.wait(task.taskId, turn.turnId);
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    await expect(fixture.service.close(task.taskId)).resolves.toMatchObject({ alreadyClosed: false });
+    await expect(waiting).rejects.toMatchObject({ code: 'TASK_NOT_ACTIVE' });
   });
 
   it('re-reads archive lifecycle state after acquiring the task lease', async () => {
@@ -184,7 +240,9 @@ class FakeBrowser implements CollabBrowser {
   readonly archived: string[] = [];
   readonly expectedConversationIds: Array<string | null> = [];
   observedOperations = 0;
-  nextSendStatus: 'submitted' | 'unknown-submission' | 'unsafe-not-submitted' = 'submitted';
+  nextSendStatus: 'submitted' | 'not-submitted' | 'unknown-submission' | 'unsafe-not-submitted' = 'submitted';
+  pendingWaitPolls = 0;
+  waitPollDelayMs = 0;
   startCount = 0;
   nextChildPid = 20_000;
 
@@ -237,6 +295,7 @@ class FakeBrowser implements CollabBrowser {
    * @param _prompt Exact prompt under test.
    * @param _attachmentPaths Ordered attachment paths under test.
    * @param observer Task-lease child-process observer.
+   * @param beforeSubmissionRelease Submission-boundary callback under test.
    * @returns Confirmed or ambiguous fake submission.
    * @throws {Error} This fake send does not throw.
    */
@@ -247,11 +306,17 @@ class FakeBrowser implements CollabBrowser {
     _prompt: string,
     _attachmentPaths: readonly string[],
     observer?: BrowserOperationObserver,
+    beforeSubmissionRelease?: () => void,
   ) {
     this.observe(observer);
     this.expectedConversationIds.push(expectedConversationId);
+    if (this.nextSendStatus === 'not-submitted') {
+      this.nextSendStatus = 'submitted';
+      return Promise.resolve({ status: 'not-submitted' as const, error: 'preflight failed' });
+    }
     if (this.nextSendStatus === 'unknown-submission') {
       this.nextSendStatus = 'submitted';
+      beforeSubmissionRelease?.();
       return Promise.resolve({ status: 'unknown-submission' as const, error: 'transport ended after click' });
     }
     if (this.nextSendStatus === 'unsafe-not-submitted') {
@@ -260,6 +325,7 @@ class FakeBrowser implements CollabBrowser {
     }
     const conversationId = this.conversations.get(taskId) ?? `conversation-${taskId}`;
     this.conversations.set(taskId, conversationId);
+    beforeSubmissionRelease?.();
     return Promise.resolve({
       status: 'submitted' as const,
       conversationId,
@@ -277,18 +343,26 @@ class FakeBrowser implements CollabBrowser {
    * @returns Fake copied response and unchanged conversation.
    * @throws {Error} This fake wait does not throw.
    */
-  waitForResponse(
+  async waitForResponse(
     taskId: string,
     _sessionName: string,
     expectedConversationId: string,
     observer?: BrowserOperationObserver,
   ) {
     this.observe(observer);
-    return Promise.resolve({
+    if (this.pendingWaitPolls > 0) {
+      this.pendingWaitPolls -= 1;
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, this.waitPollDelayMs);
+      });
+      return { status: 'pending' as const };
+    }
+    return {
+      status: 'completed' as const,
       response: `response for ${taskId}`,
       conversationId: expectedConversationId,
       conversationUrl: `https://chatgpt.com/c/${expectedConversationId}`,
-    });
+    };
   }
 
   /**
@@ -336,6 +410,7 @@ class FakeBrowser implements CollabBrowser {
     const pid = this.nextChildPid;
     this.nextChildPid += 1;
     observer.childSpawned(pid);
+    observer.commandSpawned(pid + 1000);
     observer.childExited(pid);
     this.observedOperations += 1;
   }
