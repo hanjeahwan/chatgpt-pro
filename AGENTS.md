@@ -6,10 +6,16 @@
 
 - 面向用户的用途、用法和边界：`README.md`
 - 产品行为、权限、技术合同和验收：`docs/specs/**/md`
+- 跨规格或长期有效的架构决策：`docs/adr/adr-*.md`；创建 ADR 时遵守 `create-architectural-decision-record` Skill
 - 代码规范：`CODE_STANDARD.md`
 - 规格实现、验证、提交和验收流程：`WORKFLOW.md`
 
-不要在多个文件复制同一完整规则。产品行为改变时更新 Spec；架构理由改变时更新 ADR；Skill 操作步骤改变时更新 Skill 或对应 reference；规格执行流程改变时更新 `WORKFLOW.md`。
+不要在多个文件复制同一完整规则：
+
+- 产品行为改变时更新 Spec。
+- 仅影响一份 Spec 的选择保留在该 Spec 的“决策记录”；跨规格或长期有效的架构决策记录为 ADR。
+- Spec 依赖 ADR 时引用它，不重复其完整理由、替代方案和后果。
+- 规格执行流程改变时更新 `WORKFLOW.md`。
 
 ## Markdown 文档格式
 
