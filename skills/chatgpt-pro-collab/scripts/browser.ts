@@ -619,8 +619,8 @@ function uploadPreparationScript(): string {
     const plus = page.locator('[data-testid="composer-plus-btn"]');
     if (await plus.count() !== 1) throw new Error('page contract drift: composer plus button is not unique');
     await plus.click();
-    const upload = page.getByRole('menuitem', { name: 'Add photos & files', exact: true });
-    if (await upload.count() !== 1) throw new Error('page contract drift: upload menu item is not unique');
+    const upload = page.getByText('Add photos & files', { exact: true });
+    if (await upload.count() !== 1) throw new Error('page contract drift: upload action is not unique');
     await upload.click();
     return JSON.stringify({ protocol: '${PROTOCOL}', kind: 'upload-ready' });
   }`;
