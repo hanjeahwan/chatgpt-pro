@@ -652,12 +652,15 @@ function sendScript(prompt: string): string {
         const elements = [...document.querySelectorAll('[data-testid^="conversation-turn-"][data-turn]')];
         return elements.filter((element) => element.getAttribute('data-turn') === 'user').length > previousCount;
       }, userCount, { timeout: 60000, polling: 100 });
-      await page.waitForURL((url) => /^\\/c\\/[^/?#]+\\/?$/.test(url.pathname), { timeout: 60000 });
+      await page.waitForFunction(() => {
+        const match = /^\\/c\\/([^/?#]+)\\/?$/.exec(location.pathname);
+        return match !== null && !match[1].startsWith('WEB:');
+      }, undefined, { timeout: 60000, polling: 100 });
       const url = await page.evaluate(() => {
         return { hostname: location.hostname, pathname: location.pathname, origin: location.origin };
       });
       const match = /^\\/c\\/([^/?#]+)\\/?$/.exec(url.pathname);
-      if (url.hostname !== 'chatgpt.com' || match === null) {
+      if (url.hostname !== 'chatgpt.com' || match === null || match[1].startsWith('WEB:')) {
         throw new Error('page contract drift: canonical conversation URL was not observed');
       }
       return JSON.stringify({

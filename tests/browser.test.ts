@@ -111,6 +111,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     expect(sendSource).toContain("page.locator('#prompt-textarea')");
     expect(sendSource).toContain('page.locator(\'[data-testid="send-button"]\')');
     expect(sendSource).toContain('exact prompt');
+    expect(sendSource).toContain("!match[1].startsWith('WEB:')");
     expect(sendSource).not.toContain('new URL(page.url())');
     expectPageFunctionSyntax(sendSource);
   });
