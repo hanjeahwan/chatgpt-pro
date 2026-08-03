@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { access, mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,6 +15,8 @@ describe('VER-011 SQLite cross-process concurrency', () => {
     const root = await mkdtemp(join(tmpdir(), 'collab-concurrency-'));
     const databasePath = join(root, 'state.sqlite');
     const workerPath = join(import.meta.dirname, 'support', 'state-worker.ts');
+    const initialized = new StateStore(databasePath);
+    initialized.close();
 
     await Promise.all([
       execFileAsync(process.execPath, [workerPath, databasePath, 'task-a', 'turn-a']),
@@ -77,7 +79,57 @@ describe('VER-011 SQLite cross-process concurrency', () => {
     contender.releaseTaskOperation('task-a', 'contender');
     contender.close();
   });
+
+  it('retains submission ambiguity when a send parent dies after command release', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-orphan-send-'));
+    const databasePath = join(root, 'state.sqlite');
+    const readyPath = join(root, 'ready');
+    const store = new StateStore(databasePath);
+    store.createTask('task-a', 'session-a');
+    store.close();
+    const workerPath = join(import.meta.dirname, 'support', 'orphan-send-worker.ts');
+    const gatePath = join(
+      import.meta.dirname,
+      '..',
+      'skills',
+      'chatgpt-pro-collab',
+      'scripts',
+      'browser-command-gate.ts',
+    );
+    const worker = spawn(process.execPath, [workerPath, databasePath, readyPath, gatePath], { stdio: 'ignore' });
+    const workerCompletion = waitForExit(worker);
+    await waitForPath(readyPath);
+    const gatePid = Number(await readFile(readyPath, 'utf8'));
+
+    worker.kill('SIGKILL');
+    await workerCompletion;
+    const contender = new StateStore(databasePath);
+    expect(() => {
+      contender.acquireTaskOperation('task-a', 'send', 'contender');
+    }).toThrowError(/busy with send/);
+    await waitForPidExit(gatePid);
+    contender.acquireTaskOperation('task-a', 'send', 'contender');
+    expect(contender.requireTurn('task-a', 'turn-a')).toMatchObject({ status: 'unknown-submission' });
+    contender.releaseTaskOperation('task-a', 'contender');
+    contender.close();
+  });
 });
+
+/**
+ * Resolves one spawned worker after either ordinary or signal termination.
+ *
+ * @param child Spawned worker process.
+ * @returns Exit code, using 1 for signal termination.
+ * @throws {Error} If the operating system cannot start the worker.
+ */
+function waitForExit(child: ReturnType<typeof spawn>): Promise<number> {
+  return new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('close', (code) => {
+      resolve(code ?? 1);
+    });
+  });
+}
 
 /**
  * Waits for a worker-owned ready file without assuming process startup latency.

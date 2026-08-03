@@ -9,9 +9,10 @@ if (databasePath === undefined || taskId === undefined || turnId === undefined) 
 }
 
 const suffix = taskId.at(-1);
-const store = new StateStore(databasePath);
+const store = new StateStore(databasePath, 'require-existing');
 store.createTask(taskId, `session-${suffix}`);
 store.beginTurn(taskId, turnId, `/prompt-${suffix}.md`, [`/attachment-${suffix}`]);
+store.markSubmissionAttempting(taskId, turnId);
 store.markTurnPending(taskId, turnId, `conversation-${suffix}`, `https://chatgpt.com/c/conversation-${suffix}`);
 const responsePath = join(dirname(databasePath), `${taskId}-${turnId}.md`);
 writeFileSync(responsePath, `response-${suffix}`, { flag: 'wx' });

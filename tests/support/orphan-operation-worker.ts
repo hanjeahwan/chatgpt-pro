@@ -17,7 +17,7 @@ if (child.pid === undefined) {
 }
 child.unref();
 
-const store = new StateStore(databasePath);
+const store = new StateStore(databasePath, 'require-existing');
 store.acquireTaskOperation('task-a', 'wait', 'orphan-owner');
 store.attachTaskOperationChild('task-a', 'orphan-owner', child.pid);
 writeFileSync(readyPath, String(child.pid), { flag: 'wx' });

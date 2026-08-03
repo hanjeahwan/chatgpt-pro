@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -18,11 +18,13 @@ describe('BEH-002, BEH-005, and BEH-007 state gates', () => {
       return store.beginTurn('task-a', 'turn-b', '/other.md', []);
     }).toThrowError(StateError);
 
+    store.markSubmissionAttempting('task-a', 'turn-a');
     store.markTurnPending('task-a', 'turn-a', 'conversation-a', 'https://chatgpt.com/c/conversation-a');
     const responsePath = join(root, 'response.md');
     await writeFile(responsePath, 'response');
     store.completeTurn('task-a', 'turn-a', responsePath);
     store.beginTurn('task-a', 'turn-b', '/other.md', []);
+    store.markSubmissionAttempting('task-a', 'turn-b');
 
     expect(() => {
       return store.markTurnPending('task-a', 'turn-b', 'conversation-b', 'https://chatgpt.com/c/conversation-b');
@@ -76,8 +78,26 @@ describe('BEH-002, BEH-005, and BEH-007 state gates', () => {
     second.close();
   });
 
-  it('adds operation leases to an existing two-table task schema', () => {
-    const databasePath = join(tmpdir(), `collab-migration-${crypto.randomUUID()}.sqlite`);
+  it('atomically fails an orphaned pre-attempt sending turn when reclaiming its lease', () => {
+    const databasePath = join(tmpdir(), `collab-orphan-sending-${crypto.randomUUID()}.sqlite`);
+    const first = new StateStore(databasePath);
+    first.createTask('task-a', 'session-a');
+    first.acquireTaskOperation('task-a', 'send', 'dead-owner', 999_999);
+    first.beginTurn('task-a', 'turn-a', '/prompt.md', []);
+    first.close();
+
+    const contender = new StateStore(databasePath);
+    contender.acquireTaskOperation('task-a', 'send', 'contender');
+    expect(contender.requireTurn('task-a', 'turn-a')).toMatchObject({
+      status: 'failed',
+      error: 'send owner exited before recording a browser submission attempt',
+    });
+    contender.releaseTaskOperation('task-a', 'contender');
+    contender.close();
+  });
+
+  it('rejects an unmarked legacy database without modifying its bytes', async () => {
+    const databasePath = join(tmpdir(), `collab-legacy-${crypto.randomUUID()}.sqlite`);
     const legacy = new DatabaseSync(databasePath);
     legacy.exec(`
       CREATE TABLE task (
@@ -92,13 +112,11 @@ describe('BEH-002, BEH-005, and BEH-007 state gates', () => {
       ) STRICT;
     `);
     legacy.close();
+    const before = await readFile(databasePath);
 
-    const migrated = new StateStore(databasePath);
-    migrated.createTask('task-a', 'session-a');
     expect(() => {
-      migrated.acquireTaskOperation('task-a', 'send', 'owner');
-    }).not.toThrow();
-    migrated.releaseTaskOperation('task-a', 'owner');
-    migrated.close();
+      return new StateStore(databasePath);
+    }).toThrowError(/not ChatGPT Pro Collab V1/);
+    expect(await readFile(databasePath)).toEqual(before);
   });
 });

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -111,6 +111,43 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     await expect(fixture.service.close(task.taskId)).resolves.toMatchObject({ alreadyClosed: false });
   });
 
+  it('re-reads archive lifecycle state after acquiring the task lease', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.service.start();
+    const promptPath = join(fixture.root, 'prompt.md');
+    await writeFile(promptPath, 'establish conversation');
+    await fixture.service.send(task.taskId, promptPath, []);
+    const service = new CollabService(
+      fixture.paths,
+      fixture.browser,
+      () => {
+        return new FailTaskAfterArchiveLeaseStore(fixture.paths.database, 'require-existing');
+      },
+      () => {
+        return 'unused-id';
+      },
+    );
+
+    await expect(service.archive(task.taskId)).rejects.toMatchObject({ code: 'TASK_NOT_ACTIVE' });
+    expect(fixture.browser.archived).toEqual([]);
+  });
+
+  it('rejects a pre-existing seed when no V1 state marker proves setup provenance', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-unmarked-seed-'));
+    const paths = collabPaths(root);
+    await ensureCollabDirectories(paths);
+    await writeFile(paths.seedState, '{"legacy":true}');
+    const browser = new FakeBrowser(paths);
+    const service = new CollabService(paths, browser, () => {
+      return new StateStore(paths.database, 'require-existing');
+    });
+
+    await expect(service.start()).rejects.toMatchObject({ code: 'STATE_NOT_INITIALIZED' });
+    expect(browser.startCount).toBe(0);
+    await expect(access(paths.database)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('prints stable help and JSON usage errors', async () => {
     const fixture = await serviceFixture();
     const output: string[] = [];
@@ -130,6 +167,30 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     expect(JSON.parse(errors.at(-1) ?? '{}')).toMatchObject({ ok: false, error: { code: 'USAGE' } });
   });
 });
+
+class FailTaskAfterArchiveLeaseStore extends StateStore {
+  /**
+   * Simulates a lifecycle transition committed at the lease-acquisition boundary.
+   *
+   * @param taskId Task whose browser lease is acquired.
+   * @param operation Browser operation name.
+   * @param token Unique lease token.
+   * @param ownerPid Lease owner process identifier.
+   * @returns Nothing after acquisition and the injected archive transition.
+   * @throws {Error} If acquisition or the injected transition fails.
+   */
+  override acquireTaskOperation(
+    taskId: string,
+    operation: string,
+    token: string,
+    ownerPid: number = process.pid,
+  ): void {
+    super.acquireTaskOperation(taskId, operation, token, ownerPid);
+    if (operation === 'archive') {
+      this.failTask(taskId);
+    }
+  }
+}
 
 class FakeBrowser implements CollabBrowser {
   readonly paths: ReturnType<typeof collabPaths>;
@@ -311,7 +372,7 @@ async function serviceFixture() {
     paths,
     browser,
     () => {
-      return new StateStore(paths.database);
+      return new StateStore(paths.database, 'require-existing');
     },
     () => {
       id += 1;

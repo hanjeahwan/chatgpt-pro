@@ -106,7 +106,7 @@ export class CollabService {
     paths: CollabPaths,
     browser: CollabBrowser,
     storeFactory: () => StateStore = () => {
-      return new StateStore(paths.database);
+      return new StateStore(paths.database, 'require-existing');
     },
     idGenerator: () => string = randomUUID,
   ) {
@@ -124,6 +124,8 @@ export class CollabService {
    */
   async setup(): Promise<{ readonly seedPath: string }> {
     await ensureCollabDirectories(this.#paths);
+    const store = new StateStore(this.#paths.database, 'initialize');
+    store.close();
     await this.#browser.setup();
     return { seedPath: await requireSeedState(this.#paths) };
   }
@@ -136,12 +138,11 @@ export class CollabService {
    */
   async start(): Promise<StartResult> {
     await ensureCollabDirectories(this.#paths);
-    const seedStatePath = await requireSeedState(this.#paths);
-    const taskId = this.#idGenerator();
-    const sessionName = `chatgpt-pro-collab-${taskId}`;
-    await ensureTaskDirectories(this.#paths, taskId);
-
     return this.#withStore(async (store) => {
+      const seedStatePath = await requireSeedState(this.#paths);
+      const taskId = this.#idGenerator();
+      const sessionName = `chatgpt-pro-collab-${taskId}`;
+      await ensureTaskDirectories(this.#paths, taskId);
       store.createTask(taskId, sessionName);
       try {
         const browser = await this.#browser.startTask(taskId, sessionName, seedStatePath);
@@ -173,8 +174,8 @@ export class CollabService {
     const turnId = this.#idGenerator();
 
     return this.#withStore(async (store) => {
-      const task = store.requireActiveTask(taskId);
       return this.#withTaskOperation(store, taskId, 'send', async (observer) => {
+        const task = store.requireActiveTask(taskId);
         store.beginTurn(taskId, turnId, input.promptPath, input.attachmentPaths);
         try {
           await savePromptCopy(this.#paths, taskId, turnId, input.prompt);
@@ -182,6 +183,7 @@ export class CollabService {
           store.failSendingTurn(taskId, turnId, `save prompt copy: ${errorMessage(error)}`);
           throw error;
         }
+        store.markSubmissionAttempting(taskId, turnId);
 
         const browserResult = await this.#browser.send(
           taskId,
@@ -192,12 +194,12 @@ export class CollabService {
           observer,
         );
         if (browserResult.status === 'unsafe-not-submitted') {
-          store.failSendingTurn(taskId, turnId, browserResult.error);
+          store.failSubmissionAttempt(taskId, turnId, browserResult.error);
           store.failTask(taskId);
           throw new CollabError('SUBMISSION_FAILED', browserResult.error);
         }
         if (browserResult.status === 'not-submitted') {
-          store.failSendingTurn(taskId, turnId, browserResult.error);
+          store.failSubmissionAttempt(taskId, turnId, browserResult.error);
           throw new CollabError('SUBMISSION_FAILED', browserResult.error);
         }
         if (browserResult.status === 'unknown-submission') {
@@ -231,25 +233,25 @@ export class CollabService {
    */
   async wait(taskId: string, turnId: string): Promise<WaitResult> {
     return this.#withStore(async (store) => {
-      const task = store.requireTask(taskId);
-      const turn = store.requireTurn(taskId, turnId);
-      if (turn.status === 'completed') {
-        if (turn.responsePath === null) {
-          throw new CollabError('TRANSCRIPT_INCONSISTENT', `completed turn has no response path: ${turnId}`);
-        }
-        return {
-          taskId,
-          turnId,
-          responsePath: await requireResponse(turn.responsePath),
-        };
-      }
-      if (task.status !== 'active') {
-        throw new CollabError('TASK_NOT_ACTIVE', `task is ${task.status}: ${taskId}`);
-      }
-      if (turn.status !== 'pending') {
-        throw new CollabError('TURN_NOT_PENDING', `turn is ${turn.status}: ${turnId}`);
-      }
       return this.#withTaskOperation(store, taskId, 'wait', async (observer) => {
+        const task = store.requireTask(taskId);
+        const turn = store.requireTurn(taskId, turnId);
+        if (turn.status === 'completed') {
+          if (turn.responsePath === null) {
+            throw new CollabError('TRANSCRIPT_INCONSISTENT', `completed turn has no response path: ${turnId}`);
+          }
+          return {
+            taskId,
+            turnId,
+            responsePath: await requireResponse(turn.responsePath),
+          };
+        }
+        if (task.status !== 'active') {
+          throw new CollabError('TASK_NOT_ACTIVE', `task is ${task.status}: ${taskId}`);
+        }
+        if (turn.status !== 'pending') {
+          throw new CollabError('TURN_NOT_PENDING', `turn is ${turn.status}: ${turnId}`);
+        }
         if (task.conversationId === null || task.conversationUrl === null) {
           throw new CollabError('TRANSCRIPT_INCONSISTENT', `pending task has no conversation: ${taskId}`);
         }
@@ -281,11 +283,11 @@ export class CollabService {
     taskId: string,
   ): Promise<{ readonly taskId: string; readonly wasOpen: boolean; readonly alreadyClosed: boolean }> {
     return this.#withStore(async (store) => {
-      const task = store.requireTask(taskId);
-      if (task.status === 'closed') {
-        return { taskId, wasOpen: false, alreadyClosed: true };
-      }
       return this.#withTaskOperation(store, taskId, 'close', async (observer) => {
+        const task = store.requireTask(taskId);
+        if (task.status === 'closed') {
+          return { taskId, wasOpen: false, alreadyClosed: true };
+        }
         const result = await this.#browser.closeTask(taskId, task.playwrightSession, observer);
         store.closeTask(taskId);
         return { taskId, wasOpen: result.wasOpen, alreadyClosed: false };
@@ -303,12 +305,12 @@ export class CollabService {
    */
   async archive(taskId: string): Promise<{ readonly taskId: string; readonly conversationId: string }> {
     return this.#withStore(async (store) => {
-      const task = store.requireActiveTask(taskId);
-      if (task.conversationId === null) {
-        throw new CollabError('CONVERSATION_NOT_ESTABLISHED', `task has no submitted conversation: ${taskId}`);
-      }
-      const conversationId = task.conversationId;
       return this.#withTaskOperation(store, taskId, 'archive', async (observer) => {
+        const task = store.requireActiveTask(taskId);
+        if (task.conversationId === null) {
+          throw new CollabError('CONVERSATION_NOT_ESTABLISHED', `task has no submitted conversation: ${taskId}`);
+        }
+        const conversationId = task.conversationId;
         const result = await this.#browser.archive(taskId, task.playwrightSession, conversationId, observer);
         return { taskId, conversationId: result.conversationId };
       });

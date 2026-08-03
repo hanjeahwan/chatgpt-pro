@@ -1,6 +1,34 @@
 import { existsSync, statSync } from 'node:fs';
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 
+const V1_APPLICATION_ID = 0x43504331;
+const V1_SCHEMA_VERSION = 1;
+const TASK_COLUMNS = [
+  'id',
+  'playwright_session',
+  'conversation_id',
+  'conversation_url',
+  'status',
+  'created_at',
+  'updated_at',
+  'closed_at',
+  'browser_operation_token',
+  'browser_operation_pid',
+  'browser_operation_name',
+  'browser_operation_child_pid',
+] as const;
+const TURN_COLUMNS = [
+  'task_id',
+  'id',
+  'status',
+  'prompt_path',
+  'attachments_json',
+  'response_path',
+  'error',
+  'created_at',
+  'updated_at',
+] as const;
+
 export type TaskStatus = 'active' | 'closed' | 'failed';
 export type TurnStatus = 'sending' | 'pending' | 'completed' | 'failed' | 'unknown-submission';
 
@@ -48,49 +76,61 @@ export class StateStore {
   readonly #database: DatabaseSync;
 
   /**
-   * Opens one process-local SQLite connection and installs the V1 schema.
+   * Opens one process-local SQLite connection after enforcing V1 provenance.
    *
    * @param databasePath Absolute path to the Collab coordination database.
+   * @param mode Whether a missing database may be initialized as V1.
    * @throws {Error} If SQLite cannot open, configure, or initialize the database.
    */
-  constructor(databasePath: string) {
+  constructor(databasePath: string, mode: 'initialize' | 'require-existing' = 'initialize') {
+    const databaseExists = existsSync(databasePath);
+    if (databaseExists) {
+      assertV1Database(databasePath);
+    } else if (mode === 'require-existing') {
+      throw new StateError('STATE_NOT_INITIALIZED', `V1 state database does not exist: ${databasePath}`);
+    }
+
     this.#database = new DatabaseSync(databasePath);
     this.#database.exec('PRAGMA busy_timeout = 5000');
     this.#database.exec('PRAGMA foreign_keys = ON');
-    executeWithBusyRetry(this.#database, 'PRAGMA journal_mode = WAL', 5000);
-    this.#database.exec(`
-      CREATE TABLE IF NOT EXISTS task (
-        id TEXT PRIMARY KEY,
-        playwright_session TEXT NOT NULL UNIQUE,
-        conversation_id TEXT,
-        conversation_url TEXT,
-        status TEXT NOT NULL CHECK (status IN ('active', 'closed', 'failed')),
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        closed_at TEXT,
-        browser_operation_token TEXT,
-        browser_operation_pid INTEGER,
-        browser_operation_name TEXT,
-        browser_operation_child_pid INTEGER
-      ) STRICT;
+    if (!databaseExists) {
+      this.#database.exec(`
+        CREATE TABLE task (
+          id TEXT PRIMARY KEY,
+          playwright_session TEXT NOT NULL UNIQUE,
+          conversation_id TEXT,
+          conversation_url TEXT,
+          status TEXT NOT NULL CHECK (status IN ('active', 'closed', 'failed')),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          closed_at TEXT,
+          browser_operation_token TEXT,
+          browser_operation_pid INTEGER,
+          browser_operation_name TEXT,
+          browser_operation_child_pid INTEGER
+        ) STRICT;
 
-      CREATE TABLE IF NOT EXISTS turn (
-        task_id TEXT NOT NULL,
-        id TEXT NOT NULL,
-        status TEXT NOT NULL CHECK (
-          status IN ('sending', 'pending', 'completed', 'failed', 'unknown-submission')
-        ),
-        prompt_path TEXT NOT NULL,
-        attachments_json TEXT NOT NULL,
-        response_path TEXT,
-        error TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        PRIMARY KEY (task_id, id),
-        FOREIGN KEY (task_id) REFERENCES task(id)
-      ) STRICT;
-    `);
-    ensureTaskOperationColumns(this.#database);
+        CREATE TABLE turn (
+          task_id TEXT NOT NULL,
+          id TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (
+            status IN ('sending', 'pending', 'completed', 'failed', 'unknown-submission')
+          ),
+          prompt_path TEXT NOT NULL,
+          attachments_json TEXT NOT NULL,
+          response_path TEXT,
+          error TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (task_id, id),
+          FOREIGN KEY (task_id) REFERENCES task(id)
+        ) STRICT;
+
+        PRAGMA user_version = ${V1_SCHEMA_VERSION};
+        PRAGMA application_id = ${V1_APPLICATION_ID};
+      `);
+    }
+    executeWithBusyRetry(this.#database, 'PRAGMA journal_mode = WAL', 5000);
   }
 
   /**
@@ -213,6 +253,13 @@ export class StateStore {
         );
       }
       const now = new Date().toISOString();
+      this.#database
+        .prepare(
+          `UPDATE turn
+           SET status = 'failed', error = ?, updated_at = ?
+           WHERE task_id = ? AND status = 'sending'`,
+        )
+        .run('send owner exited before recording a browser submission attempt', now, taskId);
       this.#database
         .prepare(
           `UPDATE task
@@ -367,7 +414,7 @@ export class StateStore {
    * Commits a confirmed browser submission and binds the task's first conversation.
    *
    * @param taskId Owning task identifier.
-   * @param turnId Sending turn identifier.
+   * @param turnId Submission-attempt turn identifier.
    * @param conversationId Canonical ChatGPT conversation identifier.
    * @param conversationUrl Canonical `/c/<id>` URL observed after submission.
    * @returns The updated pending turn.
@@ -378,8 +425,8 @@ export class StateStore {
     return this.#transaction(() => {
       const task = this.requireActiveTask(taskId);
       const turn = this.requireTurn(taskId, turnId);
-      if (turn.status !== 'sending') {
-        throw new StateError('TURN_STATE_CONFLICT', `turn is ${turn.status}, expected sending: ${turnId}`);
+      if (turn.status !== 'unknown-submission') {
+        throw new StateError('TURN_STATE_CONFLICT', `turn is ${turn.status}, expected unknown-submission: ${turnId}`);
       }
       if (
         task.conversationId !== null &&
@@ -418,17 +465,49 @@ export class StateStore {
   }
 
   /**
-   * Records a browser submission whose side effect cannot be proven either way.
+   * Persists the conservative interruption state before any browser submission side effect.
    *
    * @param taskId Owning task identifier.
    * @param turnId Sending turn identifier.
-   * @param reason Concrete ambiguity at the submission boundary.
-   * @returns The updated unknown-submission turn.
+   * @returns The turn protected against an orphaned CLI parent.
    * @throws {StateError} If the turn is not currently `sending`.
    * @throws {Error} If SQLite cannot commit the transition.
    */
+  markSubmissionAttempting(taskId: string, turnId: string): TurnRecord {
+    return this.#finishSendingTurn(
+      taskId,
+      turnId,
+      'unknown-submission',
+      'browser submission attempt started but has not been reconciled',
+    );
+  }
+
+  /**
+   * Reclassifies a persisted submission attempt after the browser proves no message was submitted.
+   *
+   * @param taskId Owning task identifier.
+   * @param turnId Ambiguous turn identifier.
+   * @param reason Concrete pre-submission failure.
+   * @returns The updated failed turn.
+   * @throws {StateError} If the turn is not currently `unknown-submission`.
+   * @throws {Error} If SQLite cannot commit the transition.
+   */
+  failSubmissionAttempt(taskId: string, turnId: string, reason: string): TurnRecord {
+    return this.#finishUnknownSubmissionTurn(taskId, turnId, 'failed', reason);
+  }
+
+  /**
+   * Records a browser submission whose side effect cannot be proven either way.
+   *
+   * @param taskId Owning task identifier.
+   * @param turnId Submission-attempt turn identifier.
+   * @param reason Concrete ambiguity at the submission boundary.
+   * @returns The updated unknown-submission turn.
+   * @throws {StateError} If the turn is not currently `unknown-submission`.
+   * @throws {Error} If SQLite cannot commit the transition.
+   */
   markUnknownSubmission(taskId: string, turnId: string, reason: string): TurnRecord {
-    return this.#finishSendingTurn(taskId, turnId, 'unknown-submission', reason);
+    return this.#finishUnknownSubmissionTurn(taskId, turnId, 'unknown-submission', reason);
   }
 
   /**
@@ -565,6 +644,36 @@ export class StateStore {
   }
 
   /**
+   * Reconciles the durable ambiguity marker after a browser submission attempt returns.
+   *
+   * @param taskId Owning task identifier.
+   * @param turnId Unknown-submission turn identifier.
+   * @param status Reconciled terminal classification.
+   * @param reason Concrete browser result.
+   * @returns The updated turn.
+   * @throws {StateError} If the turn is not `unknown-submission`.
+   * @throws {Error} If SQLite cannot commit the transition.
+   */
+  #finishUnknownSubmissionTurn(
+    taskId: string,
+    turnId: string,
+    status: 'failed' | 'unknown-submission',
+    reason: string,
+  ): TurnRecord {
+    return this.#transaction(() => {
+      const turn = this.requireTurn(taskId, turnId);
+      if (turn.status !== 'unknown-submission') {
+        throw new StateError('TURN_STATE_CONFLICT', `turn is ${turn.status}, expected unknown-submission: ${turnId}`);
+      }
+      const now = new Date().toISOString();
+      this.#database
+        .prepare('UPDATE turn SET status = ?, error = ?, updated_at = ? WHERE task_id = ? AND id = ?')
+        .run(status, reason, now, taskId, turnId);
+      return this.requireTurn(taskId, turnId);
+    });
+  }
+
+  /**
    * Serializes a state gate and rolls back every thrown transition.
    *
    * @param operation Synchronous SQLite work that must commit as one unit.
@@ -589,68 +698,69 @@ export class StateStore {
 }
 
 /**
- * Adds task-operation lease columns to databases created before the lease existed.
+ * Verifies marker, version, and required columns through a read-only connection.
  *
- * @param database Process-local SQLite connection.
- * @returns Nothing after the schema is current.
- * @throws {Error} If SQLite cannot serialize or commit the schema update.
+ * @param databasePath Existing database path that must belong to this V1 implementation.
+ * @returns Nothing after the provenance and schema checks pass.
+ * @throws {StateError} If the database is unmarked, legacy, or structurally incompatible.
+ * @throws {Error} If SQLite cannot read the database.
  */
-function ensureTaskOperationColumns(database: DatabaseSync): void {
-  const required = [
-    'browser_operation_token',
-    'browser_operation_pid',
-    'browser_operation_name',
-    'browser_operation_child_pid',
-  ] as const;
-  const current = taskColumnNames(database);
-  if (
-    required.every((name) => {
-      return current.has(name);
-    })
-  ) {
-    return;
-  }
-  database.exec('BEGIN IMMEDIATE');
+function assertV1Database(databasePath: string): void {
+  const database = new DatabaseSync(databasePath, { readOnly: true });
   try {
-    const columns = taskColumnNames(database);
-    const definitions = [
-      ['browser_operation_token', 'TEXT'],
-      ['browser_operation_pid', 'INTEGER'],
-      ['browser_operation_name', 'TEXT'],
-      ['browser_operation_child_pid', 'INTEGER'],
-    ] as const;
-    for (const [name, type] of definitions) {
-      if (!columns.has(name)) {
-        database.exec(`ALTER TABLE task ADD COLUMN ${name} ${type}`);
-      }
+    const applicationId = pragmaInteger(database, 'application_id');
+    const schemaVersion = pragmaInteger(database, 'user_version');
+    if (applicationId !== V1_APPLICATION_ID || schemaVersion !== V1_SCHEMA_VERSION) {
+      throw new StateError('STATE_INCOMPATIBLE', `state database is not ChatGPT Pro Collab V1: ${databasePath}`);
     }
-    database.exec('COMMIT');
-  } catch (error) {
-    try {
-      database.exec('ROLLBACK');
-    } catch {
-      // Preserve the schema-update failure when SQLite already ended the transaction.
-    }
-    throw error;
+    requireTableColumns(database, 'task', TASK_COLUMNS);
+    requireTableColumns(database, 'turn', TURN_COLUMNS);
+  } finally {
+    database.close();
   }
 }
 
 /**
- * Reads task-table column names for the idempotent schema gate.
+ * Reads one integer-valued SQLite pragma.
  *
- * @param database Process-local SQLite connection.
- * @returns Current task-table column names.
- * @throws {Error} If SQLite cannot inspect or decode the schema.
+ * @param database Read-only provenance connection.
+ * @param name Closed pragma name selected by the caller.
+ * @returns The safe integer pragma value.
+ * @throws {TypeError} If SQLite returns an unexpected row.
  */
-function taskColumnNames(database: DatabaseSync): Set<string> {
-  return new Set(
+function pragmaInteger(database: DatabaseSync, name: 'application_id' | 'user_version'): number {
+  const value = record(database.prepare(`PRAGMA ${name}`).get())[name];
+  if (typeof value !== 'number' || !Number.isSafeInteger(value)) {
+    throw new TypeError(`PRAGMA ${name} must return an integer`);
+  }
+  return value;
+}
+
+/**
+ * Rejects a marked database whose V1 table shape is incomplete.
+ *
+ * @param database Read-only provenance connection.
+ * @param table Closed V1 table name.
+ * @param required Required V1 column names.
+ * @returns Nothing when every required column exists.
+ * @throws {StateError} If the table is absent or incomplete.
+ */
+function requireTableColumns(database: DatabaseSync, table: 'task' | 'turn', required: readonly string[]): void {
+  const columns = new Set(
     database
-      .prepare('PRAGMA table_info(task)')
+      .prepare(`PRAGMA table_info(${table})`)
       .all()
       .map((value) => {
-        return text(record(value).name, 'pragma_table_info.name');
+        return text(record(value).name, `pragma_table_info(${table}).name`);
       }),
   );
+  if (
+    required.some((name) => {
+      return !columns.has(name);
+    })
+  ) {
+    throw new StateError('STATE_INCOMPATIBLE', `state database has an incompatible ${table} table`);
+  }
 }
 
 /**
