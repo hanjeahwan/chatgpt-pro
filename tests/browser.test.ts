@@ -115,6 +115,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     expect(sendSource).toContain('exact prompt');
     expect(sendSource).toContain('const expectedConversationId = null');
     expect(sendSource).toContain("!match[1].startsWith('WEB:')");
+    expect(sendSource.indexOf('clicked = true')).toBeLessThan(sendSource.indexOf('await send.click()'));
     expect(sendSource).not.toContain('new URL(page.url())');
     expectPageFunctionSyntax(sendSource);
   });
@@ -163,6 +164,22 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     const cleanupSource = await lastScript(fixture.invocations);
     expect(cleanupSource).toContain('const attachmentFileNames = ["attachment.txt"]');
     expect(cleanupSource).toContain('attachment draft remained after reload');
+  });
+
+  it('cleans uploaded attachments when the guarded submit command never starts', async () => {
+    const fixture = await browserFixture([
+      pageResult({ protocol, kind: 'send-ready' }),
+      pageResult({ protocol, kind: 'upload-ready' }),
+      output('uploaded'),
+      new Error('spawn npx ENOENT'),
+      pageResult({ protocol, kind: 'draft-cleared' }),
+    ]);
+
+    await expect(
+      fixture.browser.send('task-a', 'session-a', 'conversation-a', 'exact prompt', ['/tmp/attachment.txt']),
+    ).resolves.toEqual({ status: 'not-submitted', error: expect.stringContaining('spawn npx ENOENT') });
+    const cleanupSource = await lastScript(fixture.invocations);
+    expect(cleanupSource).toContain('const attachmentFileNames = ["attachment.txt"]');
   });
 
   it('reports every browser-command child to the task lease observer', async () => {
@@ -241,7 +258,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
  * @returns Browser, resolved paths, and captured invocations.
  * @throws {Error} If the temporary fixture cannot be created.
  */
-async function browserFixture(outputs: readonly BrowserCommandOutput[]) {
+async function browserFixture(outputs: readonly (BrowserCommandOutput | Error)[]) {
   const root = await mkdtemp(join(tmpdir(), 'collab-browser-'));
   const paths = collabPaths(root);
   await ensureCollabDirectories(paths);
@@ -257,6 +274,11 @@ async function browserFixture(outputs: readonly BrowserCommandOutput[]) {
     if (next === undefined) {
       return Promise.reject(new Error('unexpected browser invocation'));
     }
+    if (next instanceof Error) {
+      invocation.onChildExited?.(invocationChildPid);
+      return Promise.reject(next);
+    }
+    invocation.onCommandSpawned?.(invocationChildPid + 100_000);
     invocation.onChildExited?.(invocationChildPid);
     return Promise.resolve(next);
   });

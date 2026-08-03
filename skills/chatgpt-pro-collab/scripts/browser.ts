@@ -1,6 +1,8 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { basename, join } from 'node:path';
+import { Readable } from 'node:stream';
+import { fileURLToPath } from 'node:url';
 
 import type { CollabPaths } from './session.ts';
 import { ensureTaskDirectories, savePlaywrightScript, taskDirectory } from './session.ts';
@@ -8,14 +10,16 @@ import { ensureTaskDirectories, savePlaywrightScript, taskDirectory } from './se
 const PLAYWRIGHT_CLI_PACKAGE = '@playwright/cli@0.1.17';
 const CHATGPT_URL = 'https://chatgpt.com/';
 const PROTOCOL = 'chatgpt-pro-collab/v1';
+const BROWSER_COMMAND_GATE_PATH = fileURLToPath(new URL('./browser-command-gate.ts', import.meta.url));
 
 export interface BrowserCommandInvocation {
-  readonly executable: 'npx';
+  readonly executable: string;
   readonly arguments: readonly string[];
   readonly cwd: string;
   readonly environment: Readonly<NodeJS.ProcessEnv>;
   readonly onChildSpawned?: (pid: number) => void;
   readonly onChildExited?: (pid: number) => void;
+  readonly onCommandSpawned?: (pid: number) => void;
 }
 
 export interface BrowserCommandOutput {
@@ -335,13 +339,15 @@ export class PlaywrightBrowser {
         'send',
         sendScript(expectedConversationId, prompt),
       );
-      commandStarted = true;
       const output = await this.#invoke(
         sessionName,
         taskId,
         ['run-code', '--filename', scriptPath],
         'submit prompt',
         observer,
+        () => {
+          commandStarted = true;
+        },
       );
       const result = parseProtocolResult<SendProtocolResult>(output.stdout, 'send');
       if (result.status !== 'submitted') {
@@ -497,6 +503,7 @@ export class PlaywrightBrowser {
    * @param command Command and arguments after the fixed CLI prefix.
    * @param operation Concrete operation for failures.
    * @param observer Task-lease child-process observer.
+   * @param onCommandSpawned Called only after the guarded command has an operating-system PID.
    * @returns Captured stdout and stderr.
    * @throws {BrowserError} If `npx` exits unsuccessfully or cannot start.
    */
@@ -506,6 +513,7 @@ export class PlaywrightBrowser {
     command: readonly string[],
     operation: string,
     observer?: BrowserOperationObserver,
+    onCommandSpawned?: () => void,
   ): Promise<BrowserCommandOutput> {
     const outputDirectory = join(taskDirectory(this.#paths, taskId), 'playwright');
     try {
@@ -526,6 +534,13 @@ export class PlaywrightBrowser {
               },
               onChildExited: (pid: number) => {
                 observer.childExited(pid);
+              },
+            }),
+        ...(onCommandSpawned === undefined
+          ? {}
+          : {
+              onCommandSpawned: () => {
+                onCommandSpawned();
               },
             }),
       });
@@ -587,7 +602,7 @@ export class PlaywrightBrowser {
 }
 
 /**
- * Runs `npx` without shell interpolation and without a response-size truncation limit.
+ * Runs one command behind a persisted-child gate without shell interpolation or output truncation.
  *
  * @param invocation Fully resolved executable, argument array, directory, and environment.
  * @returns Complete stdout and stderr after a zero exit.
@@ -595,16 +610,26 @@ export class PlaywrightBrowser {
  */
 export function runBrowserCommand(invocation: BrowserCommandInvocation): Promise<BrowserCommandOutput> {
   return new Promise((resolve, reject) => {
-    const child = spawn(invocation.executable, invocation.arguments, {
+    const child = spawn(process.execPath, [BROWSER_COMMAND_GATE_PATH, invocation.executable, ...invocation.arguments], {
       cwd: invocation.cwd,
       env: invocation.environment,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe', 'pipe'],
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     const childPid = child.pid;
     let childObserved = false;
     let settled = false;
+    let commandSpawnObserved = false;
+    let commandObserverError: unknown;
+    let commandEventBuffer = '';
+    const commandEvents = child.stdio[3];
+
+    if (!(commandEvents instanceof Readable)) {
+      child.kill('SIGTERM');
+      reject(new Error('browser command gate did not expose its command event pipe'));
+      return;
+    }
 
     const rejectOnce = (error: unknown): void => {
       if (settled) {
@@ -626,6 +651,29 @@ export function runBrowserCommand(invocation: BrowserCommandInvocation): Promise
     });
     child.stderr.on('data', (chunk: Buffer) => {
       stderr.push(chunk);
+    });
+    child.stdin.on('error', (error) => {
+      commandObserverError ??= error;
+    });
+    commandEvents.on('data', (chunk: Buffer) => {
+      commandEventBuffer += chunk.toString('utf8');
+      const lineEnd = commandEventBuffer.indexOf('\n');
+      if (lineEnd < 0 || commandSpawnObserved) {
+        return;
+      }
+      const childCommandPid = Number(commandEventBuffer.slice(0, lineEnd));
+      if (!Number.isSafeInteger(childCommandPid) || childCommandPid <= 0) {
+        commandObserverError = new Error('browser command gate reported an invalid command PID');
+        child.kill('SIGTERM');
+        return;
+      }
+      commandSpawnObserved = true;
+      try {
+        invocation.onCommandSpawned?.(childCommandPid);
+      } catch (error) {
+        commandObserverError = error;
+        child.kill('SIGTERM');
+      }
     });
     child.on('error', (error) => {
       try {
@@ -650,7 +698,15 @@ export function runBrowserCommand(invocation: BrowserCommandInvocation): Promise
         stdout: Buffer.concat(stdout).toString('utf8'),
         stderr: Buffer.concat(stderr).toString('utf8'),
       };
+      if (commandObserverError !== undefined) {
+        rejectOnce(commandObserverError);
+        return;
+      }
       if (code === 0) {
+        if (!commandSpawnObserved) {
+          rejectOnce(new Error('browser command gate exited without a command PID'));
+          return;
+        }
         settled = true;
         resolve(output);
         return;
@@ -668,10 +724,13 @@ export function runBrowserCommand(invocation: BrowserCommandInvocation): Promise
       try {
         invocation.onChildSpawned(childPid);
         childObserved = true;
+        child.stdin.end('go\n');
       } catch (error) {
         child.kill('SIGTERM');
         rejectOnce(error);
       }
+    } else if (childPid !== undefined) {
+      child.stdin.end('go\n');
     }
   });
 }
@@ -932,8 +991,8 @@ function sendScript(expectedConversationId: string | null, prompt: string): stri
         return elements.filter((element) => element.getAttribute('data-turn') === 'user').length;
       });
       await composer.fill(${JSON.stringify(prompt)});
-      await send.click();
       clicked = true;
+      await send.click();
       await page.waitForFunction((previousCount) => {
         const elements = [...document.querySelectorAll('[data-testid^="conversation-turn-"][data-turn]')];
         return elements.filter((element) => element.getAttribute('data-turn') === 'user').length > previousCount;
