@@ -1279,8 +1279,22 @@ function archiveScript(expectedConversationId: string): string {
     if (restoredUrl.hostname !== 'chatgpt.com' || restoredUrl.pathname.replace(/\\/$/, '') !== targetPath) {
       throw new Error('archived conversation could not be restored as the task page');
     }
-    const restoredTurn = page.locator('[data-testid^="conversation-turn-"][data-turn]').first();
-    await restoredTurn.waitFor({ state: 'attached', timeout: 60000 });
+    await page.waitForFunction((path) => {
+      return (
+        location.hostname === 'chatgpt.com' &&
+        location.pathname.replace(/\\/$/, '') === path &&
+        document.querySelector('[data-testid^="conversation-turn-"][data-turn]') !== null
+      );
+    }, targetPath, { timeout: 60000, polling: 100 });
+    const finalRestoredUrl = await page.evaluate(() => {
+      return { hostname: location.hostname, pathname: location.pathname };
+    });
+    if (
+      finalRestoredUrl.hostname !== 'chatgpt.com' ||
+      finalRestoredUrl.pathname.replace(/\\/$/, '') !== targetPath
+    ) {
+      throw new Error('conversation identity changed while restoring the archived task page');
+    }
     return JSON.stringify({ protocol: '${PROTOCOL}', kind: 'archive', conversationId });
   }`;
 }

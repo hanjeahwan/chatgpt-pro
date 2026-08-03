@@ -339,11 +339,26 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     expect(source).toContain("targetLink.first().waitFor({ state: 'attached', timeout: 60000 })");
     expect(source).toContain('while (absentPolls < 6 && verificationPolls < 120)');
     expect(source).toContain("page.goto('https://chatgpt.com' + targetPath");
-    expect(source).toContain('page.locator(\'[data-testid^="conversation-turn-"][data-turn]\').first()');
+    expect(source).toContain('document.querySelector(\'[data-testid^="conversation-turn-"][data-turn]\') !== null');
+    expect(source).toContain("finalRestoredUrl.pathname.replace(/\\/$/, '') !== targetPath");
     expect(source).not.toContain("const composer = page.locator('#prompt-textarea')");
     expect(source).not.toContain('Open conversation options');
     expect(source).not.toContain('new URL(page.url())');
     expectPageFunctionSyntax(source);
+  });
+
+  it('rejects an archived task page that redirects after its turn appears', async () => {
+    const fixture = await browserFixture([pageResult({ protocol, kind: 'archive', conversationId: 'conversation-a' })]);
+    await fixture.browser.archive('task-a', 'session-a', 'conversation-a');
+    const source = await lastScript(fixture.invocations);
+    const runArchive = new Function(`return (${source})`)() as (page: object) => Promise<string>;
+    const page = archivePageFixture([
+      { hostname: 'chatgpt.com', pathname: '/c/conversation-a' },
+      { hostname: 'chatgpt.com', pathname: '/c/conversation-a' },
+      { hostname: 'chatgpt.com', pathname: '/c/conversation-b' },
+    ]);
+
+    await expect(runArchive(page)).rejects.toThrow('conversation identity changed while restoring');
   });
 });
 
@@ -417,6 +432,94 @@ function output(stdout: string): BrowserCommandOutput {
  */
 function pageResult(value: unknown): BrowserCommandOutput {
   return output(`### Ran Playwright code\n${JSON.stringify(JSON.stringify(value))}\n`);
+}
+
+/**
+ * Creates the smallest page contract needed to execute a generated Archive script.
+ *
+ * @param evaluatedUrls URL observations returned in script order.
+ * @returns A page-shaped object whose target sidebar link disappears after Archive is clicked.
+ * @throws {Error} If the script requests more URL observations than the fixture provides.
+ */
+function archivePageFixture(
+  evaluatedUrls: readonly { readonly hostname: string; readonly pathname: string }[],
+): object {
+  const urls = [...evaluatedUrls];
+  let archived = false;
+  const targetLink = {
+    first() {
+      return targetLink;
+    },
+    waitFor() {
+      return Promise.resolve();
+    },
+    count() {
+      return Promise.resolve(archived ? 0 : 1);
+    },
+  };
+  const passiveLocator = {
+    first() {
+      return passiveLocator;
+    },
+    waitFor() {
+      return Promise.resolve();
+    },
+    count() {
+      return Promise.resolve(1);
+    },
+    isVisible() {
+      return Promise.resolve(true);
+    },
+    click() {
+      return Promise.resolve();
+    },
+  };
+  const archiveControl = {
+    first() {
+      return archiveControl;
+    },
+    count() {
+      return Promise.resolve(1);
+    },
+    isVisible() {
+      return Promise.resolve(true);
+    },
+    click() {
+      archived = true;
+      return Promise.resolve();
+    },
+  };
+
+  return {
+    evaluate() {
+      const url = urls.shift();
+      if (url === undefined) {
+        return Promise.reject(new Error('archive page fixture exhausted its URL observations'));
+      }
+      return Promise.resolve(url);
+    },
+    locator(selector: string) {
+      return selector.startsWith('a[href=') ? targetLink : passiveLocator;
+    },
+    getByRole() {
+      return archiveControl;
+    },
+    waitForURL() {
+      return Promise.resolve();
+    },
+    reload() {
+      return Promise.resolve();
+    },
+    waitForTimeout() {
+      return Promise.resolve();
+    },
+    goto() {
+      return Promise.resolve();
+    },
+    waitForFunction() {
+      return Promise.resolve();
+    },
+  };
 }
 
 /**
