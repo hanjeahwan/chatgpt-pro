@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "define-product-spec": {
+      "source": "hanjeahwan/codeartz-skills",
+      "sourceType": "github",
+      "skillPath": "skills/define-product-spec/SKILL.md",
+      "computedHash": "d77c495a51d64e4efeecb9799528109ba30e2889b5be51c6fce52873492e7df1"
+    }
+  }
+}
