@@ -10,7 +10,15 @@ import {
   type BrowserCommandOutput,
   type BrowserOperationObserver,
 } from '../skills/chatgpt-pro-collab/scripts/browser.ts';
-import { collabPaths, ensureCollabDirectories } from '../skills/chatgpt-pro-collab/scripts/session.ts';
+import { CollabService } from '../skills/chatgpt-pro-collab/scripts/collab.ts';
+import {
+  collabPaths,
+  ensureCollabDirectories,
+  ensureTaskDirectories,
+  responsePath,
+} from '../skills/chatgpt-pro-collab/scripts/session.ts';
+import { StateStore } from '../skills/chatgpt-pro-collab/scripts/state.ts';
+import { artifactPageFixture, type ArtifactPageOptions } from './support/artifact-page-fixture.ts';
 
 const protocol = 'chatgpt-pro-collab/v1';
 
@@ -443,6 +451,173 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     expectPageFunctionSyntax(source);
   });
 
+  it('executes Copy response occurrence mapping against a live-compatible page fixture', async () => {
+    const first = 'sandbox:/mnt/data/first.txt';
+    const second = 'sandbox:/mnt/data/second.txt';
+    const fixture = await executableBrowserFixture({
+      responseHtml: `<p>files</p><a href="${first}">first</a><a href="${first}">again</a><a href="${second}">second</a>`,
+      behaviorButtonCount: 3,
+    });
+
+    await expect(fixture.browser.captureResponse('task-a', 'session-a', 'conversation-a', 5000)).resolves.toMatchObject(
+      {
+        response: 'fixture response',
+        artifacts: [
+          { sourceUrl: first, label: 'first' },
+          { sourceUrl: second, label: 'second' },
+        ],
+      },
+    );
+    expect(fixture.events).toEqual(['clipboard:install', 'copy', 'clipboard:restore']);
+  });
+
+  it('rejects an executed Copy response whose occurrence and behavior-button counts differ', async () => {
+    const fixture = await executableBrowserFixture({
+      responseHtml: '<a href="sandbox:/mnt/data/first.txt">first</a><a href="sandbox:/mnt/data/second.txt">second</a>',
+      behaviorButtonCount: 1,
+    });
+
+    await expect(fixture.browser.captureResponse('task-a', 'session-a', 'conversation-a', 5000)).rejects.toMatchObject({
+      code: 'PLAYWRIGHT_CONTRACT_DRIFT',
+    });
+  });
+
+  it.each([
+    { label: 'direct', artifactRows: [], expectedEvent: 'download:direct' },
+    { label: 'artifact row', artifactRows: ['bundle.zip'], expectedEvent: 'download:artifact' },
+  ])('executes the $label download-event path and saves the emitted bytes', async ({ artifactRows, expectedEvent }) => {
+    const sourceUrl = 'sandbox:/mnt/data/bundle.zip';
+    const fixture = await executableBrowserFixture({
+      responseHtml: `<a href="${sourceUrl}">bundle.zip</a>`,
+      behaviorButtonCount: 1,
+      artifactRows,
+      suggestedFilename: 'bundle.zip',
+    });
+    const temporaryPath = join(fixture.root, `${artifactRows.length === 0 ? 'direct' : 'row'}.tmp`);
+
+    await expect(
+      fixture.browser.downloadArtifact(
+        'task-a',
+        'session-a',
+        'conversation-a',
+        [sourceUrl],
+        sourceUrl,
+        temporaryPath,
+        5000,
+      ),
+    ).resolves.toMatchObject({ sourceUrl, suggestedFilename: 'bundle.zip' });
+    expect(fixture.events).toContain(expectedEvent);
+    await expect(readFile(temporaryPath, 'utf8')).resolves.toBe('downloaded bundle.zip');
+  });
+
+  it.each([
+    {
+      label: 'artifact row order',
+      options: {
+        responseHtml:
+          '<a href="sandbox:/mnt/data/first.txt">first</a><a href="sandbox:/mnt/data/second.txt">second</a>',
+        behaviorButtonCount: 2,
+        artifactRows: ['second.txt', 'first.txt'],
+        suggestedFilename: 'first.txt',
+      },
+      expectedSourceUrls: ['sandbox:/mnt/data/first.txt', 'sandbox:/mnt/data/second.txt'],
+      targetSourceUrl: 'sandbox:/mnt/data/first.txt',
+    },
+    {
+      label: 'artifact control relationship',
+      options: {
+        responseHtml: '<a href="sandbox:/mnt/data/result.txt">result</a>',
+        behaviorButtonCount: 1,
+        artifactRows: ['result.txt'],
+        unrelatedRowControls: true,
+        suggestedFilename: 'result.txt',
+      },
+      expectedSourceUrls: ['sandbox:/mnt/data/result.txt'],
+      targetSourceUrl: 'sandbox:/mnt/data/result.txt',
+    },
+  ])(
+    'rejects executed $label drift without producing a download',
+    async ({ options, expectedSourceUrls, targetSourceUrl }) => {
+      const fixture = await executableBrowserFixture(options);
+
+      await expect(
+        fixture.browser.downloadArtifact(
+          'task-a',
+          'session-a',
+          'conversation-a',
+          expectedSourceUrls,
+          targetSourceUrl,
+          join(fixture.root, 'must-not-exist'),
+          5000,
+        ),
+      ).rejects.toMatchObject({ code: 'PLAYWRIGHT_CONTRACT_DRIFT' });
+      expect(
+        fixture.events.some((event) => {
+          return event.startsWith('download:');
+        }),
+      ).toBe(false);
+    },
+  );
+
+  it('executes a missing download event and preserves the browser timeout failure code', async () => {
+    const sourceUrl = 'sandbox:/mnt/data/result.txt';
+    const fixture = await executableBrowserFixture({
+      responseHtml: `<a href="${sourceUrl}">result</a>`,
+      behaviorButtonCount: 1,
+      downloadEvent: 'timeout',
+      suggestedFilename: 'result.txt',
+    });
+
+    await expect(
+      fixture.browser.downloadArtifact(
+        'task-a',
+        'session-a',
+        'conversation-a',
+        [sourceUrl],
+        sourceUrl,
+        join(fixture.root, 'must-not-exist'),
+        5,
+      ),
+    ).rejects.toMatchObject({ code: 'BROWSER_COMMAND_FAILED' });
+  });
+
+  it('keeps the turn capturing when an executed artifact-row mapping drifts', async () => {
+    const first = 'sandbox:/mnt/data/first.txt';
+    const second = 'sandbox:/mnt/data/second.txt';
+    const fixture = await executableBrowserFixture({
+      responseHtml: `<a href="${first}">first</a><a href="${second}">second</a>`,
+      behaviorButtonCount: 2,
+      artifactRows: ['second.txt', 'first.txt'],
+      suggestedFilename: 'first.txt',
+    });
+    await ensureTaskDirectories(fixture.paths, 'task-a');
+    const targetResponsePath = responsePath(fixture.paths, 'task-a', 'turn-a');
+    const store = new StateStore(fixture.paths.database);
+    store.createTask('task-a', 'session-a');
+    store.beginTurn('task-a', 'turn-a', '/prompt.md', []);
+    store.markSubmissionAttempting('task-a', 'turn-a');
+    store.markTurnPending('task-a', 'turn-a', 'conversation-a', 'https://chatgpt.com/c/conversation-a');
+    store.beginCapture('task-a', 'turn-a', targetResponsePath);
+    store.reconcileArtifactSet('task-a', 'turn-a', [
+      { sourceUrl: first, label: 'first' },
+      { sourceUrl: second, label: 'second' },
+    ]);
+    store.close();
+    const service = new CollabService(fixture.paths, fixture.browser);
+
+    await expect(service.wait('task-a', 'turn-a', 1, 5000)).rejects.toMatchObject({
+      code: 'PLAYWRIGHT_CONTRACT_DRIFT',
+    });
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireTurn('task-a', 'turn-a')).toMatchObject({
+      status: 'capturing',
+      artifactSetRecorded: true,
+    });
+    expect(reopened.listArtifacts('task-a', 'turn-a')).toMatchObject([{ status: 'pending' }, { status: 'pending' }]);
+    reopened.close();
+    await expect(readFile(targetResponsePath, 'utf8')).resolves.toBe('fixture response');
+  });
+
   it('rejects a download whose suggested filename belongs to another logical target', async () => {
     const sourceUrl = 'sandbox:/mnt/data/a/same-name.txt';
     const fixture = await browserFixture([
@@ -551,6 +726,47 @@ async function browserFixture(outputs: readonly (BrowserCommandOutput | Error)[]
     return Promise.resolve(next);
   });
   return { browser, invocations, paths };
+}
+
+/**
+ * Creates a browser runner that executes the generated page function against a live-compatible fixture.
+ *
+ * @param options Page Copy response, control topology, and download-event behavior.
+ * @returns Browser, fixture root, captured invocations, and ordered page events.
+ * @throws {Error} If the fixture directory or generated script cannot be read.
+ */
+async function executableBrowserFixture(options: ArtifactPageOptions) {
+  const root = await mkdtemp(join(tmpdir(), 'collab-executable-browser-'));
+  const paths = collabPaths(root);
+  await ensureCollabDirectories(paths);
+  const invocations: BrowserCommandInvocation[] = [];
+  const pageFixture = artifactPageFixture(options);
+  let childPid = 9000;
+  const browser = new PlaywrightBrowser(paths, root, async (invocation) => {
+    invocations.push(invocation);
+    const invocationChildPid = childPid;
+    childPid += 1;
+    invocation.onChildSpawned?.(invocationChildPid);
+    try {
+      invocation.beforeCommandRelease?.();
+      invocation.onCommandStarted?.();
+      invocation.onCommandSpawned?.(invocationChildPid + 1000);
+      const source = await scriptForInvocation(invocation);
+      const runPageFunction = new Function(`return (${source})`)() as (page: object) => Promise<string>;
+      try {
+        const result = await runPageFunction(pageFixture.page);
+        return output(`### Ran Playwright code\n${JSON.stringify(result)}\n`);
+      } catch (error) {
+        if (error instanceof Error && error.message === 'fixture download event timeout') {
+          throw error;
+        }
+        return output(`### Error\n${error instanceof Error ? error.message : String(error)}\n`);
+      }
+    } finally {
+      invocation.onChildExited?.(invocationChildPid);
+    }
+  });
+  return { browser, events: pageFixture.events, invocations, paths, root };
 }
 
 /**
