@@ -81,6 +81,7 @@ disable-model-invocation: true
 
 - 有证据支持的遗漏、重复或矛盾直接在同一候选稿中修正，并重审受影响内容及其引用。
 - 需要用户决定或补充证据的问题按“未决项影响分级”停止、保持 `draft` 或继续，不得包装成审查通过。
+- 单独执行“最终规格审查”的“产物合同”检查；其他语义检查、格式检查、diff 或写入后复读不能替代，未通过时不得声称最终审查通过。
 - 按 `references/artifact-contract.md` 的“参考资料”检查正文引用与 `REF-*` 声明双向对应。
 - 按 `references/artifact-contract.md` 确定真实的 `status` 和版本。
 
