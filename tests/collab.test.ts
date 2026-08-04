@@ -289,6 +289,39 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     expect(fixture.browser.downloadedArtifacts).toEqual([firstSource, secondSource, secondSource]);
   });
 
+  it('overlaps different task waits and contains a one-sided capture failure', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const firstTask = await fixture.service.start();
+    const secondTask = await fixture.service.start();
+    const firstPrompt = join(fixture.root, 'first.md');
+    const secondPrompt = join(fixture.root, 'second.md');
+    await Promise.all([writeFile(firstPrompt, 'first'), writeFile(secondPrompt, 'second')]);
+    const firstTurn = await fixture.service.send(firstTask.taskId, firstPrompt, []);
+    const secondTurn = await fixture.service.send(secondTask.taskId, secondPrompt, []);
+    fixture.browser.captureDelayMs = 40;
+    fixture.browser.nextCaptureFailureTaskId = firstTask.taskId;
+
+    const [firstResult, secondResult] = await Promise.allSettled([
+      fixture.service.wait(firstTask.taskId, firstTurn.turnId, 20_000, 20_000),
+      fixture.service.wait(secondTask.taskId, secondTurn.turnId, 20_000, 20_000),
+    ]);
+
+    expect(firstResult).toMatchObject({ status: 'rejected' });
+    expect(secondResult).toMatchObject({ status: 'fulfilled', value: { status: 'completed' } });
+    expect(fixture.browser.maxConcurrentCaptures).toBe(2);
+    const store = new StateStore(fixture.paths.database);
+    expect(store.requireTurn(firstTask.taskId, firstTurn.turnId).status).toBe('capturing');
+    expect(store.requireTurn(secondTask.taskId, secondTurn.turnId).status).toBe('completed');
+    expect(store.requireTask(secondTask.taskId).status).toBe('active');
+    store.close();
+
+    fixture.browser.captureDelayMs = 0;
+    await expect(fixture.service.wait(firstTask.taskId, firstTurn.turnId, 1, 20_000)).resolves.toMatchObject({
+      status: 'completed',
+    });
+  });
+
   it('re-reads archive lifecycle state after acquiring the task lease', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
@@ -387,6 +420,9 @@ class FakeBrowser implements CollabBrowser {
   pendingWaitPolls = 0;
   waitPollDelayMs = 0;
   captureDelayMs = 0;
+  activeCaptures = 0;
+  maxConcurrentCaptures = 0;
+  nextCaptureFailureTaskId: string | null = null;
   startCount = 0;
   nextChildPid = 20_000;
 
@@ -529,18 +565,28 @@ class FakeBrowser implements CollabBrowser {
     observer?: BrowserOperationObserver,
   ) {
     this.observe(observer);
-    if (this.captureDelayMs > 0) {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, this.captureDelayMs);
-      });
+    this.activeCaptures += 1;
+    this.maxConcurrentCaptures = Math.max(this.maxConcurrentCaptures, this.activeCaptures);
+    try {
+      if (this.captureDelayMs > 0) {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, this.captureDelayMs);
+        });
+      }
+      if (this.nextCaptureFailureTaskId === taskId) {
+        this.nextCaptureFailureTaskId = null;
+        throw new Error(`injected capture failure for ${taskId}`);
+      }
+      return {
+        response: `response for ${taskId}`,
+        responseHtml: `<p>response for ${taskId}</p>`,
+        artifacts: [...this.responseArtifacts],
+        conversationId: expectedConversationId,
+        conversationUrl: `https://chatgpt.com/c/${expectedConversationId}`,
+      };
+    } finally {
+      this.activeCaptures -= 1;
     }
-    return {
-      response: `response for ${taskId}`,
-      responseHtml: `<p>response for ${taskId}</p>`,
-      artifacts: [...this.responseArtifacts],
-      conversationId: expectedConversationId,
-      conversationUrl: `https://chatgpt.com/c/${expectedConversationId}`,
-    };
   }
 
   /**
