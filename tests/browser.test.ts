@@ -21,6 +21,32 @@ class CommandStartedError extends Error {}
 class CommandNotSpawnedError extends Error {}
 
 describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
+  it('saves the shared authentication seed before closing the one-time setup session', async () => {
+    const fixture = await browserFixture([
+      output('setup opened'),
+      output('login observed'),
+      output('state saved'),
+      output('setup closed'),
+    ]);
+
+    await expect(fixture.browser.setup()).resolves.toBe(fixture.paths.seedState);
+
+    expect(
+      fixture.invocations.map((invocation) => {
+        return invocation.arguments.slice(4);
+      }),
+    ).toEqual([
+      ['open', 'https://chatgpt.com/', '--browser=chrome', '--headed'],
+      ['run-code', '--filename', expect.any(String)],
+      ['state-save', fixture.paths.seedState],
+      ['close'],
+    ]);
+    const sessions = fixture.invocations.map((invocation) => {
+      return invocation.arguments[2];
+    });
+    expect(new Set(sessions).size).toBe(1);
+  });
+
   it('uses the fixed CLI prefix, task output directory, and shared seed without persistence', async () => {
     const fixture = await browserFixture([
       output('### Browser `session-a` opened with pid 4123.'),
