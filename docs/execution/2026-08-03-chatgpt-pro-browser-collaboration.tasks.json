@@ -36,112 +36,166 @@
     {
       "id": "IMP-001",
       "title": "固化共享认证源与独立任务启动",
-      "status": "pending",
+      "status": "in_progress",
       "covers": ["BEH-001", "BEH-002"],
       "verifies": ["VER-001", "VER-002"],
       "dependsOn": [],
       "scope": ["Skill entry", "CLI", "Browser boundary", "State store"],
       "evidence": {
-        "commits": [],
-        "checks": [],
+        "commits": ["c7f25abec5d02053a251f2befd395dc0ebdd734a"],
+        "checks": [
+          "pnpm lint",
+          "pnpm test -- tests/browser.test.ts",
+          "git diff --check",
+          "live 2026-08-05: two distinct named sessions and conversation IDs used the same copied seed; copied seed SHA-256 remained unchanged",
+          "VER-001 live setup intentionally not repeated by coordinator decision; existing seed reuse is not fresh setup evidence"
+        ],
         "reviews": []
       }
     },
     {
       "id": "IMP-002",
       "title": "建立逐 turn 状态与可审计 transcript",
-      "status": "pending",
+      "status": "in_progress",
       "covers": ["BEH-007"],
       "verifies": [],
       "dependsOn": ["IMP-001"],
       "scope": ["State store", "Transcript/artifact store"],
       "evidence": {
-        "commits": [],
-        "checks": [],
+        "commits": ["2d81754353357ab76124654c452cfc6da914e034"],
+        "checks": ["pnpm format:check", "pnpm lint", "pnpm typecheck", "pnpm test", "git diff --check"],
         "reviews": []
       }
     },
     {
       "id": "IMP-003",
       "title": "发送显式输入并支持单归档附件",
-      "status": "pending",
+      "status": "in_progress",
       "covers": ["BEH-003", "BEH-010"],
       "verifies": ["VER-003", "VER-013"],
       "dependsOn": ["IMP-001", "IMP-002"],
       "scope": ["Skill entry", "CLI", "Browser boundary"],
       "evidence": {
-        "commits": [],
-        "checks": [],
+        "commits": ["7dfe15aa2afec0a1fa11c218fcdb48ed56e3b052", "08e1a38c050011f0dbd362e56b7b88d5b2cb3c76"],
+        "checks": [
+          "pnpm format:check",
+          "pnpm lint",
+          "pnpm typecheck",
+          "pnpm test",
+          "git diff --check",
+          "live 2026-08-05: only workspace-selected.txt and outside-selected.txt were uploaded; selected-inputs.tar.gz listed selected-one.txt and nested/selected-two.txt only"
+        ],
         "reviews": []
       }
     },
     {
       "id": "IMP-004",
       "title": "实现单次 wait 的内部观察与原始文字捕获",
-      "status": "pending",
+      "status": "in_progress",
       "covers": ["BEH-004", "BEH-011"],
       "verifies": ["VER-004", "VER-014"],
       "dependsOn": ["IMP-001", "IMP-002", "IMP-003"],
       "scope": ["CLI", "Browser boundary", "Transcript/artifact store"],
       "evidence": {
-        "commits": [],
-        "checks": [],
+        "commits": ["8f10d2c8aca3bd123594071bd7a945ae9972c948"],
+        "checks": [
+          "pnpm format:check",
+          "pnpm lint",
+          "pnpm typecheck",
+          "pnpm test",
+          "git diff --check",
+          "live 2026-08-05: response.md preserved heading, fenced TypeScript, and exact response text; wait returned one terminal result per invocation"
+        ],
         "reviews": []
       }
     },
     {
       "id": "IMP-005",
       "title": "捕获返回文件并支持可恢复发布",
-      "status": "pending",
+      "status": "in_progress",
       "covers": ["BEH-012"],
       "verifies": ["VER-015"],
       "dependsOn": ["IMP-002", "IMP-004"],
       "scope": ["Browser boundary", "State store", "Transcript/artifact store"],
       "evidence": {
-        "commits": [],
-        "checks": [],
+        "commits": ["7a42428d9bf07e7f9fb65c0c71b6133ff322e46d", "08e1a38c050011f0dbd362e56b7b88d5b2cb3c76"],
+        "checks": [
+          "pnpm format:check",
+          "pnpm lint",
+          "pnpm typecheck",
+          "pnpm test",
+          "git diff --check",
+          "Context7 /microsoft/playwright: Download.saveAs, suggestedFilename, url, and Page.download APIs verified",
+          "live 2026-08-05: six unique sandbox targets captured in order; duplicate page.html deduplicated; HTTPS link excluded; same-name targets saved to distinct ordinal directories"
+        ],
         "reviews": []
       }
     },
     {
       "id": "IMP-006",
       "title": "完成同会话多轮与跨任务真实并发",
-      "status": "pending",
+      "status": "in_progress",
       "covers": ["BEH-005", "BEH-006"],
       "verifies": ["VER-005", "VER-006"],
       "dependsOn": ["IMP-003", "IMP-004", "IMP-005"],
       "scope": ["CLI", "Browser boundary", "State store"],
       "evidence": {
-        "commits": [],
-        "checks": [],
+        "commits": ["14d154c2cc7c66fa73da2c37f1e2570624021a60", "08e1a38c050011f0dbd362e56b7b88d5b2cb3c76"],
+        "checks": [
+          "pnpm format:check",
+          "pnpm lint",
+          "pnpm typecheck",
+          "pnpm test",
+          "git diff --check",
+          "live 2026-08-05: retry9 task turns overlapped from 17:50:18Z to 17:50:43Z with distinct task/session/conversation/transcript ownership; task A completed a second turn in the same conversation"
+        ],
         "reviews": []
       }
     },
     {
       "id": "IMP-007",
       "title": "分离本地关闭与 Web conversation 归档",
-      "status": "pending",
+      "status": "in_progress",
       "covers": ["BEH-008", "BEH-009"],
       "verifies": ["VER-008", "VER-009"],
       "dependsOn": ["IMP-001", "IMP-002"],
       "scope": ["CLI", "Browser boundary", "State store"],
       "evidence": {
-        "commits": [],
-        "checks": [],
+        "commits": ["0d2a857b91bf1a3a575f4e5b859f15aa5c56149f", "08e1a38c050011f0dbd362e56b7b88d5b2cb3c76"],
+        "checks": [
+          "pnpm format:check",
+          "pnpm lint",
+          "pnpm typecheck",
+          "pnpm test",
+          "git diff --check",
+          "live 2026-08-05: archived conversation 6a72265c-a564-83ec-9f20-b1f6ed427639 was explicitly unarchived on the next send, submitted and captured on the same canonical ID",
+          "live 2026-08-05: repeated close returned alreadyClosed=true without reopening a browser"
+        ],
         "reviews": []
       }
     },
     {
       "id": "IMP-008",
       "title": "完成中断恢复矩阵与全量运行基线验证",
-      "status": "pending",
+      "status": "in_progress",
       "covers": ["BEH-002", "BEH-004", "BEH-006", "BEH-007", "BEH-012"],
       "verifies": ["VER-007", "VER-010", "VER-011", "VER-012"],
       "dependsOn": ["IMP-001", "IMP-002", "IMP-003", "IMP-004", "IMP-005", "IMP-006", "IMP-007"],
       "scope": ["CLI", "State store", "Transcript/artifact store", "Test suite"],
       "evidence": {
-        "commits": [],
-        "checks": [],
+        "commits": ["0070235444624d30daeb38f232fe47c08707c04b"],
+        "checks": [
+          "pnpm format:check",
+          "pnpm lint",
+          "pnpm typecheck",
+          "pnpm test",
+          "git diff --check",
+          "node v25.9.0 and npx -y node@22.19.0: node:sqlite smoke test and collab.ts help",
+          "npx -y @playwright/cli@0.1.17 --help",
+          "absolute collab.ts help from a temporary host directory without package.json",
+          "node .agents/skills/plan-spec-implementation/scripts/spec-tasks.ts diff --spec docs/specs/2026-08-03-chatgpt-pro-browser-collaboration.md --ledger docs/execution/2026-08-03-chatgpt-pro-browser-collaboration.tasks.json",
+          "node .agents/skills/plan-spec-implementation/scripts/spec-tasks.ts check --ready --spec docs/specs/2026-08-03-chatgpt-pro-browser-collaboration.md --ledger docs/execution/2026-08-03-chatgpt-pro-browser-collaboration.tasks.json returned ok=false because implementation tasks remain in_progress pending review and missing required verification"
+        ],
         "reviews": []
       }
     }
