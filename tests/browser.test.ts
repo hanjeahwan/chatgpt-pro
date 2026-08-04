@@ -581,6 +581,41 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     ).rejects.toMatchObject({ code: 'BROWSER_COMMAND_FAILED' });
   });
 
+  it('keeps the turn capturing when an executed download event times out', async () => {
+    const sourceUrl = 'sandbox:/mnt/data/result.txt';
+    const fixture = await executableBrowserFixture({
+      responseHtml: `<a href="${sourceUrl}">result</a>`,
+      behaviorButtonCount: 1,
+      downloadEvent: 'timeout',
+      suggestedFilename: 'result.txt',
+    });
+    await ensureTaskDirectories(fixture.paths, 'task-a');
+    const targetResponsePath = responsePath(fixture.paths, 'task-a', 'turn-a');
+    const store = new StateStore(fixture.paths.database);
+    store.createTask('task-a', 'session-a');
+    store.beginTurn('task-a', 'turn-a', '/prompt.md', []);
+    store.markSubmissionAttempting('task-a', 'turn-a');
+    store.markTurnPending('task-a', 'turn-a', 'conversation-a', 'https://chatgpt.com/c/conversation-a');
+    store.beginCapture('task-a', 'turn-a', targetResponsePath);
+    store.reconcileArtifactSet('task-a', 'turn-a', [{ sourceUrl, label: 'result' }]);
+    store.close();
+    const service = new CollabService(fixture.paths, fixture.browser);
+
+    await expect(service.wait('task-a', 'turn-a', 1, 5000)).rejects.toMatchObject({
+      code: 'BROWSER_COMMAND_FAILED',
+    });
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireTurn('task-a', 'turn-a')).toMatchObject({
+      status: 'capturing',
+      artifactSetRecorded: true,
+    });
+    expect(reopened.listArtifacts('task-a', 'turn-a')).toMatchObject([
+      { status: 'pending', error: expect.stringContaining('fixture download event timeout') },
+    ]);
+    reopened.close();
+    await expect(readFile(targetResponsePath, 'utf8')).resolves.toBe('fixture response');
+  });
+
   it('keeps the turn capturing when an executed artifact-row mapping drifts', async () => {
     const first = 'sandbox:/mnt/data/first.txt';
     const second = 'sandbox:/mnt/data/second.txt';
