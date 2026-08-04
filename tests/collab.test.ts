@@ -220,6 +220,75 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     });
   });
 
+  it('publishes every ordered artifact without same-name collisions and reuses completed files', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.service.start();
+    const promptPath = join(fixture.root, 'prompt.md');
+    await writeFile(promptPath, 'return files');
+    fixture.browser.responseArtifacts.push(
+      { sourceUrl: 'sandbox:/mnt/data/a/same-name.txt', label: 'first' },
+      { sourceUrl: 'sandbox:/mnt/data/b/same-name.txt', label: 'second' },
+    );
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+
+    const completed = await fixture.service.wait(task.taskId, turn.turnId, 20_000, 20_000);
+    expect(completed.status).toBe('completed');
+    if (completed.status !== 'completed') {
+      throw new Error('fixture response did not complete');
+    }
+    expect(completed.artifactPaths).toHaveLength(2);
+    expect(new Set(completed.artifactPaths).size).toBe(2);
+    expect(
+      await Promise.all(
+        completed.artifactPaths.map((path) => {
+          return readFile(path, 'utf8');
+        }),
+      ),
+    ).toEqual(['artifact for sandbox:/mnt/data/a/same-name.txt', 'artifact for sandbox:/mnt/data/b/same-name.txt']);
+    const store = new StateStore(fixture.paths.database);
+    expect(store.listArtifacts(task.taskId, turn.turnId)).toMatchObject([
+      { ordinal: 1, status: 'completed', filename: 'same-name.txt' },
+      { ordinal: 2, status: 'completed', filename: 'same-name.txt' },
+    ]);
+    store.close();
+
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 1, 1)).resolves.toEqual(completed);
+    expect(fixture.browser.downloadedArtifacts).toHaveLength(2);
+  });
+
+  it('reuses successful artifacts after a later download fails and resumes only pending rows', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.service.start();
+    const promptPath = join(fixture.root, 'prompt.md');
+    await writeFile(promptPath, 'return files with retry');
+    const firstSource = 'sandbox:/mnt/data/first.txt';
+    const secondSource = 'sandbox:/mnt/data/second.txt';
+    fixture.browser.responseArtifacts.push(
+      { sourceUrl: firstSource, label: 'first' },
+      { sourceUrl: secondSource, label: 'second' },
+    );
+    fixture.browser.nextDownloadFailureSourceUrl = secondSource;
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 20_000, 20_000)).rejects.toThrow(
+      /injected download failure/,
+    );
+    const interruptedStore = new StateStore(fixture.paths.database);
+    expect(interruptedStore.listArtifacts(task.taskId, turn.turnId)).toMatchObject([
+      { sourceUrl: firstSource, status: 'completed' },
+      { sourceUrl: secondSource, status: 'pending', error: expect.stringContaining('injected download failure') },
+    ]);
+    interruptedStore.close();
+
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 1, 20_000)).resolves.toMatchObject({
+      status: 'completed',
+      artifactPaths: [expect.any(String), expect.any(String)],
+    });
+    expect(fixture.browser.downloadedArtifacts).toEqual([firstSource, secondSource, secondSource]);
+  });
+
   it('re-reads archive lifecycle state after acquiring the task lease', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
@@ -310,6 +379,9 @@ class FakeBrowser implements CollabBrowser {
   readonly closed: string[] = [];
   readonly archived: string[] = [];
   readonly expectedConversationIds: Array<string | null> = [];
+  readonly responseArtifacts: Array<{ readonly sourceUrl: string; readonly label: string }> = [];
+  readonly downloadedArtifacts: string[] = [];
+  nextDownloadFailureSourceUrl: string | null = null;
   observedOperations = 0;
   nextSendStatus: 'submitted' | 'not-submitted' | 'unknown-submission' | 'unsafe-not-submitted' = 'submitted';
   pendingWaitPolls = 0;
@@ -465,8 +537,47 @@ class FakeBrowser implements CollabBrowser {
     return {
       response: `response for ${taskId}`,
       responseHtml: `<p>response for ${taskId}</p>`,
+      artifacts: [...this.responseArtifacts],
       conversationId: expectedConversationId,
       conversationUrl: `https://chatgpt.com/c/${expectedConversationId}`,
+    };
+  }
+
+  /**
+   * Saves deterministic fake artifact bytes at the task-owned temporary path.
+   *
+   * @param _taskId Unused task identifier.
+   * @param _sessionName Unused named session.
+   * @param _expectedConversationId Unused database-bound identity.
+   * @param _expectedSourceUrls Unused complete recorded artifact set.
+   * @param sourceUrl Exact logical artifact target.
+   * @param temporaryPath Fresh browser save path.
+   * @param _captureTimeoutMs Unused finite capture budget.
+   * @param observer Task-lease child-process observer.
+   * @returns Fake download metadata after writing the bytes.
+   * @throws {Error} If the fake artifact cannot be written.
+   */
+  async downloadArtifact(
+    _taskId: string,
+    _sessionName: string,
+    _expectedConversationId: string,
+    _expectedSourceUrls: readonly string[],
+    sourceUrl: string,
+    temporaryPath: string,
+    _captureTimeoutMs: number,
+    observer?: BrowserOperationObserver,
+  ) {
+    this.observe(observer);
+    this.downloadedArtifacts.push(sourceUrl);
+    if (this.nextDownloadFailureSourceUrl === sourceUrl) {
+      this.nextDownloadFailureSourceUrl = null;
+      throw new Error(`injected download failure for ${sourceUrl}`);
+    }
+    await writeFile(temporaryPath, `artifact for ${sourceUrl}`);
+    return {
+      sourceUrl,
+      suggestedFilename: sourceUrl.slice(sourceUrl.lastIndexOf('/') + 1),
+      downloadUrl: `https://chatgpt.com/backend-api/estuary/content/${this.downloadedArtifacts.length}`,
     };
   }
 

@@ -334,6 +334,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
         kind: 'capture',
         response: 'full response\n```ts\nconst value = 1;\n```',
         responseHtml: '<p>full response</p>',
+        artifacts: [{ sourceUrl: 'sandbox:/mnt/data/result.txt', label: 'result.txt' }],
         conversationId: 'conversation-a',
         conversationUrl: 'https://chatgpt.com/c/conversation-a',
       }),
@@ -348,12 +349,15 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     expect(captured).toMatchObject({
       response: 'full response\n```ts\nconst value = 1;\n```',
       responseHtml: '<p>full response</p>',
+      artifacts: [{ sourceUrl: 'sandbox:/mnt/data/result.txt', label: 'result.txt' }],
     });
     expect(observationSource).toContain('stableCompletedPolls < 6');
     expect(observationSource).toContain("kind: 'observe', status: 'pending'");
     expect(captureSource).toContain('[data-testid="copy-turn-action-button"]');
     expect(captureSource).toContain('navigator.clipboard');
     expect(captureSource).toContain("item.types.includes('text/html')");
+    expect(captureSource).toContain("sourceUrl?.startsWith('sandbox:')");
+    expect(captureSource).toContain("element.querySelectorAll('button.behavior-btn')");
     expect(captureSource).toContain('Copy response omitted text/plain or text/html');
     expect(captureSource).toContain("name: 'Stop answering', exact: true");
     expect(captureSource).toContain('copy.click({ force: true, timeout: Math.max(1, captureDeadline - Date.now()) })');
@@ -364,6 +368,41 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     expect(captureSource).not.toContain('new URL(page.url())');
     expectPageFunctionSyntax(observationSource);
     expectPageFunctionSyntax(captureSource);
+  });
+
+  it('maps one recorded sandbox target to an exact download event and task-owned save path', async () => {
+    const sourceUrl = 'sandbox:/mnt/data/bundle.zip';
+    const fixture = await browserFixture([
+      pageResult({
+        protocol,
+        kind: 'artifact-download',
+        sourceUrl,
+        suggestedFilename: 'bundle.zip',
+        downloadUrl: 'https://chatgpt.com/backend-api/estuary/content/1',
+      }),
+    ]);
+
+    await expect(
+      fixture.browser.downloadArtifact(
+        'task-a',
+        'session-a',
+        'conversation-a',
+        [sourceUrl],
+        sourceUrl,
+        '/tmp/task-a-download',
+        5000,
+      ),
+    ).resolves.toMatchObject({ sourceUrl, suggestedFilename: 'bundle.zip' });
+    const source = await lastScript(fixture.invocations);
+    expect(source).toContain("sourceUrl?.startsWith('sandbox:')");
+    expect(source).toContain('artifact.sourceUrl !== expectedSourceUrls[index]');
+    expect(source).toContain("assistant.locator('button.behavior-btn')");
+    expect(source).toContain("name: 'Download file', exact: true");
+    expect(source).toContain('artifact rows are not an unambiguous target subsequence');
+    expect(source).toContain("page.waitForEvent('download'");
+    expect(source).toContain('await download.saveAs(temporaryPath)');
+    expect(source).not.toContain('querySelectorAll(\'a[href^="https:"]\')');
+    expectPageFunctionSyntax(source);
   });
 
   it('uses only the exact target options button and Archive menu item', async () => {

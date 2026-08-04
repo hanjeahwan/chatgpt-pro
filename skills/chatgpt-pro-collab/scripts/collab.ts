@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   PlaywrightBrowser,
+  type BrowserArtifactDownload,
   type BrowserCaptureResult,
   type BrowserObservationResult,
   type BrowserOperationObserver,
@@ -11,11 +12,16 @@ import {
   type BrowserSessionInfo,
 } from './browser.ts';
 import {
+  artifactPath,
+  artifactTemporaryPath,
   collabPaths,
+  discardArtifactTemporary,
   ensureCollabDirectories,
   ensureTaskDirectories,
   prepareInputs,
+  publishOrVerifyArtifact,
   publishOrVerifyResponse,
+  requireArtifact as requireArtifactFile,
   requireResponse,
   requireSeedState,
   responsePath,
@@ -50,6 +56,16 @@ export interface CollabBrowser {
     captureTimeoutMs: number,
     observer?: BrowserOperationObserver,
   ): Promise<BrowserCaptureResult>;
+  downloadArtifact(
+    taskId: string,
+    sessionName: string,
+    expectedConversationId: string,
+    expectedSourceUrls: readonly string[],
+    sourceUrl: string,
+    temporaryPath: string,
+    captureTimeoutMs: number,
+    observer?: BrowserOperationObserver,
+  ): Promise<BrowserArtifactDownload>;
   closeTask(
     taskId: string,
     sessionName: string,
@@ -259,7 +275,8 @@ export class CollabService {
   ): Promise<WaitResult> {
     requirePositiveMilliseconds('observationWindowMs', observationWindowMs);
     requirePositiveMilliseconds('captureTimeoutMs', captureTimeoutMs);
-    const observationDeadline = performance.now() + observationWindowMs;
+    const waitStartedAt = performance.now();
+    const observationDeadline = waitStartedAt + observationWindowMs;
 
     return this.#withStore(async (store) => {
       const completed = await completedWaitResult(store, taskId, turnId);
@@ -267,7 +284,7 @@ export class CollabService {
         return completed;
       }
       const initialTurn = store.requireTurn(taskId, turnId);
-      let captureDeadline = initialTurn.status === 'capturing' ? performance.now() + captureTimeoutMs : null;
+      let captureDeadline = initialTurn.status === 'capturing' ? waitStartedAt + captureTimeoutMs : null;
 
       while (true) {
         const result = await this.#withTaskOperation(store, taskId, 'wait', async (observer) => {
@@ -310,7 +327,7 @@ export class CollabService {
             }
             assertConversation(taskId, task.conversationId, task.conversationUrl, observed);
             targetResponsePath = responsePath(this.#paths, taskId, turnId);
-            store.beginCapture(taskId, turnId, targetResponsePath, []);
+            store.beginCapture(taskId, turnId, targetResponsePath);
             captureDeadline = performance.now() + captureTimeoutMs;
           }
 
@@ -332,14 +349,27 @@ export class CollabService {
           if (remainingMilliseconds(captureDeadline) === 0) {
             throw new CollabError('CAPTURE_TIMEOUT', `response capture timed out: ${turnId}`);
           }
+          store.reconcileArtifactSet(taskId, turnId, captured.artifacts);
           await publishOrVerifyResponse(targetResponsePath, captured.response);
+          const artifactPaths = await this.#captureArtifacts(
+            store,
+            taskId,
+            turnId,
+            task.playwrightSession,
+            task.conversationId,
+            captureDeadline,
+            observer,
+          );
+          if (remainingMilliseconds(captureDeadline) === 0) {
+            throw new CollabError('CAPTURE_TIMEOUT', `response capture timed out: ${turnId}`);
+          }
           store.completeTurn(taskId, turnId, targetResponsePath);
           return {
             status: 'completed' as const,
             taskId,
             turnId,
             responsePath: targetResponsePath,
-            artifactPaths: [],
+            artifactPaths,
           };
         });
         if (result !== null) {
@@ -348,6 +378,86 @@ export class CollabService {
         await yieldTaskOperation();
       }
     });
+  }
+
+  /**
+   * Reuses completed artifacts and downloads each remaining target within one shared deadline.
+   *
+   * @param store Current process-local state connection.
+   * @param taskId Owning task identifier.
+   * @param turnId Capturing turn identifier.
+   * @param sessionName Owning Playwright named session.
+   * @param conversationId Database-bound conversation identity.
+   * @param captureDeadline Monotonic deadline shared by response and all artifact capture.
+   * @param observer Task-lease child-process observer.
+   * @returns Readable final artifact paths in response order.
+   * @throws {CollabError} If the shared capture deadline expires.
+   * @throws {Error} If download, publication, or persisted artifact state is inconsistent.
+   */
+  async #captureArtifacts(
+    store: StateStore,
+    taskId: string,
+    turnId: string,
+    sessionName: string,
+    conversationId: string,
+    captureDeadline: number,
+    observer: BrowserOperationObserver,
+  ): Promise<readonly string[]> {
+    const artifactPaths: string[] = [];
+    const artifacts = store.listArtifacts(taskId, turnId);
+    const expectedSourceUrls = artifacts.map((artifact) => {
+      return artifact.sourceUrl;
+    });
+    for (const artifact of artifacts) {
+      if (artifact.status === 'completed') {
+        if (artifact.localPath === null) {
+          throw new CollabError('ARTIFACT_INCONSISTENT', `completed artifact has no local path: ${artifact.ordinal}`);
+        }
+        artifactPaths.push(await requireArtifactFile(artifact.localPath));
+        continue;
+      }
+
+      const remainingCaptureMs = remainingMilliseconds(captureDeadline);
+      if (remainingCaptureMs === 0) {
+        throw new CollabError('CAPTURE_TIMEOUT', `artifact capture timed out: ${turnId}`);
+      }
+      const temporaryPath = await artifactTemporaryPath(this.#paths, taskId, turnId, artifact.ordinal);
+      try {
+        const download = await this.#browser.downloadArtifact(
+          taskId,
+          sessionName,
+          conversationId,
+          expectedSourceUrls,
+          artifact.sourceUrl,
+          temporaryPath,
+          remainingCaptureMs,
+          observer,
+        );
+        let target = artifact.localPath;
+        if (target === null) {
+          target = artifactPath(this.#paths, taskId, turnId, artifact.ordinal, download.suggestedFilename);
+          store.setArtifactDestination(taskId, turnId, artifact.ordinal, download.suggestedFilename, target);
+        } else if (artifact.filename === null) {
+          throw new CollabError('ARTIFACT_INCONSISTENT', `pending artifact path has no filename: ${artifact.ordinal}`);
+        }
+        await publishOrVerifyArtifact(temporaryPath, target);
+        if (remainingMilliseconds(captureDeadline) === 0) {
+          throw new CollabError('CAPTURE_TIMEOUT', `artifact capture timed out: ${turnId}`);
+        }
+        store.completeArtifact(taskId, turnId, artifact.ordinal);
+        artifactPaths.push(await requireArtifactFile(target));
+      } catch (error) {
+        await discardArtifactTemporary(temporaryPath);
+        if (store.requireArtifact(taskId, turnId, artifact.ordinal).status === 'pending') {
+          store.recordArtifactError(taskId, turnId, artifact.ordinal, errorMessage(error));
+        }
+        if (remainingMilliseconds(captureDeadline) === 0) {
+          throw new CollabError('CAPTURE_TIMEOUT', `artifact capture timed out: ${turnId}`);
+        }
+        throw error;
+      }
+    }
+    return artifactPaths;
   }
 
   /**
@@ -479,12 +589,19 @@ async function completedWaitResult(store: StateStore, taskId: string, turnId: st
   if (turn.responsePath === null) {
     throw new CollabError('TRANSCRIPT_INCONSISTENT', `completed turn has no response path: ${turnId}`);
   }
+  const artifactPaths: string[] = [];
+  for (const artifact of store.listArtifacts(taskId, turnId)) {
+    if (artifact.status !== 'completed' || artifact.localPath === null) {
+      throw new CollabError('ARTIFACT_INCONSISTENT', `completed turn has incomplete artifact: ${artifact.ordinal}`);
+    }
+    artifactPaths.push(await requireArtifactFile(artifact.localPath));
+  }
   return {
     status: 'completed',
     taskId,
     turnId,
     responsePath: await requireResponse(turn.responsePath),
-    artifactPaths: [],
+    artifactPaths,
   };
 }
 

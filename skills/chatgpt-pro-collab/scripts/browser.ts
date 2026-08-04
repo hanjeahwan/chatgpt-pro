@@ -75,11 +75,23 @@ export type BrowserObservationResult =
       readonly conversationUrl: string;
     };
 
+export interface BrowserArtifactDescription {
+  readonly sourceUrl: string;
+  readonly label: string;
+}
+
 export interface BrowserCaptureResult {
   readonly response: string;
   readonly responseHtml: string;
+  readonly artifacts: readonly BrowserArtifactDescription[];
   readonly conversationId: string;
   readonly conversationUrl: string;
+}
+
+export interface BrowserArtifactDownload {
+  readonly sourceUrl: string;
+  readonly suggestedFilename: string;
+  readonly downloadUrl: string;
 }
 
 interface ProtocolResult {
@@ -124,8 +136,16 @@ interface CaptureProtocolResult extends ProtocolResult {
   readonly kind: 'capture';
   readonly response?: string;
   readonly responseHtml?: string;
+  readonly artifacts?: unknown;
   readonly conversationId?: string;
   readonly conversationUrl?: string;
+}
+
+interface ArtifactDownloadProtocolResult extends ProtocolResult {
+  readonly kind: 'artifact-download';
+  readonly sourceUrl?: string;
+  readonly suggestedFilename?: string;
+  readonly downloadUrl?: string;
 }
 
 interface ArchiveProtocolResult extends ProtocolResult {
@@ -527,6 +547,7 @@ export class PlaywrightBrowser {
     if (
       result.response === undefined ||
       result.responseHtml === undefined ||
+      result.artifacts === undefined ||
       result.conversationId === undefined ||
       result.conversationUrl === undefined
     ) {
@@ -535,8 +556,53 @@ export class PlaywrightBrowser {
     return {
       response: result.response,
       responseHtml: result.responseHtml,
+      artifacts: decodeBrowserArtifacts(result.artifacts),
       conversationId: result.conversationId,
       conversationUrl: result.conversationUrl,
+    };
+  }
+
+  /**
+   * Downloads exactly one recorded logical target from the completed assistant turn.
+   *
+   * @param taskId Owning task identifier.
+   * @param sessionName Owning Playwright named session.
+   * @param expectedConversationId Database-bound conversation identity.
+   * @param expectedSourceUrls Complete recorded artifact set in response order.
+   * @param sourceUrl Exact recorded `sandbox:` logical target.
+   * @param temporaryPath Fresh task-owned browser save path.
+   * @param captureTimeoutMs Remaining finite capture budget.
+   * @param observer Task-lease child-process observer.
+   * @returns Download event metadata after bytes are saved at `temporaryPath`.
+   * @throws {BrowserError} If the target mapping, event, or browser save fails.
+   * @throws {Error} If a local Playwright artifact cannot be written.
+   */
+  async downloadArtifact(
+    taskId: string,
+    sessionName: string,
+    expectedConversationId: string,
+    expectedSourceUrls: readonly string[],
+    sourceUrl: string,
+    temporaryPath: string,
+    captureTimeoutMs: number,
+    observer?: BrowserOperationObserver,
+  ): Promise<BrowserArtifactDownload> {
+    const result = await this.#runCode<ArtifactDownloadProtocolResult>(
+      sessionName,
+      taskId,
+      'download-artifact',
+      downloadArtifactScript(expectedConversationId, expectedSourceUrls, sourceUrl, temporaryPath, captureTimeoutMs),
+      `download artifact ${sourceUrl}`,
+      'artifact-download',
+      observer,
+    );
+    if (result.sourceUrl !== sourceUrl || result.suggestedFilename === undefined || result.downloadUrl === undefined) {
+      throw new BrowserError('BROWSER_PROTOCOL_ERROR', `download artifact ${sourceUrl}`, 'result omitted fields');
+    }
+    return {
+      sourceUrl,
+      suggestedFilename: result.suggestedFilename,
+      downloadUrl: result.downloadUrl,
     };
   }
 
@@ -921,6 +987,42 @@ function parseProtocolResult<T extends ProtocolResult>(stdout: string, expectedK
     }
   }
   throw new BrowserError('PLAYWRIGHT_CONTRACT_DRIFT', `parse ${expectedKind} result`, protocolFailureDetail(stdout));
+}
+
+/**
+ * Validates the page-discovered ordered unique artifact descriptors.
+ *
+ * @param value Unknown protocol field returned by the page function.
+ * @returns Ordered artifact source URLs and first-occurrence labels.
+ * @throws {BrowserError} If the browser protocol field is malformed or duplicated.
+ */
+function decodeBrowserArtifacts(value: unknown): readonly BrowserArtifactDescription[] {
+  if (!Array.isArray(value)) {
+    throw new BrowserError('BROWSER_PROTOCOL_ERROR', 'copy completed response', 'artifacts must be an array');
+  }
+  const artifacts = value.map((item) => {
+    if (
+      typeof item !== 'object' ||
+      item === null ||
+      !('sourceUrl' in item) ||
+      typeof item.sourceUrl !== 'string' ||
+      !item.sourceUrl.startsWith('sandbox:') ||
+      !('label' in item) ||
+      typeof item.label !== 'string'
+    ) {
+      throw new BrowserError('BROWSER_PROTOCOL_ERROR', 'copy completed response', 'artifact descriptor is invalid');
+    }
+    return { sourceUrl: item.sourceUrl, label: item.label };
+  });
+  const uniqueSources = new Set(
+    artifacts.map((artifact) => {
+      return artifact.sourceUrl;
+    }),
+  );
+  if (uniqueSources.size !== artifacts.length) {
+    throw new BrowserError('BROWSER_PROTOCOL_ERROR', 'copy completed response', 'artifact sources are duplicated');
+  }
+  return artifacts;
 }
 
 /**
@@ -1337,6 +1439,25 @@ function captureScript(expectedConversationId: string, captureTimeoutMs: number)
     if (typeof response?.plain !== 'string' || typeof response?.html !== 'string') {
       throw new Error('page contract drift: Copy response omitted text/plain or text/html');
     }
+    const artifacts = await assistant.evaluate((element, html) => {
+      const document = new DOMParser().parseFromString(html, 'text/html');
+      const occurrences = [...document.querySelectorAll('a')].flatMap((anchor) => {
+        const sourceUrl = anchor.getAttribute('href');
+        return sourceUrl?.startsWith('sandbox:')
+          ? [{ sourceUrl, label: (anchor.textContent || '').trim() }]
+          : [];
+      });
+      const behaviorButtons = element.querySelectorAll('button.behavior-btn');
+      if (behaviorButtons.length !== occurrences.length) {
+        throw new Error('page contract drift: sandbox links do not match behavior buttons');
+      }
+      const seen = new Set();
+      return occurrences.filter((artifact) => {
+        if (seen.has(artifact.sourceUrl)) return false;
+        seen.add(artifact.sourceUrl);
+        return true;
+      });
+    }, response.html);
     const capturedUrl = await page.evaluate(() => {
       return { hostname: location.hostname, pathname: location.pathname, origin: location.origin };
     });
@@ -1353,8 +1474,211 @@ function captureScript(expectedConversationId: string, captureTimeoutMs: number)
       kind: 'capture',
       response: response.plain,
       responseHtml: response.html,
+      artifacts,
       conversationId: capturedMatch[1],
       conversationUrl: capturedUrl.origin + '/c/' + capturedMatch[1],
+    });
+  }`;
+}
+
+/**
+ * Builds a strict source-URL-to-control mapping and saves one browser download event.
+ *
+ * @param expectedConversationId Database-bound canonical identity.
+ * @param expectedSourceUrls Complete recorded artifact set in response order.
+ * @param targetSourceUrl Exact recorded `sandbox:` logical target.
+ * @param temporaryPath Fresh task-owned browser save path.
+ * @param captureTimeoutMs Remaining finite capture budget.
+ * @returns A Playwright page function source.
+ * @throws {Error} This pure source builder does not throw.
+ */
+function downloadArtifactScript(
+  expectedConversationId: string,
+  expectedSourceUrls: readonly string[],
+  targetSourceUrl: string,
+  temporaryPath: string,
+  captureTimeoutMs: number,
+): string {
+  return `async (page) => {
+    const expectedConversationId = ${JSON.stringify(expectedConversationId)};
+    const expectedSourceUrls = ${JSON.stringify(expectedSourceUrls)};
+    const targetSourceUrl = ${JSON.stringify(targetSourceUrl)};
+    const temporaryPath = ${JSON.stringify(temporaryPath)};
+    const captureDeadline = Date.now() + ${JSON.stringify(captureTimeoutMs)};
+    const remaining = () => Math.max(1, captureDeadline - Date.now());
+    const url = await page.evaluate(() => {
+      return { hostname: location.hostname, pathname: location.pathname };
+    });
+    const match = /^\\/c\\/([^/?#]+)\\/?$/.exec(url.pathname);
+    if (url.hostname !== 'chatgpt.com' || match === null || match[1] !== expectedConversationId) {
+      throw new Error('conversation identity does not match artifact capture');
+    }
+    const turnSelector = '[data-testid^="conversation-turn-"][data-turn]';
+    const assistantIndex = await page.locator(turnSelector).evaluateAll((elements) => {
+      let latestUser = -1;
+      for (let index = 0; index < elements.length; index += 1) {
+        if (elements[index].getAttribute('data-turn') === 'user') latestUser = index;
+      }
+      if (latestUser < 0 || latestUser + 1 >= elements.length) return -1;
+      return elements[latestUser + 1].getAttribute('data-turn') === 'assistant' ? latestUser + 1 : -1;
+    });
+    if (assistantIndex < 0) throw new Error('page contract drift: target assistant turn is absent');
+    const assistant = page.locator(turnSelector).nth(assistantIndex);
+    const copy = assistant.locator('[data-testid="copy-turn-action-button"]');
+    if (await copy.count() !== 1 || !(await copy.isVisible())) {
+      throw new Error('page contract drift: assistant Copy response is not unique and visible');
+    }
+    const stop = page.getByRole('button', { name: 'Stop answering', exact: true });
+    if (await stop.count() > 0 && await stop.first().isVisible()) {
+      throw new Error('completion state changed before artifact capture');
+    }
+    await page.evaluate(() => {
+      const clipboard = navigator.clipboard;
+      if (!clipboard) throw new Error('page clipboard API is unavailable');
+      const ownWrite = Object.getOwnPropertyDescriptor(clipboard, 'write');
+      const ownWriteText = Object.getOwnPropertyDescriptor(clipboard, 'writeText');
+      globalThis.__chatgptProCollabClipboard = { clipboard, ownWrite, ownWriteText, captured: undefined };
+      Object.defineProperty(clipboard, 'writeText', {
+        configurable: true,
+        value: async () => { globalThis.__chatgptProCollabClipboard.captured = undefined; },
+      });
+      Object.defineProperty(clipboard, 'write', {
+        configurable: true,
+        value: async (items) => {
+          for (const item of items) {
+            if (item.types.includes('text/plain')) {
+              const plain = await (await item.getType('text/plain')).text();
+              const html = item.types.includes('text/html')
+                ? await (await item.getType('text/html')).text()
+                : undefined;
+              globalThis.__chatgptProCollabClipboard.captured = { plain, html };
+              return;
+            }
+          }
+        },
+      });
+    });
+    let response;
+    try {
+      await copy.click({ force: true, timeout: remaining() });
+      await page.waitForFunction(() => {
+        return globalThis.__chatgptProCollabClipboard?.captured !== undefined;
+      }, undefined, { timeout: remaining(), polling: 25 });
+      response = await page.evaluate(() => globalThis.__chatgptProCollabClipboard.captured);
+    } finally {
+      await page.evaluate(() => {
+        const state = globalThis.__chatgptProCollabClipboard;
+        if (!state) return;
+        if (state.ownWrite === undefined) delete state.clipboard.write;
+        else Object.defineProperty(state.clipboard, 'write', state.ownWrite);
+        if (state.ownWriteText === undefined) delete state.clipboard.writeText;
+        else Object.defineProperty(state.clipboard, 'writeText', state.ownWriteText);
+        delete globalThis.__chatgptProCollabClipboard;
+      });
+    }
+    if (typeof response?.plain !== 'string' || typeof response?.html !== 'string') {
+      throw new Error('page contract drift: Copy response omitted text/plain or text/html');
+    }
+    const discovered = await assistant.evaluate((element, html) => {
+      const document = new DOMParser().parseFromString(html, 'text/html');
+      const occurrences = [];
+      for (const anchor of document.querySelectorAll('a')) {
+        const sourceUrl = anchor.getAttribute('href');
+        if (!sourceUrl?.startsWith('sandbox:')) continue;
+        const encodedName = sourceUrl.slice(sourceUrl.lastIndexOf('/') + 1);
+        const basename = decodeURIComponent(encodedName);
+        occurrences.push({
+          sourceUrl,
+          label: (anchor.textContent || '').trim(),
+          basename,
+          occurrenceIndex: occurrences.length,
+        });
+      }
+      const behaviorButtons = element.querySelectorAll('button.behavior-btn');
+      if (behaviorButtons.length !== occurrences.length) {
+        throw new Error('page contract drift: sandbox links do not match behavior buttons');
+      }
+      const seen = new Set();
+      const uniqueTargets = occurrences.filter((artifact) => {
+        if (seen.has(artifact.sourceUrl)) return false;
+        seen.add(artifact.sourceUrl);
+        return true;
+      });
+      return { uniqueTargets };
+    }, response.html);
+    if (
+      discovered.uniqueTargets.length !== expectedSourceUrls.length ||
+      discovered.uniqueTargets.some((artifact, index) => artifact.sourceUrl !== expectedSourceUrls[index])
+    ) {
+      throw new Error('artifact set changed before download');
+    }
+    const targetIndex = discovered.uniqueTargets.findIndex((artifact) => artifact.sourceUrl === targetSourceUrl);
+    if (targetIndex < 0) throw new Error('artifact set changed before download');
+
+    const more = assistant.getByText(/^\\d+ more$/);
+    if (await more.count() > 1) throw new Error('page contract drift: artifact expander is not unique');
+    if (await more.count() === 1 && await more.isVisible()) await more.click();
+    const downloadButtons = assistant.getByRole('button', { name: 'Download file', exact: true });
+    const rowLines = [];
+    for (let index = 0; index < await downloadButtons.count(); index += 1) {
+      const lines = await downloadButtons.nth(index).evaluate((button) => {
+        const assistantElement = button.closest('[data-testid^="conversation-turn-"][data-turn="assistant"]');
+        if (assistantElement === null) {
+          throw new Error('page contract drift: artifact row is outside the target assistant');
+        }
+        let row = button.parentElement;
+        while (row !== null && row !== assistantElement) {
+          const names = [...row.querySelectorAll('button')].map((candidate) => {
+            return (
+              candidate.getAttribute('aria-label') ||
+              candidate.getAttribute('title') ||
+              candidate.textContent ||
+              ''
+            ).trim();
+          });
+          if (names.includes('Open file') && names.includes('Download file')) {
+            return (row.innerText || '').split(/\\n/u).map((line) => line.trim()).filter(Boolean);
+          }
+          row = row.parentElement;
+        }
+        throw new Error('page contract drift: artifact row controls are unrelated');
+      });
+      rowLines.push(lines);
+    }
+    const rowByTargetIndex = new Map();
+    let targetCursor = 0;
+    for (let rowIndex = 0; rowIndex < rowLines.length; rowIndex += 1) {
+      const candidates = discovered.uniqueTargets.slice(targetCursor).filter((artifact) => {
+        return rowLines[rowIndex].includes(artifact.basename);
+      });
+      const candidateNames = new Set(candidates.map((artifact) => artifact.basename));
+      if (candidates.length === 0 || candidateNames.size !== 1) {
+        throw new Error('page contract drift: artifact rows are not an unambiguous target subsequence');
+      }
+      const matchedIndex = discovered.uniqueTargets.findIndex((artifact, index) => {
+        return index >= targetCursor && artifact.basename === candidates[0].basename;
+      });
+      rowByTargetIndex.set(matchedIndex, rowIndex);
+      targetCursor = matchedIndex + 1;
+    }
+
+    const rowIndex = rowByTargetIndex.get(targetIndex);
+    const control = rowIndex === undefined
+      ? assistant.locator('button.behavior-btn').nth(discovered.uniqueTargets[targetIndex].occurrenceIndex)
+      : downloadButtons.nth(rowIndex);
+    if (await control.count() !== 1 || !(await control.isVisible())) {
+      throw new Error('page contract drift: mapped artifact download control is not unique and visible');
+    }
+    const downloadPromise = page.waitForEvent('download', { timeout: remaining() });
+    await control.click({ timeout: remaining() });
+    const download = await downloadPromise;
+    await download.saveAs(temporaryPath);
+    return JSON.stringify({
+      protocol: '${PROTOCOL}',
+      kind: 'artifact-download',
+      sourceUrl: targetSourceUrl,
+      suggestedFilename: download.suggestedFilename(),
+      downloadUrl: download.url(),
     });
   }`;
 }

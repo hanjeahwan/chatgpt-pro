@@ -20,7 +20,8 @@ describe('BEH-002, BEH-005, and BEH-007 state gates', () => {
     store.markSubmissionAttempting('task-a', 'turn-a');
     store.markTurnPending('task-a', 'turn-a', 'conversation-a', 'https://chatgpt.com/c/conversation-a');
     const responsePath = join(root, 'response.md');
-    store.beginCapture('task-a', 'turn-a', responsePath, []);
+    store.beginCapture('task-a', 'turn-a', responsePath);
+    store.reconcileArtifactSet('task-a', 'turn-a', []);
     await writeFile(responsePath, 'response');
     store.completeTurn('task-a', 'turn-a', responsePath);
     store.beginTurn('task-a', 'turn-b', '/other.md', []);
@@ -40,12 +41,17 @@ describe('BEH-002, BEH-005, and BEH-007 state gates', () => {
     store.markSubmissionAttempting('task-a', 'turn-a');
     store.markTurnPending('task-a', 'turn-a', 'conversation-a', 'https://chatgpt.com/c/conversation-a');
     const responsePath = join(root, 'response.md');
-    store.beginCapture('task-a', 'turn-a', responsePath, [
+    store.beginCapture('task-a', 'turn-a', responsePath);
+    store.reconcileArtifactSet('task-a', 'turn-a', [
       { sourceUrl: 'sandbox:/mnt/data/first.txt', label: 'first.txt' },
       { sourceUrl: 'sandbox:/mnt/data/second.txt', label: 'second.txt' },
     ]);
 
-    expect(store.requireTurn('task-a', 'turn-a')).toMatchObject({ status: 'capturing', responsePath });
+    expect(store.requireTurn('task-a', 'turn-a')).toMatchObject({
+      status: 'capturing',
+      responsePath,
+      artifactSetRecorded: true,
+    });
     expect(store.listArtifacts('task-a', 'turn-a')).toMatchObject([
       { ordinal: 1, sourceUrl: 'sandbox:/mnt/data/first.txt', status: 'pending' },
       { ordinal: 2, sourceUrl: 'sandbox:/mnt/data/second.txt', status: 'pending' },
@@ -53,6 +59,11 @@ describe('BEH-002, BEH-005, and BEH-007 state gates', () => {
     expect(() => {
       return store.beginTurn('task-a', 'turn-b', '/other.md', []);
     }).toThrowError(/unfinished turn/);
+    expect(() => {
+      return store.reconcileArtifactSet('task-a', 'turn-a', [
+        { sourceUrl: 'sandbox:/mnt/data/changed.txt', label: 'changed.txt' },
+      ]);
+    }).toThrowError(/artifact set changed/);
 
     await writeFile(responsePath, 'response');
     for (const ordinal of [1, 2]) {

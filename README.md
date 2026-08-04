@@ -10,7 +10,7 @@
 node "<skill-directory>/scripts/collab.ts" setup
 node "<skill-directory>/scripts/collab.ts" start
 node "<skill-directory>/scripts/collab.ts" send <taskId> <promptPath> [attachmentPath ...]
-node "<skill-directory>/scripts/collab.ts" wait <taskId> <turnId>
+node "<skill-directory>/scripts/collab.ts" wait <taskId> <turnId> <observationWindowMs> <captureTimeoutMs>
 node "<skill-directory>/scripts/collab.ts" archive <taskId>
 node "<skill-directory>/scripts/collab.ts" close <taskId>
 ```
@@ -22,16 +22,16 @@ pnpm install
 pnpm collab -- setup
 pnpm collab -- start
 pnpm collab -- send <taskId> <promptPath> [attachmentPath ...]
-pnpm collab -- wait <taskId> <turnId>
+pnpm collab -- wait <taskId> <turnId> <observationWindowMs> <captureTimeoutMs>
 pnpm collab -- archive <taskId>
 pnpm collab -- close <taskId>
 ```
 
-`setup` 保存本机共享认证源。每次 `start` 返回独立 `taskId`；`send` 提交一轮并立即返回 `turnId`；`wait` 在完成后返回原始 `response.md` 路径。同一任务完成一轮后可以继续 send/wait，多个任务可以同时等待。
+`setup` 保存本机共享认证源。每次 `start` 返回独立 `taskId`；`send` 提交一轮并立即返回 `turnId`。`wait` 使用有限观察窗口：到期时返回 `pending` 且不停止远端生成；完成时返回原始 `response.md` 与按回复顺序保存的 `artifactPaths`。捕获超时后可用新的 `captureTimeoutMs` 继续同一 turn。同一任务完成一轮后可以继续 send/wait，多个任务可以同时等待。
 
 ## 数据
 
-认证源、SQLite 协调状态与逐 turn transcript 保存在 `~/.local/chatgpt-pro-collab/`。附件只从命令明确传入的原路径上传；审计记录保存附件绝对路径，不复制附件正文。
+认证源、SQLite 协调状态与逐 turn transcript 保存在 `~/.local/chatgpt-pro-collab/`。附件只从命令明确传入的原路径上传；审计记录保存附件绝对路径，不复制附件正文。回复中的唯一 `sandbox:` 文件保存到各自 turn 的 ordinal 目录；普通 `https:` 链接不下载。
 
 ## 边界
 

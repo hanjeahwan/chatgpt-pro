@@ -28,6 +28,7 @@ export interface TurnRecord {
   readonly promptPath: string;
   readonly attachmentPaths: readonly string[];
   readonly responsePath: string | null;
+  readonly artifactSetRecorded: boolean;
   readonly error: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -104,6 +105,7 @@ export class StateStore {
         prompt_path TEXT NOT NULL,
         attachments_json TEXT NOT NULL,
         response_path TEXT,
+        artifact_set_recorded INTEGER NOT NULL DEFAULT 0 CHECK (artifact_set_recorded IN (0, 1)),
         error TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
@@ -590,34 +592,20 @@ export class StateStore {
   }
 
   /**
-   * Atomically freezes the response path and ordered artifact set before files are published.
+   * Persists the response path and capture state before files are published.
    *
    * @param taskId Owning task identifier.
    * @param turnId Pending turn whose completed assistant response was observed.
    * @param responsePath Deterministic immutable response transcript path.
-   * @param artifacts Ordered unique logical artifact targets discovered in that response.
    * @returns The updated capturing turn.
-   * @throws {StateError} If the turn is not pending or artifact targets are duplicated.
-   * @throws {Error} If SQLite cannot commit the turn and artifact rows together.
+   * @throws {StateError} If the turn is not pending.
+   * @throws {Error} If SQLite cannot commit the transition.
    */
-  beginCapture(
-    taskId: string,
-    turnId: string,
-    responsePath: string,
-    artifacts: readonly ArtifactDescription[],
-  ): TurnRecord {
+  beginCapture(taskId: string, turnId: string, responsePath: string): TurnRecord {
     return this.#transaction(() => {
       const turn = this.requireTurn(taskId, turnId);
       if (turn.status !== 'pending') {
         throw new StateError('TURN_STATE_CONFLICT', `turn is ${turn.status}, expected pending: ${turnId}`);
-      }
-      const sourceUrls = new Set(
-        artifacts.map((artifact) => {
-          return artifact.sourceUrl;
-        }),
-      );
-      if (sourceUrls.size !== artifacts.length) {
-        throw new StateError('ARTIFACT_CONFLICT', `artifact source URLs must be unique: ${turnId}`);
       }
 
       const now = new Date().toISOString();
@@ -628,6 +616,53 @@ export class StateStore {
            WHERE task_id = ? AND id = ?`,
         )
         .run(responsePath, now, taskId, turnId);
+      return this.requireTurn(taskId, turnId);
+    });
+  }
+
+  /**
+   * Freezes or verifies the ordered unique artifact set discovered from Copy response HTML.
+   *
+   * @param taskId Owning task identifier.
+   * @param turnId Capturing turn identifier.
+   * @param artifacts Ordered unique logical artifact targets.
+   * @returns The stable ordered artifact rows.
+   * @throws {StateError} If sources are duplicated or differ from an earlier capture.
+   * @throws {Error} If SQLite cannot commit the artifact set atomically.
+   */
+  reconcileArtifactSet(
+    taskId: string,
+    turnId: string,
+    artifacts: readonly ArtifactDescription[],
+  ): readonly ArtifactRecord[] {
+    return this.#transaction(() => {
+      const turn = this.requireTurn(taskId, turnId);
+      if (turn.status !== 'capturing') {
+        throw new StateError('TURN_STATE_CONFLICT', `turn is ${turn.status}, expected capturing: ${turnId}`);
+      }
+      const sourceUrls = artifacts.map((artifact) => {
+        return artifact.sourceUrl;
+      });
+      if (new Set(sourceUrls).size !== sourceUrls.length) {
+        throw new StateError('ARTIFACT_CONFLICT', `artifact source URLs must be unique: ${turnId}`);
+      }
+      const existing = this.listArtifacts(taskId, turnId);
+      if (turn.artifactSetRecorded) {
+        if (
+          existing.length !== artifacts.length ||
+          existing.some((artifact, index) => {
+            return artifact.sourceUrl !== artifacts[index]?.sourceUrl;
+          })
+        ) {
+          throw new StateError('ARTIFACT_SET_INCONSISTENT', `artifact set changed while capturing: ${turnId}`);
+        }
+        return existing;
+      }
+      if (existing.length !== 0) {
+        throw new StateError('ARTIFACT_SET_INCONSISTENT', `uncommitted artifact rows already exist: ${turnId}`);
+      }
+
+      const now = new Date().toISOString();
       const insert = this.#database.prepare(
         `INSERT INTO artifact (
           task_id, turn_id, ordinal, source_url, label, filename,
@@ -637,7 +672,13 @@ export class StateStore {
       for (const [index, artifact] of artifacts.entries()) {
         insert.run(taskId, turnId, index + 1, artifact.sourceUrl, artifact.label, now, now);
       }
-      return this.requireTurn(taskId, turnId);
+      this.#database
+        .prepare(
+          `UPDATE turn SET artifact_set_recorded = 1, updated_at = ?
+           WHERE task_id = ? AND id = ?`,
+        )
+        .run(now, taskId, turnId);
+      return this.listArtifacts(taskId, turnId);
     });
   }
 
@@ -727,7 +768,7 @@ export class StateStore {
    */
   completeArtifact(taskId: string, turnId: string, ordinal: number): ArtifactRecord {
     const artifact = this.requireArtifact(taskId, turnId, ordinal);
-    if (artifact.localPath === null || !isRegularFile(artifact.localPath)) {
+    if (artifact.filename === null || artifact.localPath === null || !isRegularFile(artifact.localPath)) {
       throw new StateError('ARTIFACT_MISSING', `artifact must exist before completion: ${ordinal}`);
     }
     return this.#transaction(() => {
@@ -767,6 +808,9 @@ export class StateStore {
       }
       if (turn.responsePath !== responsePath) {
         throw new StateError('TRANSCRIPT_INCONSISTENT', `response path changed while capturing: ${turnId}`);
+      }
+      if (!turn.artifactSetRecorded) {
+        throw new StateError('ARTIFACT_INCOMPLETE', `artifact set was not recorded: ${turnId}`);
       }
       const artifacts = this.listArtifacts(taskId, turnId);
       for (const artifact of artifacts) {
@@ -1025,6 +1069,7 @@ function decodeTurn(value: unknown): TurnRecord {
     promptPath: text(row.prompt_path, 'turn.prompt_path'),
     attachmentPaths: attachments,
     responsePath: nullableText(row.response_path, 'turn.response_path'),
+    artifactSetRecorded: booleanInteger(row.artifact_set_recorded, 'turn.artifact_set_recorded'),
     error: nullableText(row.error, 'turn.error'),
     createdAt: text(row.created_at, 'turn.created_at'),
     updatedAt: text(row.updated_at, 'turn.updated_at'),
@@ -1130,6 +1175,24 @@ function integer(value: SQLInputValue | undefined, field: string): number {
     throw new TypeError(`${field} must be a positive integer`);
   }
   return value;
+}
+
+/**
+ * Decodes a STRICT SQLite boolean stored as zero or one.
+ *
+ * @param value Raw column value.
+ * @param field Diagnostic field name.
+ * @returns The boolean value.
+ * @throws {TypeError} If the column is neither zero nor one.
+ */
+function booleanInteger(value: SQLInputValue | undefined, field: string): boolean {
+  if (value === 0) {
+    return false;
+  }
+  if (value === 1) {
+    return true;
+  }
+  throw new TypeError(`${field} must be zero or one`);
 }
 
 /**

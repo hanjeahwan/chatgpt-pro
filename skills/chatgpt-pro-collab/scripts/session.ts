@@ -254,6 +254,22 @@ export async function publishOrVerifyArtifact(temporaryPath: string, target: str
 }
 
 /**
+ * Removes one task-owned temporary download after a failed capture attempt.
+ *
+ * @param temporaryPath Exact path returned by `artifactTemporaryPath`.
+ * @returns Nothing whether the temporary file exists or is already absent.
+ * @throws {Error} If an existing temporary file cannot be removed.
+ */
+export async function discardArtifactTemporary(temporaryPath: string): Promise<void> {
+  await unlink(temporaryPath).catch((error: unknown) => {
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
+      return;
+    }
+    throw error;
+  });
+}
+
+/**
  * Verifies a completed artifact remains a readable regular file.
  *
  * @param localPath Database-recorded artifact path.
