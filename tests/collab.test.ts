@@ -322,6 +322,46 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     });
   });
 
+  it('keeps Web archive and local close as separate transcript-preserving side effects', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.service.start();
+    const promptPath = join(fixture.root, 'prompt.md');
+    await writeFile(promptPath, 'lifecycle separation');
+    fixture.browser.responseArtifacts.push({
+      sourceUrl: 'sandbox:/mnt/data/result.txt',
+      label: 'result.txt',
+    });
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+    const completed = await fixture.service.wait(task.taskId, turn.turnId, 20_000, 20_000);
+    expect(completed.status).toBe('completed');
+    if (completed.status !== 'completed') {
+      throw new Error('fixture response did not complete');
+    }
+
+    await fixture.service.archive(task.taskId);
+    const activeStore = new StateStore(fixture.paths.database);
+    expect(activeStore.requireTask(task.taskId).status).toBe('active');
+    activeStore.close();
+    expect(await readFile(completed.responsePath, 'utf8')).toBe(`response for ${task.taskId}`);
+    await expect(
+      Promise.all(
+        completed.artifactPaths.map((path) => {
+          return readFile(path);
+        }),
+      ),
+    ).resolves.toHaveLength(1);
+
+    await fixture.service.close(task.taskId);
+    const closedStore = new StateStore(fixture.paths.database);
+    expect(closedStore.requireTask(task.taskId).status).toBe('closed');
+    expect(closedStore.requireTurn(task.taskId, turn.turnId).status).toBe('completed');
+    closedStore.close();
+    expect(await readFile(fixture.paths.seedState, 'utf8')).toBe('{}');
+    expect(fixture.browser.conversations.get(task.taskId)).toBe(`conversation-${task.taskId}`);
+    await expect(fixture.service.archive(task.taskId)).rejects.toMatchObject({ code: 'TASK_NOT_ACTIVE' });
+  });
+
   it('re-reads archive lifecycle state after acquiring the task lease', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
