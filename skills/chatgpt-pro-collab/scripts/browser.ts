@@ -67,14 +67,20 @@ export type BrowserSendResult =
       readonly error: string;
     };
 
-export type BrowserWaitResult =
+export type BrowserObservationResult =
   | { readonly status: 'pending' }
   | {
       readonly status: 'completed';
-      readonly response: string;
       readonly conversationId: string;
       readonly conversationUrl: string;
     };
+
+export interface BrowserCaptureResult {
+  readonly response: string;
+  readonly responseHtml: string;
+  readonly conversationId: string;
+  readonly conversationUrl: string;
+}
 
 interface ProtocolResult {
   readonly protocol: typeof PROTOCOL;
@@ -107,10 +113,17 @@ interface SendProtocolResult extends ProtocolResult {
   readonly error?: string;
 }
 
-interface WaitProtocolResult extends ProtocolResult {
-  readonly kind: 'wait';
-  readonly status: BrowserWaitResult['status'];
+interface ObservationProtocolResult extends ProtocolResult {
+  readonly kind: 'observe';
+  readonly status: BrowserObservationResult['status'];
+  readonly conversationId?: string;
+  readonly conversationUrl?: string;
+}
+
+interface CaptureProtocolResult extends ProtocolResult {
+  readonly kind: 'capture';
   readonly response?: string;
+  readonly responseHtml?: string;
   readonly conversationId?: string;
   readonly conversationUrl?: string;
 }
@@ -439,40 +452,89 @@ export class PlaywrightBrowser {
   }
 
   /**
-   * Polls once for the assistant turn after the latest user turn and captures Copy response when complete.
+   * Polls once for the completed assistant turn after the latest user turn.
    *
    * @param taskId Owning task identifier.
    * @param sessionName Owning Playwright named session.
    * @param expectedConversationId Database-bound conversation identity.
+   * @param observationWindowMs Remaining finite observation budget.
    * @param observer Task-lease child-process observer.
-   * @returns Pending, or exact page-local copied text and the re-observed conversation identity.
+   * @returns Pending, or the re-observed completed conversation identity.
    * @throws {BrowserError} If the session exits or the page contract cannot be verified.
    * @throws {Error} If a local Playwright artifact cannot be written.
    */
-  async waitForResponse(
+  async observeResponse(
     taskId: string,
     sessionName: string,
     expectedConversationId: string,
+    observationWindowMs: number,
     observer?: BrowserOperationObserver,
-  ): Promise<BrowserWaitResult> {
-    const result = await this.#runCode<WaitProtocolResult>(
+  ): Promise<BrowserObservationResult> {
+    const result = await this.#runCode<ObservationProtocolResult>(
       sessionName,
       taskId,
-      'wait-response',
-      waitScript(expectedConversationId),
-      'wait for and copy response',
-      'wait',
+      'observe-response',
+      observationScript(expectedConversationId, observationWindowMs),
+      'observe response completion',
+      'observe',
       observer,
     );
     if (result.status === 'pending') {
       return { status: 'pending' };
     }
-    if (result.response === undefined || result.conversationId === undefined || result.conversationUrl === undefined) {
-      throw new BrowserError('BROWSER_PROTOCOL_ERROR', 'wait for and copy response', 'completed wait omitted fields');
+    if (result.conversationId === undefined || result.conversationUrl === undefined) {
+      throw new BrowserError(
+        'BROWSER_PROTOCOL_ERROR',
+        'observe response completion',
+        'completed result omitted fields',
+      );
     }
     return {
       status: 'completed',
+      conversationId: result.conversationId,
+      conversationUrl: result.conversationUrl,
+    };
+  }
+
+  /**
+   * Copies both text representations from the completed target assistant turn inside the page.
+   *
+   * @param taskId Owning task identifier.
+   * @param sessionName Owning Playwright named session.
+   * @param expectedConversationId Database-bound conversation identity.
+   * @param captureTimeoutMs Remaining finite capture budget.
+   * @param observer Task-lease child-process observer.
+   * @returns Exact `text/plain`, matching `text/html`, and re-observed conversation identity.
+   * @throws {BrowserError} If the response changed, a clipboard type is absent, or selectors drift.
+   * @throws {Error} If a local Playwright artifact cannot be written.
+   */
+  async captureResponse(
+    taskId: string,
+    sessionName: string,
+    expectedConversationId: string,
+    captureTimeoutMs: number,
+    observer?: BrowserOperationObserver,
+  ): Promise<BrowserCaptureResult> {
+    const result = await this.#runCode<CaptureProtocolResult>(
+      sessionName,
+      taskId,
+      'capture-response',
+      captureScript(expectedConversationId, captureTimeoutMs),
+      'copy completed response',
+      'capture',
+      observer,
+    );
+    if (
+      result.response === undefined ||
+      result.responseHtml === undefined ||
+      result.conversationId === undefined ||
+      result.conversationUrl === undefined
+    ) {
+      throw new BrowserError('BROWSER_PROTOCOL_ERROR', 'copy completed response', 'capture result omitted fields');
+    }
+    return {
       response: result.response,
+      responseHtml: result.responseHtml,
       conversationId: result.conversationId,
       conversationUrl: result.conversationUrl,
     };
@@ -879,6 +941,7 @@ function protocolFailureDetail(stdout: string): string {
 /**
  * Builds the indefinite setup login gate from directly observable page state.
  *
+ * @param observationWindowMs Remaining finite observation budget.
  * @returns A Playwright page function source.
  * @throws {Error} This pure source builder does not throw.
  */
@@ -1108,15 +1171,18 @@ function sendScript(expectedConversationId: string | null, prompt: string): stri
 }
 
 /**
- * Builds the completion gate and page-local clipboard interception for one pending turn.
+ * Builds one bounded completion observation for the assistant after the latest user turn.
  *
  * @param expectedConversationId Database-bound canonical identity.
+ * @param observationWindowMs Remaining finite observation budget.
  * @returns A Playwright page function source.
  * @throws {Error} This pure source builder does not throw.
  */
-function waitScript(expectedConversationId: string): string {
+function observationScript(expectedConversationId: string, observationWindowMs: number): string {
   return `async (page) => {
     const expectedConversationId = ${JSON.stringify(expectedConversationId)};
+    const observationWindowMs = ${JSON.stringify(observationWindowMs)};
+    const observationDeadline = Date.now() + observationWindowMs;
     const url = await page.evaluate(() => {
       return { hostname: location.hostname, pathname: location.pathname, origin: location.origin };
     });
@@ -1129,7 +1195,7 @@ function waitScript(expectedConversationId: string): string {
     let assistantIndex = -1;
     let stableCompletedPolls = 0;
     let polls = 0;
-    while (stableCompletedPolls < 6 && polls < 10) {
+    while (stableCompletedPolls < 6 && polls < 10 && Date.now() < observationDeadline) {
       polls += 1;
       const candidateIndex = await page.locator(turnSelector).evaluateAll((elements) => {
         let latestUser = -1;
@@ -1154,16 +1220,72 @@ function waitScript(expectedConversationId: string): string {
         assistantIndex = -1;
         stableCompletedPolls = 0;
       }
-      if (stableCompletedPolls < 6) await page.waitForTimeout(500);
+      if (stableCompletedPolls < 6 && Date.now() < observationDeadline) {
+        await page.waitForTimeout(Math.min(500, Math.max(1, observationDeadline - Date.now())));
+      }
     }
     if (stableCompletedPolls < 6) {
-      return JSON.stringify({ protocol: '${PROTOCOL}', kind: 'wait', status: 'pending' });
+      return JSON.stringify({ protocol: '${PROTOCOL}', kind: 'observe', status: 'pending' });
     }
+    const completedUrl = await page.evaluate(() => {
+      return { hostname: location.hostname, pathname: location.pathname, origin: location.origin };
+    });
+    const completedMatch = /^\\/c\\/([^/?#]+)\\/?$/.exec(completedUrl.pathname);
+    if (
+      completedUrl.hostname !== 'chatgpt.com' ||
+      completedMatch === null ||
+      completedMatch[1] !== expectedConversationId
+    ) {
+      throw new Error('conversation identity changed while observing response completion');
+    }
+    return JSON.stringify({
+      protocol: '${PROTOCOL}',
+      kind: 'observe',
+      status: 'completed',
+      conversationId: completedMatch[1],
+      conversationUrl: completedUrl.origin + '/c/' + completedMatch[1],
+    });
+  }`;
+}
+
+/**
+ * Builds page-local Copy response interception for the already completed target assistant turn.
+ *
+ * @param expectedConversationId Database-bound canonical identity.
+ * @param captureTimeoutMs Remaining finite capture budget.
+ * @returns A Playwright page function source.
+ * @throws {Error} This pure source builder does not throw.
+ */
+function captureScript(expectedConversationId: string, captureTimeoutMs: number): string {
+  return `async (page) => {
+    const expectedConversationId = ${JSON.stringify(expectedConversationId)};
+    const captureTimeoutMs = ${JSON.stringify(captureTimeoutMs)};
+    const captureDeadline = Date.now() + captureTimeoutMs;
+    const url = await page.evaluate(() => {
+      return { hostname: location.hostname, pathname: location.pathname };
+    });
+    const match = /^\\/c\\/([^/?#]+)\\/?$/.exec(url.pathname);
+    if (url.hostname !== 'chatgpt.com' || match === null || match[1] !== expectedConversationId) {
+      throw new Error('conversation identity does not match the capturing turn');
+    }
+    const turnSelector = '[data-testid^="conversation-turn-"][data-turn]';
+    const copySelector = '[data-testid="copy-turn-action-button"]';
+    const assistantIndex = await page.locator(turnSelector).evaluateAll((elements) => {
+      let latestUser = -1;
+      for (let index = 0; index < elements.length; index += 1) {
+        if (elements[index].getAttribute('data-turn') === 'user') latestUser = index;
+      }
+      if (latestUser < 0 || latestUser + 1 >= elements.length) return -1;
+      return elements[latestUser + 1].getAttribute('data-turn') === 'assistant' ? latestUser + 1 : -1;
+    });
+    if (assistantIndex < 0) throw new Error('page contract drift: target assistant turn is absent');
     const assistant = page.locator(turnSelector).nth(assistantIndex);
     const copy = assistant.locator(copySelector);
-    if (await copy.count() !== 1) throw new Error('page contract drift: assistant Copy response is not unique');
-    const finalStop = page.getByRole('button', { name: 'Stop answering', exact: true });
-    if (await finalStop.count() > 0 && await finalStop.first().isVisible()) {
+    if (await copy.count() !== 1 || !(await copy.isVisible())) {
+      throw new Error('page contract drift: assistant Copy response is not unique and visible');
+    }
+    const stop = page.getByRole('button', { name: 'Stop answering', exact: true });
+    if (await stop.count() > 0 && await stop.first().isVisible()) {
       throw new Error('completion state changed before Copy response capture');
     }
     await page.evaluate(() => {
@@ -1174,14 +1296,20 @@ function waitScript(expectedConversationId: string): string {
       globalThis.__chatgptProCollabClipboard = { clipboard, ownWrite, ownWriteText, captured: undefined };
       Object.defineProperty(clipboard, 'writeText', {
         configurable: true,
-        value: async (text) => { globalThis.__chatgptProCollabClipboard.captured = String(text); },
+        value: async (text) => {
+          globalThis.__chatgptProCollabClipboard.captured = { plain: String(text), html: undefined };
+        },
       });
       Object.defineProperty(clipboard, 'write', {
         configurable: true,
         value: async (items) => {
           for (const item of items) {
             if (item.types.includes('text/plain')) {
-              globalThis.__chatgptProCollabClipboard.captured = await (await item.getType('text/plain')).text();
+              const plain = await (await item.getType('text/plain')).text();
+              const html = item.types.includes('text/html')
+                ? await (await item.getType('text/html')).text()
+                : undefined;
+              globalThis.__chatgptProCollabClipboard.captured = { plain, html };
               return;
             }
           }
@@ -1190,10 +1318,10 @@ function waitScript(expectedConversationId: string): string {
     });
     let response;
     try {
-      await copy.click({ force: true, timeout: 5000 });
+      await copy.click({ force: true, timeout: Math.max(1, captureDeadline - Date.now()) });
       await page.waitForFunction(() => {
         return globalThis.__chatgptProCollabClipboard?.captured !== undefined;
-      }, undefined, { timeout: 5000, polling: 25 });
+      }, undefined, { timeout: Math.max(1, captureDeadline - Date.now()), polling: 25 });
       response = await page.evaluate(() => globalThis.__chatgptProCollabClipboard.captured);
     } finally {
       await page.evaluate(() => {
@@ -1205,6 +1333,9 @@ function waitScript(expectedConversationId: string): string {
         else Object.defineProperty(state.clipboard, 'writeText', state.ownWriteText);
         delete globalThis.__chatgptProCollabClipboard;
       });
+    }
+    if (typeof response?.plain !== 'string' || typeof response?.html !== 'string') {
+      throw new Error('page contract drift: Copy response omitted text/plain or text/html');
     }
     const capturedUrl = await page.evaluate(() => {
       return { hostname: location.hostname, pathname: location.pathname, origin: location.origin };
@@ -1219,9 +1350,9 @@ function waitScript(expectedConversationId: string): string {
     }
     return JSON.stringify({
       protocol: '${PROTOCOL}',
-      kind: 'wait',
-      status: 'completed',
-      response,
+      kind: 'capture',
+      response: response.plain,
+      responseHtml: response.html,
       conversationId: capturedMatch[1],
       conversationUrl: capturedUrl.origin + '/c/' + capturedMatch[1],
     });

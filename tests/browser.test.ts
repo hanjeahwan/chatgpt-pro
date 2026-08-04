@@ -324,33 +324,46 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     const fixture = await browserFixture([
       pageResult({
         protocol,
-        kind: 'wait',
+        kind: 'observe',
         status: 'completed',
+        conversationId: 'conversation-a',
+        conversationUrl: 'https://chatgpt.com/c/conversation-a',
+      }),
+      pageResult({
+        protocol,
+        kind: 'capture',
         response: 'full response\n```ts\nconst value = 1;\n```',
+        responseHtml: '<p>full response</p>',
         conversationId: 'conversation-a',
         conversationUrl: 'https://chatgpt.com/c/conversation-a',
       }),
     ]);
 
-    const result = await fixture.browser.waitForResponse('task-a', 'session-a', 'conversation-a');
-    const source = await lastScript(fixture.invocations);
+    const observed = await fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 5000);
+    const captured = await fixture.browser.captureResponse('task-a', 'session-a', 'conversation-a', 5000);
+    const observationSource = await scriptForInvocation(fixture.invocations[0]);
+    const captureSource = await scriptForInvocation(fixture.invocations[1]);
 
-    expect(result).toMatchObject({
-      status: 'completed',
+    expect(observed).toMatchObject({ status: 'completed' });
+    expect(captured).toMatchObject({
       response: 'full response\n```ts\nconst value = 1;\n```',
+      responseHtml: '<p>full response</p>',
     });
-    expect(source).toContain('[data-testid="copy-turn-action-button"]');
-    expect(source).toContain('navigator.clipboard');
-    expect(source).toContain("name: 'Stop answering', exact: true");
-    expect(source).toContain('stableCompletedPolls < 6');
-    expect(source).toContain('copy.click({ force: true, timeout: 5000 })');
-    expect(source).toContain("kind: 'wait', status: 'pending'");
-    expect(source).toContain('const capturedUrl = await page.evaluate');
-    expect(source).toContain('capturedMatch[1] !== expectedConversationId');
-    expect(source).not.toContain('pbpaste');
-    expect(source).not.toContain('osascript');
-    expect(source).not.toContain('new URL(page.url())');
-    expectPageFunctionSyntax(source);
+    expect(observationSource).toContain('stableCompletedPolls < 6');
+    expect(observationSource).toContain("kind: 'observe', status: 'pending'");
+    expect(captureSource).toContain('[data-testid="copy-turn-action-button"]');
+    expect(captureSource).toContain('navigator.clipboard');
+    expect(captureSource).toContain("item.types.includes('text/html')");
+    expect(captureSource).toContain('Copy response omitted text/plain or text/html');
+    expect(captureSource).toContain("name: 'Stop answering', exact: true");
+    expect(captureSource).toContain('copy.click({ force: true, timeout: Math.max(1, captureDeadline - Date.now()) })');
+    expect(captureSource).toContain('const capturedUrl = await page.evaluate');
+    expect(captureSource).toContain('capturedMatch[1] !== expectedConversationId');
+    expect(captureSource).not.toContain('pbpaste');
+    expect(captureSource).not.toContain('osascript');
+    expect(captureSource).not.toContain('new URL(page.url())');
+    expectPageFunctionSyntax(observationSource);
+    expectPageFunctionSyntax(captureSource);
   });
 
   it('uses only the exact target options button and Archive menu item', async () => {

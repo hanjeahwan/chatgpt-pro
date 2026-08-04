@@ -4,10 +4,11 @@ import { fileURLToPath } from 'node:url';
 
 import {
   PlaywrightBrowser,
+  type BrowserCaptureResult,
+  type BrowserObservationResult,
   type BrowserOperationObserver,
   type BrowserSendResult,
   type BrowserSessionInfo,
-  type BrowserWaitResult,
 } from './browser.ts';
 import {
   collabPaths,
@@ -35,12 +36,20 @@ export interface CollabBrowser {
     observer?: BrowserOperationObserver,
     beforeSubmissionRelease?: () => void,
   ): Promise<BrowserSendResult>;
-  waitForResponse(
+  observeResponse(
     taskId: string,
     sessionName: string,
     expectedConversationId: string,
+    observationWindowMs: number,
     observer?: BrowserOperationObserver,
-  ): Promise<BrowserWaitResult>;
+  ): Promise<BrowserObservationResult>;
+  captureResponse(
+    taskId: string,
+    sessionName: string,
+    expectedConversationId: string,
+    captureTimeoutMs: number,
+    observer?: BrowserOperationObserver,
+  ): Promise<BrowserCaptureResult>;
   closeTask(
     taskId: string,
     sessionName: string,
@@ -66,11 +75,19 @@ export interface SendResult {
   readonly turnId: string;
 }
 
-export interface WaitResult {
-  readonly taskId: string;
-  readonly turnId: string;
-  readonly responsePath: string;
-}
+export type WaitResult =
+  | {
+      readonly status: 'pending';
+      readonly taskId: string;
+      readonly turnId: string;
+    }
+  | {
+      readonly status: 'completed';
+      readonly taskId: string;
+      readonly turnId: string;
+      readonly responsePath: string;
+      readonly artifactPaths: readonly string[];
+    };
 
 export class CollabError extends Error {
   readonly code: string;
@@ -224,20 +241,33 @@ export class CollabService {
   }
 
   /**
-   * Captures and persists a pending response, or returns the completed path idempotently.
+   * Observes within one finite window, then captures within one independent finite deadline.
    *
    * @param taskId Active task identifier.
    * @param turnId Submitted turn identifier.
-   * @returns The immutable response path.
-   * @throws {CollabError} If the turn is not pending or state lacks conversation identity.
+   * @param observationWindowMs Maximum reply-generation observation window for this call.
+   * @param captureTimeoutMs Maximum response capture duration after completion is observed.
+   * @returns Pending at normal observation expiry, or immutable completed transcript paths.
+   * @throws {CollabError} If durations are invalid, capture times out, or state is inconsistent.
    * @throws {Error} If browser capture, transcript write, or database completion fails.
    */
-  async wait(taskId: string, turnId: string): Promise<WaitResult> {
+  async wait(
+    taskId: string,
+    turnId: string,
+    observationWindowMs: number,
+    captureTimeoutMs: number,
+  ): Promise<WaitResult> {
+    requirePositiveMilliseconds('observationWindowMs', observationWindowMs);
+    requirePositiveMilliseconds('captureTimeoutMs', captureTimeoutMs);
+    const observationDeadline = performance.now() + observationWindowMs;
+
     return this.#withStore(async (store) => {
       const completed = await completedWaitResult(store, taskId, turnId);
       if (completed !== null) {
         return completed;
       }
+      const initialTurn = store.requireTurn(taskId, turnId);
+      let captureDeadline = initialTurn.status === 'capturing' ? performance.now() + captureTimeoutMs : null;
 
       while (true) {
         const result = await this.#withTaskOperation(store, taskId, 'wait', async (observer) => {
@@ -250,30 +280,67 @@ export class CollabService {
           if (task.status !== 'active') {
             throw new CollabError('TASK_NOT_ACTIVE', `task is ${task.status}: ${taskId}`);
           }
-          if (turn.status !== 'pending') {
-            throw new CollabError('TURN_NOT_PENDING', `turn is ${turn.status}: ${turnId}`);
+          if (turn.status !== 'pending' && turn.status !== 'capturing') {
+            throw new CollabError('TURN_NOT_CAPTURABLE', `turn is ${turn.status}: ${turnId}`);
           }
           if (task.conversationId === null || task.conversationUrl === null) {
-            throw new CollabError('TRANSCRIPT_INCONSISTENT', `pending task has no conversation: ${taskId}`);
+            throw new CollabError('TRANSCRIPT_INCONSISTENT', `capturable task has no conversation: ${taskId}`);
+          }
+          if (turn.status === 'capturing' && captureDeadline === null) {
+            captureDeadline = performance.now() + captureTimeoutMs;
           }
 
-          const captured = await this.#browser.waitForResponse(
+          let targetResponsePath = turn.responsePath;
+          if (turn.status === 'pending') {
+            const remainingObservationMs = remainingMilliseconds(observationDeadline);
+            if (remainingObservationMs === 0) {
+              return { status: 'pending' as const, taskId, turnId };
+            }
+            const observed = await this.#browser.observeResponse(
+              taskId,
+              task.playwrightSession,
+              task.conversationId,
+              remainingObservationMs,
+              observer,
+            );
+            if (observed.status === 'pending') {
+              return remainingMilliseconds(observationDeadline) === 0
+                ? { status: 'pending' as const, taskId, turnId }
+                : null;
+            }
+            assertConversation(taskId, task.conversationId, task.conversationUrl, observed);
+            targetResponsePath = responsePath(this.#paths, taskId, turnId);
+            store.beginCapture(taskId, turnId, targetResponsePath, []);
+            captureDeadline = performance.now() + captureTimeoutMs;
+          }
+
+          if (targetResponsePath === null || captureDeadline === null) {
+            throw new CollabError('TRANSCRIPT_INCONSISTENT', `capturing turn has no response deadline: ${turnId}`);
+          }
+          const remainingCaptureMs = remainingMilliseconds(captureDeadline);
+          if (remainingCaptureMs === 0) {
+            throw new CollabError('CAPTURE_TIMEOUT', `response capture timed out: ${turnId}`);
+          }
+          const captured = await this.#browser.captureResponse(
             taskId,
             task.playwrightSession,
             task.conversationId,
+            remainingCaptureMs,
             observer,
           );
-          if (captured.status === 'pending') {
-            return null;
+          assertConversation(taskId, task.conversationId, task.conversationUrl, captured);
+          if (remainingMilliseconds(captureDeadline) === 0) {
+            throw new CollabError('CAPTURE_TIMEOUT', `response capture timed out: ${turnId}`);
           }
-          if (captured.conversationId !== task.conversationId || captured.conversationUrl !== task.conversationUrl) {
-            throw new CollabError('CONVERSATION_MISMATCH', `wait observed a different conversation: ${taskId}`);
-          }
-          const targetResponsePath = responsePath(this.#paths, taskId, turnId);
-          store.beginCapture(taskId, turnId, targetResponsePath, []);
           await publishOrVerifyResponse(targetResponsePath, captured.response);
           store.completeTurn(taskId, turnId, targetResponsePath);
-          return { taskId, turnId, responsePath: targetResponsePath };
+          return {
+            status: 'completed' as const,
+            taskId,
+            turnId,
+            responsePath: targetResponsePath,
+            artifactPaths: [],
+          };
         });
         if (result !== null) {
           return result;
@@ -413,10 +480,58 @@ async function completedWaitResult(store: StateStore, taskId: string, turnId: st
     throw new CollabError('TRANSCRIPT_INCONSISTENT', `completed turn has no response path: ${turnId}`);
   }
   return {
+    status: 'completed',
     taskId,
     turnId,
     responsePath: await requireResponse(turn.responsePath),
+    artifactPaths: [],
   };
+}
+
+/**
+ * Verifies that a browser result stayed on the database-bound conversation.
+ *
+ * @param taskId Task used in failure diagnostics.
+ * @param expectedConversationId Database-bound canonical identity.
+ * @param expectedConversationUrl Database-bound canonical URL.
+ * @param observed Browser-observed identity after an operation.
+ * @returns Nothing for an exact identity match.
+ * @throws {CollabError} If the browser crossed into another conversation.
+ */
+function assertConversation(
+  taskId: string,
+  expectedConversationId: string,
+  expectedConversationUrl: string,
+  observed: { readonly conversationId: string; readonly conversationUrl: string },
+): void {
+  if (observed.conversationId !== expectedConversationId || observed.conversationUrl !== expectedConversationUrl) {
+    throw new CollabError('CONVERSATION_MISMATCH', `wait observed a different conversation: ${taskId}`);
+  }
+}
+
+/**
+ * Enforces the finite positive integer duration contract at the service boundary.
+ *
+ * @param name Parameter name used in stable diagnostics.
+ * @param value Unknown numeric value supplied by a direct caller.
+ * @returns Nothing for a finite positive safe integer.
+ * @throws {CollabError} If the duration is zero, fractional, unsafe, or non-finite.
+ */
+function requirePositiveMilliseconds(name: string, value: number): void {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new CollabError('USAGE', `${name} must be a finite positive integer`);
+  }
+}
+
+/**
+ * Converts a monotonic deadline to a positive integer browser budget.
+ *
+ * @param deadline Monotonic `performance.now()` deadline.
+ * @returns Zero after expiry, otherwise the remaining whole-millisecond ceiling.
+ * @throws {Error} This pure arithmetic helper does not throw for a finite deadline.
+ */
+function remainingMilliseconds(deadline: number): number {
+  return Math.max(0, Math.ceil(deadline - performance.now()));
 }
 
 /**
@@ -509,9 +624,20 @@ export async function runCli(
         return 0;
       }
       case 'wait': {
-        requireParameterCount(command, parameters, 2);
-        const [taskId, turnId] = parameters;
-        io.writeOutput(jsonLine({ ok: true, command, ...(await service.wait(required(taskId), required(turnId))) }));
+        requireParameterCount(command, parameters, 4);
+        const [taskId, turnId, observationWindowMs, captureTimeoutMs] = parameters;
+        io.writeOutput(
+          jsonLine({
+            ok: true,
+            command,
+            ...(await service.wait(
+              required(taskId),
+              required(turnId),
+              parsePositiveMilliseconds('observationWindowMs', required(observationWindowMs)),
+              parsePositiveMilliseconds('captureTimeoutMs', required(captureTimeoutMs)),
+            )),
+          }),
+        );
         return 0;
       }
       case 'close': {
@@ -582,6 +708,23 @@ function required(value: string | undefined): string {
 }
 
 /**
+ * Parses one CLI duration without accepting exponent, sign, whitespace, or fractions.
+ *
+ * @param name Parameter name used in usage diagnostics.
+ * @param value Positional CLI value.
+ * @returns A finite positive safe integer count of milliseconds.
+ * @throws {CollabError} If the value is outside the duration grammar.
+ */
+function parsePositiveMilliseconds(name: string, value: string): number {
+  if (!/^[1-9]\d*$/u.test(value)) {
+    throw usageError(`${name} must be a finite positive integer`);
+  }
+  const milliseconds = Number(value);
+  requirePositiveMilliseconds(name, milliseconds);
+  return milliseconds;
+}
+
+/**
  * Creates one stable usage failure.
  *
  * @param message Concrete signature problem.
@@ -616,7 +759,7 @@ Usage:
   node "<skill-directory>/scripts/collab.ts" setup
   node "<skill-directory>/scripts/collab.ts" start
   node "<skill-directory>/scripts/collab.ts" send <taskId> <promptPath> [attachmentPath ...]
-  node "<skill-directory>/scripts/collab.ts" wait <taskId> <turnId>
+  node "<skill-directory>/scripts/collab.ts" wait <taskId> <turnId> <observationWindowMs> <captureTimeoutMs>
   node "<skill-directory>/scripts/collab.ts" close <taskId>
   node "<skill-directory>/scripts/collab.ts" archive <taskId>
 `;

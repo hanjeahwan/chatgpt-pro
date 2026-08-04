@@ -5,7 +5,7 @@ description: 当用户明确要求通过 ChatGPT Pro Web 协作处理当前本�
 
 # ChatGPT Pro Collab
 
-加载本 Skill 时，以 `SKILL.md` 所在绝对目录替换下列命令中的 `<skill-directory>`。保持宿主项目为当前工作目录，直接执行 `node "<skill-directory>/scripts/collab.ts" <command>`；不要切换到 Skill 目录，也不要调用宿主项目的 package script。把返回的 `taskId`、`turnId` 和 `responsePath` 作为后续宿主流程的显式输入。
+加载本 Skill 时，以 `SKILL.md` 所在绝对目录替换下列命令中的 `<skill-directory>`。保持宿主项目为当前工作目录，直接执行 `node "<skill-directory>/scripts/collab.ts" <command>`；不要切换到 Skill 目录，也不要调用宿主项目的 package script。把返回的 `taskId`、`turnId`、`responsePath` 和 `artifactPaths` 作为后续宿主流程的显式输入。
 
 ## 1. 完成一次设置
 
@@ -51,10 +51,12 @@ unzip -Z1 <archive.zip>
 
 ```sh
 node "<skill-directory>/scripts/collab.ts" send <taskId> <promptPath> [attachmentPath ...]
-node "<skill-directory>/scripts/collab.ts" wait <taskId> <turnId>
+node "<skill-directory>/scripts/collab.ts" wait <taskId> <turnId> <observationWindowMs> <captureTimeoutMs>
 ```
 
-`send` 返回 `turnId` 后即可操作其他任务；不要等待时再次发送同一任务。`wait` 返回 `responsePath` 后读取原始 `response.md`，由宿主决定如何解释、验证或使用；不要让 Collab 自动执行回复内容。前一轮完成后，可在同一 `taskId` 再次 send/wait 以保留 conversation 上下文。
+`send` 返回 `turnId` 后即可操作其他任务；不要等待时再次发送同一任务。两个时长都必须是有限正整数毫秒值：观察窗口只约束回复生成，捕获超时约束已完成回复的文字与返回文件落盘。
+
+每个观察窗口只调用一次 `wait`，不要在调用尚未返回时另行轮询浏览器。结果为 `pending` 时，远端生成与本地任务保持活动；需要继续观察时，再由宿主显式发起一个新窗口。结果为 `completed` 时读取原始 `response.md` 和 `artifactPaths`，由宿主决定如何解释、验证或使用；不要让 Collab 自动执行回复内容。捕获超时会返回错误，后续 `wait` 使用新的 `captureTimeoutMs` 继续同一 turn。前一轮完成后，可在同一 `taskId` 再次 send/wait 以保留 conversation 上下文。
 
 ## 5. 管理生命周期
 
@@ -77,7 +79,7 @@ node "<skill-directory>/scripts/collab.ts" close <taskId>
 
 - [ ] 本轮 prompt 和每个附件是否都由宿主明确选择？
 - [ ] 使用归档时，是否只包含已选输入，并已核对实际成员？
-- [ ] 是否保存了每次成功返回的 `taskId`、`turnId` 和 `responsePath`？
+- [ ] 是否保存了每次成功返回的 `taskId`、`turnId`、`responsePath` 和 `artifactPaths`？
 - [ ] 是否在读取原始回复后由宿主独立验证，而未让 Collab 自动执行？
 - [ ] 是否只在用户明确要求时归档 conversation？
 - [ ] 不再使用的活动任务是否已显式关闭？

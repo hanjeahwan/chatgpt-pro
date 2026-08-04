@@ -26,18 +26,23 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     const attachmentPath = join(fixture.root, 'attachment.txt');
     await Promise.all([writeFile(promptPath, 'first prompt'), writeFile(attachmentPath, 'opaque')]);
     const firstTurn = await fixture.service.send(firstTask.taskId, promptPath, [attachmentPath]);
-    const waited = await fixture.service.wait(firstTask.taskId, firstTurn.turnId);
+    const waited = await fixture.service.wait(firstTask.taskId, firstTurn.turnId, 20_000, 20_000);
     const externalOwner = new StateStore(fixture.paths.database);
     externalOwner.acquireTaskOperation(firstTask.taskId, 'send', 'idempotent-read-owner');
-    const repeated = await fixture.service.wait(firstTask.taskId, firstTurn.turnId);
+    const repeated = await fixture.service.wait(firstTask.taskId, firstTurn.turnId, 20_000, 20_000);
     externalOwner.releaseTaskOperation(firstTask.taskId, 'idempotent-read-owner');
     externalOwner.close();
+    expect(waited.status).toBe('completed');
+    expect(repeated.status).toBe('completed');
+    if (waited.status !== 'completed' || repeated.status !== 'completed') {
+      throw new Error('fixture response did not complete');
+    }
     expect(repeated.responsePath).toBe(waited.responsePath);
     expect(await readFile(waited.responsePath, 'utf8')).toBe(`response for ${firstTask.taskId}`);
 
     await writeFile(promptPath, 'second prompt');
     const secondTurn = await fixture.service.send(firstTask.taskId, promptPath, []);
-    await fixture.service.wait(firstTask.taskId, secondTurn.turnId);
+    await fixture.service.wait(firstTask.taskId, secondTurn.turnId, 20_000, 20_000);
     expect(fixture.browser.expectedConversationIds).toEqual([null, `conversation-${firstTask.taskId}`]);
     const store = new StateStore(fixture.paths.database);
     const turns = store.listTurns(firstTask.taskId);
@@ -61,13 +66,13 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     expect(fixture.browser.archived).toEqual([firstTask.taskId]);
     await writeFile(promptPath, 'after archive');
     const afterArchiveTurn = await fixture.service.send(firstTask.taskId, promptPath, []);
-    await fixture.service.wait(firstTask.taskId, afterArchiveTurn.turnId);
+    await fixture.service.wait(firstTask.taskId, afterArchiveTurn.turnId, 20_000, 20_000);
     expect(fixture.browser.expectedConversationIds.at(-1)).toBe(`conversation-${firstTask.taskId}`);
     await expect(fixture.service.close(firstTask.taskId)).resolves.toMatchObject({ alreadyClosed: false });
     await expect(fixture.service.close(firstTask.taskId)).resolves.toMatchObject({ alreadyClosed: true });
     expect(fixture.browser.closed).toEqual([firstTask.taskId]);
-    expect(fixture.browser.observedOperations).toBe(8);
-    await expect(fixture.service.wait(firstTask.taskId, firstTurn.turnId)).resolves.toEqual(repeated);
+    expect(fixture.browser.observedOperations).toBe(11);
+    await expect(fixture.service.wait(firstTask.taskId, firstTurn.turnId, 20_000, 20_000)).resolves.toEqual(repeated);
     await expect(fixture.service.archive(firstTask.taskId)).rejects.toMatchObject({ code: 'TASK_NOT_ACTIVE' });
   });
 
@@ -132,7 +137,9 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     const turn = await fixture.service.send(task.taskId, promptPath, []);
 
     await expect(fixture.service.archive(task.taskId)).resolves.toMatchObject({ taskId: task.taskId });
-    await expect(fixture.service.wait(task.taskId, turn.turnId)).resolves.toMatchObject({ turnId: turn.turnId });
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 20_000, 20_000)).resolves.toMatchObject({
+      turnId: turn.turnId,
+    });
     expect(fixture.browser.archived).toEqual([task.taskId]);
   });
 
@@ -161,12 +168,56 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     fixture.browser.pendingWaitPolls = 1;
     fixture.browser.waitPollDelayMs = 100;
 
-    const waiting = fixture.service.wait(task.taskId, turn.turnId);
+    const waiting = fixture.service.wait(task.taskId, turn.turnId, 20_000, 20_000);
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 20);
     });
     await expect(fixture.service.close(task.taskId)).resolves.toMatchObject({ alreadyClosed: false });
     await expect(waiting).rejects.toMatchObject({ code: 'TASK_NOT_ACTIVE' });
+  });
+
+  it('returns pending once at observation expiry and resumes the same turn later', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.service.start();
+    const promptPath = join(fixture.root, 'prompt.md');
+    await writeFile(promptPath, 'long response');
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+    fixture.browser.pendingWaitPolls = 1;
+    fixture.browser.waitPollDelayMs = 10;
+
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 1, 20_000)).resolves.toEqual({
+      status: 'pending',
+      taskId: task.taskId,
+      turnId: turn.turnId,
+    });
+    const store = new StateStore(fixture.paths.database);
+    expect(store.requireTurn(task.taskId, turn.turnId).status).toBe('pending');
+    store.close();
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 20_000, 20_000)).resolves.toMatchObject({
+      status: 'completed',
+    });
+  });
+
+  it('keeps a timed-out capture resumable with a fresh capture timeout', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.service.start();
+    const promptPath = join(fixture.root, 'prompt.md');
+    await writeFile(promptPath, 'capture timeout');
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+    fixture.browser.captureDelayMs = 10;
+
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 20_000, 1)).rejects.toMatchObject({
+      code: 'CAPTURE_TIMEOUT',
+    });
+    const store = new StateStore(fixture.paths.database);
+    expect(store.requireTurn(task.taskId, turn.turnId).status).toBe('capturing');
+    store.close();
+    fixture.browser.captureDelayMs = 0;
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 1, 20_000)).resolves.toMatchObject({
+      status: 'completed',
+    });
   });
 
   it('re-reads archive lifecycle state after acquiring the task lease', async () => {
@@ -208,6 +259,11 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     expect(output.join('')).toContain('node "<skill-directory>/scripts/collab.ts" send <taskId> <promptPath>');
     await expect(runCli(['wait', 'only-task'], fixture.service, io)).resolves.toBe(1);
     expect(JSON.parse(errors.at(-1) ?? '{}')).toMatchObject({ ok: false, error: { code: 'USAGE' } });
+    await expect(runCli(['wait', 'task-a', 'turn-a', '0', '1000'], fixture.service, io)).resolves.toBe(1);
+    expect(JSON.parse(errors.at(-1) ?? '{}')).toMatchObject({
+      ok: false,
+      error: { code: 'USAGE', message: expect.stringContaining('observationWindowMs') },
+    });
   });
 
   it('runs the Skill entry from a host without a package manifest', async () => {
@@ -258,6 +314,7 @@ class FakeBrowser implements CollabBrowser {
   nextSendStatus: 'submitted' | 'not-submitted' | 'unknown-submission' | 'unsafe-not-submitted' = 'submitted';
   pendingWaitPolls = 0;
   waitPollDelayMs = 0;
+  captureDelayMs = 0;
   startCount = 0;
   nextChildPid = 20_000;
 
@@ -354,14 +411,16 @@ class FakeBrowser implements CollabBrowser {
    * @param taskId Task identifier.
    * @param _sessionName Unused named session.
    * @param expectedConversationId Database-bound identity.
+   * @param _observationWindowMs Unused finite observation budget.
    * @param observer Task-lease child-process observer.
    * @returns Fake copied response and unchanged conversation.
    * @throws {Error} This fake wait does not throw.
    */
-  async waitForResponse(
+  async observeResponse(
     taskId: string,
     _sessionName: string,
     expectedConversationId: string,
+    _observationWindowMs: number,
     observer?: BrowserOperationObserver,
   ) {
     this.observe(observer);
@@ -374,7 +433,38 @@ class FakeBrowser implements CollabBrowser {
     }
     return {
       status: 'completed' as const,
+      conversationId: expectedConversationId,
+      conversationUrl: `https://chatgpt.com/c/${expectedConversationId}`,
+    };
+  }
+
+  /**
+   * Returns both fake Copy response representations for one completed task turn.
+   *
+   * @param taskId Task identifier.
+   * @param _sessionName Unused named session.
+   * @param expectedConversationId Database-bound identity.
+   * @param _captureTimeoutMs Unused finite capture budget.
+   * @param observer Task-lease child-process observer.
+   * @returns Fake plain text, HTML, and unchanged conversation.
+   * @throws {Error} This fake capture does not throw.
+   */
+  async captureResponse(
+    taskId: string,
+    _sessionName: string,
+    expectedConversationId: string,
+    _captureTimeoutMs: number,
+    observer?: BrowserOperationObserver,
+  ) {
+    this.observe(observer);
+    if (this.captureDelayMs > 0) {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, this.captureDelayMs);
+      });
+    }
+    return {
       response: `response for ${taskId}`,
+      responseHtml: `<p>response for ${taskId}</p>`,
       conversationId: expectedConversationId,
       conversationUrl: `https://chatgpt.com/c/${expectedConversationId}`,
     };
