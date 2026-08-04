@@ -13,6 +13,11 @@
     "verbatimModuleSyntax": true,
     "types": ["node"]
   },
-  "include": ["skills/**/*.ts", "tests/**/*.ts", "evals/**/*.ts"],
+  "include": [
+    ".agents/skills/plan-spec-implementation/scripts/**/*.ts",
+    "skills/**/*.ts",
+    "tests/**/*.ts",
+    "evals/**/*.ts"
+  ],
   "exclude": ["dist", "node_modules"]
 }

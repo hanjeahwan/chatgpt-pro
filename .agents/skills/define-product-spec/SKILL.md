@@ -66,6 +66,7 @@ disable-model-invocation: true
 读取 `references/evidence-and-consistency.md`，再基于当前 checkout 建立 Tech Spec。
 
 - 只记录会改变技术设计或验证方式的已验证入口、状态流、数据或接口契约和现有测试。
+- 材料包含独立 spike、命令记录或高密度技术取证时，按 `references/evidence-and-consistency.md` 的“证据压缩门”分离规格结论与原始证据。
 - 按 `references/artifact-contract.md` 的“信息归属”把每项技术变化映射到一个 `BEH-*` 或保持边界。
 - 按 `references/evidence-and-consistency.md` 的“技术最小充分性门”逐项检查非平凡技术机制；能追溯到 `BEH-*` 不等于该机制本身必要。
 - 按 `references/artifact-contract.md` 建立宿主无关的执行与验证合同；不复制具体 agent、人工流程或 CI 的生命周期、预算和调度状态。
