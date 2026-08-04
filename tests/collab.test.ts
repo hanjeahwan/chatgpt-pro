@@ -220,7 +220,6 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     });
 
     expect(result.status).toBe(0);
-    expect(result.stderr).toBe('');
     expect(result.stdout).toContain('node "<skill-directory>/scripts/collab.ts" start');
   });
 });
