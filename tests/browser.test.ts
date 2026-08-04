@@ -169,6 +169,10 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     const preflightSource = await scriptForInvocation(fixture.invocations[0]);
     expect(preflightSource).toContain('const expectedConversationId = "conversation-a"');
     expect(preflightSource).toContain('conversation identity does not match the send target');
+    expect(preflightSource).toContain('This conversation is archived. To continue, please unarchive it first.');
+    expect(preflightSource).toContain("name: 'Unarchive', exact: true");
+    expect(preflightSource).toContain('conversation identity changed while making the send target writable');
+    expect(preflightSource).toContain("composer.waitFor({ state: 'visible', timeout: 60000 })");
     const cleanupSource = await scriptForInvocation(cleanupInvocation);
     expect(cleanupSource).toContain("page.reload({ waitUntil: 'domcontentloaded' })");
     expect(cleanupSource).toContain('const expectedConversationId = "conversation-a"');
@@ -178,6 +182,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     expect(cleanupSource).toContain('const attachmentFileNames = ["a","b"]');
     const uploadPreparationSource = await scriptForInvocation(fixture.invocations[1]);
     expect(uploadPreparationSource).toContain('conversation identity changed before attachment preparation');
+    expect(uploadPreparationSource).toContain("upload.waitFor({ state: 'visible', timeout: 10000 })");
     expectPageFunctionSyntax(cleanupSource);
   });
 
@@ -380,6 +385,13 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
         suggestedFilename: 'bundle.zip',
         downloadUrl: 'https://chatgpt.com/backend-api/estuary/content/1',
       }),
+      pageResult({
+        protocol,
+        kind: 'artifact-download',
+        sourceUrl,
+        suggestedFilename: 'bundle.zip',
+        downloadUrl: 'https://chatgpt.com/backend-api/estuary/content/1',
+      }),
     ]);
 
     await expect(
@@ -394,15 +406,66 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
       ),
     ).resolves.toMatchObject({ sourceUrl, suggestedFilename: 'bundle.zip' });
     const source = await lastScript(fixture.invocations);
+    await fixture.browser.downloadArtifact(
+      'task-a',
+      'session-a',
+      'conversation-a',
+      [sourceUrl],
+      sourceUrl,
+      '/tmp/task-a-download-resume',
+      5000,
+    );
+    const resumedSource = await lastScript(fixture.invocations);
+    expect(source).toContain('const refreshControls = true');
+    expect(resumedSource).toContain('const refreshControls = false');
     expect(source).toContain("sourceUrl?.startsWith('sandbox:')");
     expect(source).toContain('artifact.sourceUrl !== expectedSourceUrls[index]');
+    expect(source).toContain("page.reload({ waitUntil: 'domcontentloaded' })");
+    expect(source).toContain('conversation identity changed while refreshing artifact controls');
+    expect(source).toContain('const sandboxOccurrenceCount = await page.evaluate');
+    expect(source).toContain(".waitFor({ state: 'attached', timeout: remaining() })");
     expect(source).toContain("assistant.locator('button.behavior-btn')");
     expect(source).toContain("name: 'Download file', exact: true");
+    expect(source).toContain('return { occurrences, uniqueTargets }');
+    expect(source).toContain('const fileControls = controls.filter');
+    expect(source).toContain('controls.length === 2 && fileControls.length === 1');
+    expect(source).toContain('const rowBySourceUrl = new Map()');
+    expect(source).toContain("const targetDownloadMarker = 'data-chatgpt-pro-collab-target-download'");
+    expect(source).toContain("assistant.locator('[' + targetDownloadMarker + '=\"true\"]')");
     expect(source).toContain('artifact rows are not an unambiguous target subsequence');
     expect(source).toContain("page.waitForEvent('download'");
+    expect(source).toContain('if (rowIndex !== undefined)');
+    expect(source).toContain('while (capturedDownload === undefined)');
+    expect(source).toContain('page.waitForTimeout(Math.min(1000, remaining()))');
+    expect(source).toContain('control.click({ force: true, timeout: remaining() })');
     expect(source).toContain('await download.saveAs(temporaryPath)');
     expect(source).not.toContain('querySelectorAll(\'a[href^="https:"]\')');
     expectPageFunctionSyntax(source);
+  });
+
+  it('rejects a download whose suggested filename belongs to another logical target', async () => {
+    const sourceUrl = 'sandbox:/mnt/data/a/same-name.txt';
+    const fixture = await browserFixture([
+      pageResult({
+        protocol,
+        kind: 'artifact-download',
+        sourceUrl,
+        suggestedFilename: 'script.py',
+        downloadUrl: 'https://chatgpt.com/backend-api/estuary/content/1',
+      }),
+    ]);
+
+    await expect(
+      fixture.browser.downloadArtifact(
+        'task-a',
+        'session-a',
+        'conversation-a',
+        [sourceUrl],
+        sourceUrl,
+        '/tmp/task-a-download',
+        5000,
+      ),
+    ).rejects.toMatchObject({ code: 'PLAYWRIGHT_CONTRACT_DRIFT' });
   });
 
   it('uses only the exact target options button and Archive menu item', async () => {

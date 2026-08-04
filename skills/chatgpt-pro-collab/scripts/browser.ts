@@ -177,6 +177,7 @@ export class PlaywrightBrowser {
   readonly #paths: CollabPaths;
   readonly #cwd: string;
   readonly #runner: BrowserCommandRunner;
+  readonly #artifactControlsRefreshed = new Set<string>();
 
   /**
    * Creates the fixed-version Playwright CLI boundary.
@@ -535,6 +536,7 @@ export class PlaywrightBrowser {
     captureTimeoutMs: number,
     observer?: BrowserOperationObserver,
   ): Promise<BrowserCaptureResult> {
+    this.#artifactControlsRefreshed.delete(taskId);
     const result = await this.#runCode<CaptureProtocolResult>(
       sessionName,
       taskId,
@@ -587,11 +589,19 @@ export class PlaywrightBrowser {
     captureTimeoutMs: number,
     observer?: BrowserOperationObserver,
   ): Promise<BrowserArtifactDownload> {
+    const refreshControls = !this.#artifactControlsRefreshed.has(taskId);
     const result = await this.#runCode<ArtifactDownloadProtocolResult>(
       sessionName,
       taskId,
       'download-artifact',
-      downloadArtifactScript(expectedConversationId, expectedSourceUrls, sourceUrl, temporaryPath, captureTimeoutMs),
+      downloadArtifactScript(
+        expectedConversationId,
+        expectedSourceUrls,
+        sourceUrl,
+        temporaryPath,
+        captureTimeoutMs,
+        refreshControls,
+      ),
       `download artifact ${sourceUrl}`,
       'artifact-download',
       observer,
@@ -599,6 +609,14 @@ export class PlaywrightBrowser {
     if (result.sourceUrl !== sourceUrl || result.suggestedFilename === undefined || result.downloadUrl === undefined) {
       throw new BrowserError('BROWSER_PROTOCOL_ERROR', `download artifact ${sourceUrl}`, 'result omitted fields');
     }
+    if (!suggestedFilenameMatchesSource(sourceUrl, result.suggestedFilename)) {
+      throw new BrowserError(
+        'PLAYWRIGHT_CONTRACT_DRIFT',
+        `download artifact ${sourceUrl}`,
+        `suggested filename does not match the logical target: ${result.suggestedFilename}`,
+      );
+    }
+    this.#artifactControlsRefreshed.add(taskId);
     return {
       sourceUrl,
       suggestedFilename: result.suggestedFilename,
@@ -1026,6 +1044,25 @@ function decodeBrowserArtifacts(value: unknown): readonly BrowserArtifactDescrip
 }
 
 /**
+ * Accepts the logical basename or the browser's numeric collision suffix before the extension.
+ *
+ * @param sourceUrl Recorded `sandbox:` logical target.
+ * @param suggestedFilename Browser download metadata to bind to that target.
+ * @returns Whether the suggested name can belong to the recorded logical target.
+ * @throws {URIError} If the browser returned a malformed encoded source basename.
+ */
+function suggestedFilenameMatchesSource(sourceUrl: string, suggestedFilename: string): boolean {
+  const expectedFilename = decodeURIComponent(sourceUrl.slice(sourceUrl.lastIndexOf('/') + 1));
+  if (suggestedFilename === expectedFilename) {
+    return true;
+  }
+  const extensionIndex = suggestedFilename.lastIndexOf('.');
+  const stem = extensionIndex < 0 ? suggestedFilename : suggestedFilename.slice(0, extensionIndex);
+  const extension = extensionIndex < 0 ? '' : suggestedFilename.slice(extensionIndex);
+  return `${stem.replace(/\(\d+\)$/u, '')}${extension}` === expectedFilename;
+}
+
+/**
  * Preserves the fixed CLI's page-script error without returning unrelated snapshots.
  *
  * @param stdout Complete `run-code` output whose envelope was absent.
@@ -1126,8 +1163,45 @@ function sendTargetVerificationScript(expectedConversationId: string | null): st
       throw new Error('conversation identity does not match the send target');
     }
     const composer = page.locator('#prompt-textarea');
+    const archivedMessage = page.getByText(
+      'This conversation is archived. To continue, please unarchive it first.',
+      { exact: true },
+    );
+    await page.waitForFunction(() => {
+      const visible = (element) => {
+        return (
+          element instanceof HTMLElement &&
+          element.getClientRects().length > 0 &&
+          getComputedStyle(element).visibility !== 'hidden' &&
+          getComputedStyle(element).display !== 'none'
+        );
+      };
+      const composerElement = document.querySelector('#prompt-textarea');
+      const archivedElement = [...document.querySelectorAll('div')].find((element) => {
+        return element.textContent?.trim() ===
+          'This conversation is archived. To continue, please unarchive it first.';
+      });
+      return visible(composerElement) || visible(archivedElement);
+    }, undefined, { timeout: 60000, polling: 100 });
+    if (await archivedMessage.count() === 1 && await archivedMessage.isVisible()) {
+      const unarchive = page.getByRole('button', { name: 'Unarchive', exact: true });
+      if (await unarchive.count() !== 1 || !(await unarchive.isVisible())) {
+        throw new Error('page contract drift: Unarchive action is not unique and visible');
+      }
+      await unarchive.click();
+    }
+    await composer.waitFor({ state: 'visible', timeout: 60000 });
     if (await composer.count() !== 1 || !(await composer.isVisible())) {
       throw new Error('page contract drift: composer is not unique and visible');
+    }
+    const readyUrl = await page.evaluate(() => {
+      return { hostname: location.hostname, pathname: location.pathname };
+    });
+    if (
+      readyUrl.hostname !== 'chatgpt.com' ||
+      readyUrl.pathname.replace(/\\/$/, '') !== targetPath.replace(/\\/$/, '')
+    ) {
+      throw new Error('conversation identity changed while making the send target writable');
     }
     return JSON.stringify({ protocol: '${PROTOCOL}', kind: 'send-ready' });
   }`;
@@ -1196,6 +1270,7 @@ function uploadPreparationScript(expectedConversationId: string | null): string 
     if (await plus.count() !== 1) throw new Error('page contract drift: composer plus button is not unique');
     await plus.click();
     const upload = page.getByText('Add photos & files', { exact: true });
+    await upload.waitFor({ state: 'visible', timeout: 10000 });
     if (await upload.count() !== 1) throw new Error('page contract drift: upload action is not unique');
     await upload.click();
     return JSON.stringify({ protocol: '${PROTOCOL}', kind: 'upload-ready' });
@@ -1489,6 +1564,7 @@ function captureScript(expectedConversationId: string, captureTimeoutMs: number)
  * @param targetSourceUrl Exact recorded `sandbox:` logical target.
  * @param temporaryPath Fresh task-owned browser save path.
  * @param captureTimeoutMs Remaining finite capture budget.
+ * @param refreshControls Whether this wait process must refresh controls before its first download.
  * @returns A Playwright page function source.
  * @throws {Error} This pure source builder does not throw.
  */
@@ -1498,6 +1574,7 @@ function downloadArtifactScript(
   targetSourceUrl: string,
   temporaryPath: string,
   captureTimeoutMs: number,
+  refreshControls: boolean,
 ): string {
   return `async (page) => {
     const expectedConversationId = ${JSON.stringify(expectedConversationId)};
@@ -1505,6 +1582,7 @@ function downloadArtifactScript(
     const targetSourceUrl = ${JSON.stringify(targetSourceUrl)};
     const temporaryPath = ${JSON.stringify(temporaryPath)};
     const captureDeadline = Date.now() + ${JSON.stringify(captureTimeoutMs)};
+    const refreshControls = ${JSON.stringify(refreshControls)};
     const remaining = () => Math.max(1, captureDeadline - Date.now());
     const url = await page.evaluate(() => {
       return { hostname: location.hostname, pathname: location.pathname };
@@ -1513,7 +1591,22 @@ function downloadArtifactScript(
     if (url.hostname !== 'chatgpt.com' || match === null || match[1] !== expectedConversationId) {
       throw new Error('conversation identity does not match artifact capture');
     }
+    if (refreshControls) {
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      const reloadedUrl = await page.evaluate(() => {
+        return { hostname: location.hostname, pathname: location.pathname };
+      });
+      const reloadedMatch = /^\\/c\\/([^/?#]+)\\/?$/.exec(reloadedUrl.pathname);
+      if (
+        reloadedUrl.hostname !== 'chatgpt.com' ||
+        reloadedMatch === null ||
+        reloadedMatch[1] !== expectedConversationId
+      ) {
+        throw new Error('conversation identity changed while refreshing artifact controls');
+      }
+    }
     const turnSelector = '[data-testid^="conversation-turn-"][data-turn]';
+    await page.locator(turnSelector).last().waitFor({ state: 'visible', timeout: remaining() });
     const assistantIndex = await page.locator(turnSelector).evaluateAll((elements) => {
       let latestUser = -1;
       for (let index = 0; index < elements.length; index += 1) {
@@ -1579,6 +1672,17 @@ function downloadArtifactScript(
     if (typeof response?.plain !== 'string' || typeof response?.html !== 'string') {
       throw new Error('page contract drift: Copy response omitted text/plain or text/html');
     }
+    const sandboxOccurrenceCount = await page.evaluate((html) => {
+      const document = new DOMParser().parseFromString(html, 'text/html');
+      return [...document.querySelectorAll('a')].filter((anchor) => {
+        return anchor.getAttribute('href')?.startsWith('sandbox:');
+      }).length;
+    }, response.html);
+    if (sandboxOccurrenceCount <= 0) throw new Error('artifact set changed before download');
+    await assistant
+      .locator('button.behavior-btn')
+      .nth(sandboxOccurrenceCount - 1)
+      .waitFor({ state: 'attached', timeout: remaining() });
     const discovered = await assistant.evaluate((element, html) => {
       const document = new DOMParser().parseFromString(html, 'text/html');
       const occurrences = [];
@@ -1604,7 +1708,7 @@ function downloadArtifactScript(
         seen.add(artifact.sourceUrl);
         return true;
       });
-      return { uniqueTargets };
+      return { occurrences, uniqueTargets };
     }, response.html);
     if (
       discovered.uniqueTargets.length !== expectedSourceUrls.length ||
@@ -1628,7 +1732,8 @@ function downloadArtifactScript(
         }
         let row = button.parentElement;
         while (row !== null && row !== assistantElement) {
-          const names = [...row.querySelectorAll('button')].map((candidate) => {
+          const controls = [...row.querySelectorAll('button')];
+          const names = controls.map((candidate) => {
             return (
               candidate.getAttribute('aria-label') ||
               candidate.getAttribute('title') ||
@@ -1636,7 +1741,11 @@ function downloadArtifactScript(
               ''
             ).trim();
           });
-          if (names.includes('Open file') && names.includes('Download file')) {
+          const fileControls = controls.filter((candidate) => {
+            const name = candidate.getAttribute('aria-label');
+            return name !== null && name !== '' && name !== 'Download file';
+          });
+          if (controls.length === 2 && fileControls.length === 1 && names.includes('Download file')) {
             return (row.innerText || '').split(/\\n/u).map((line) => line.trim()).filter(Boolean);
           }
           row = row.parentElement;
@@ -1645,32 +1754,55 @@ function downloadArtifactScript(
       });
       rowLines.push(lines);
     }
-    const rowByTargetIndex = new Map();
-    let targetCursor = 0;
+    const rowBySourceUrl = new Map();
+    let occurrenceCursor = 0;
     for (let rowIndex = 0; rowIndex < rowLines.length; rowIndex += 1) {
-      const candidates = discovered.uniqueTargets.slice(targetCursor).filter((artifact) => {
+      const candidates = discovered.occurrences.slice(occurrenceCursor).filter((artifact) => {
         return rowLines[rowIndex].includes(artifact.basename);
       });
       const candidateNames = new Set(candidates.map((artifact) => artifact.basename));
       if (candidates.length === 0 || candidateNames.size !== 1) {
         throw new Error('page contract drift: artifact rows are not an unambiguous target subsequence');
       }
-      const matchedIndex = discovered.uniqueTargets.findIndex((artifact, index) => {
-        return index >= targetCursor && artifact.basename === candidates[0].basename;
+      const matchedIndex = discovered.occurrences.findIndex((artifact, index) => {
+        return index >= occurrenceCursor && artifact.basename === candidates[0].basename;
       });
-      rowByTargetIndex.set(matchedIndex, rowIndex);
-      targetCursor = matchedIndex + 1;
+      const matchedArtifact = discovered.occurrences[matchedIndex];
+      if (!rowBySourceUrl.has(matchedArtifact.sourceUrl)) {
+        rowBySourceUrl.set(matchedArtifact.sourceUrl, rowIndex);
+      }
+      occurrenceCursor = matchedIndex + 1;
     }
 
-    const rowIndex = rowByTargetIndex.get(targetIndex);
+    const rowIndex = rowBySourceUrl.get(targetSourceUrl);
+    const targetDownloadMarker = 'data-chatgpt-pro-collab-target-download';
+    await downloadButtons.evaluateAll((buttons, marker) => {
+      for (const button of buttons) button.removeAttribute(marker);
+    }, targetDownloadMarker);
+    if (rowIndex !== undefined) {
+      await downloadButtons.nth(rowIndex).evaluate((button, marker) => {
+        button.setAttribute(marker, 'true');
+      }, targetDownloadMarker);
+    }
     const control = rowIndex === undefined
       ? assistant.locator('button.behavior-btn').nth(discovered.uniqueTargets[targetIndex].occurrenceIndex)
-      : downloadButtons.nth(rowIndex);
+      : assistant.locator('[' + targetDownloadMarker + '="true"]');
     if (await control.count() !== 1 || !(await control.isVisible())) {
       throw new Error('page contract drift: mapped artifact download control is not unique and visible');
     }
-    const downloadPromise = page.waitForEvent('download', { timeout: remaining() });
-    await control.click({ timeout: remaining() });
+    let capturedDownload;
+    const downloadPromise = page.waitForEvent('download', { timeout: remaining() }).then((download) => {
+      capturedDownload = download;
+      return download;
+    });
+    if (rowIndex !== undefined) {
+      await control.click({ force: true, timeout: remaining() });
+    } else {
+      while (capturedDownload === undefined) {
+        await control.click({ force: true, timeout: remaining() });
+        await Promise.race([downloadPromise, page.waitForTimeout(Math.min(1000, remaining()))]);
+      }
+    }
     const download = await downloadPromise;
     await download.saveAs(temporaryPath);
     return JSON.stringify({
