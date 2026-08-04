@@ -5,14 +5,14 @@ description: 当用户明确要求通过 ChatGPT Pro Web 协作处理当前本�
 
 # ChatGPT Pro Collab
 
-使用 `pnpm collab -- <command>` 维护彼此隔离的 ChatGPT Pro Web 任务。把返回的 `taskId`、`turnId` 和 `responsePath` 作为后续宿主流程的显式输入。
+加载本 Skill 时，以 `SKILL.md` 所在绝对目录替换下列命令中的 `<skill-directory>`。保持宿主项目为当前工作目录，直接执行 `node "<skill-directory>/scripts/collab.ts" <command>`；不要切换到 Skill 目录，也不要调用宿主项目的 package script。把返回的 `taskId`、`turnId` 和 `responsePath` 作为后续宿主流程的显式输入。
 
 ## 1. 完成一次设置
 
 首次使用或认证失效时运行：
 
 ```sh
-pnpm collab -- setup
+node "<skill-directory>/scripts/collab.ts" setup
 ```
 
 等待用户在打开的浏览器中完成登录。命令成功后设置浏览器会关闭；后续任务复用本机认证源。
@@ -20,7 +20,7 @@ pnpm collab -- setup
 ## 2. 启动任务
 
 ```sh
-pnpm collab -- start
+node "<skill-directory>/scripts/collab.ts" start
 ```
 
 保存返回的 `taskId`。每次 `start` 都创建独立浏览器进程、context、session 目录和新 conversation；不要因同项目已有任务而复用或拒绝新任务。
@@ -30,8 +30,8 @@ pnpm collab -- start
 先把本轮文字输入写入单独的 prompt 文件，再只列出用户或宿主明确选择的附件：
 
 ```sh
-pnpm collab -- send <taskId> <promptPath> [attachmentPath ...]
-pnpm collab -- wait <taskId> <turnId>
+node "<skill-directory>/scripts/collab.ts" send <taskId> <promptPath> [attachmentPath ...]
+node "<skill-directory>/scripts/collab.ts" wait <taskId> <turnId>
 ```
 
 `send` 返回 `turnId` 后即可操作其他任务；不要等待时再次发送同一任务。`wait` 返回 `responsePath` 后读取原始 `response.md`，由宿主决定如何解释、验证或使用；不要让 Collab 自动执行回复内容。前一轮完成后，可在同一 `taskId` 再次 send/wait 以保留 conversation 上下文。
@@ -39,8 +39,8 @@ pnpm collab -- wait <taskId> <turnId>
 ## 4. 管理生命周期
 
 ```sh
-pnpm collab -- archive <taskId>
-pnpm collab -- close <taskId>
+node "<skill-directory>/scripts/collab.ts" archive <taskId>
+node "<skill-directory>/scripts/collab.ts" close <taskId>
 ```
 
 仅在用户明确要求归档 Web conversation 时运行 `archive`；它不会关闭本地任务。任务不再需要浏览器时运行 `close`；它不会归档 Web conversation，也不会删除 transcript 或共享认证源。

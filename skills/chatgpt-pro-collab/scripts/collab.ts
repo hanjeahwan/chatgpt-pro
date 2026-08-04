@@ -610,12 +610,12 @@ function helpText(): string {
   return `ChatGPT Pro Collab
 
 Usage:
-  pnpm collab -- setup
-  pnpm collab -- start
-  pnpm collab -- send <taskId> <promptPath> [attachmentPath ...]
-  pnpm collab -- wait <taskId> <turnId>
-  pnpm collab -- close <taskId>
-  pnpm collab -- archive <taskId>
+  node "<skill-directory>/scripts/collab.ts" setup
+  node "<skill-directory>/scripts/collab.ts" start
+  node "<skill-directory>/scripts/collab.ts" send <taskId> <promptPath> [attachmentPath ...]
+  node "<skill-directory>/scripts/collab.ts" wait <taskId> <turnId>
+  node "<skill-directory>/scripts/collab.ts" close <taskId>
+  node "<skill-directory>/scripts/collab.ts" archive <taskId>
 `;
 }
 

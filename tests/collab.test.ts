@@ -1,6 +1,8 @@
+import { spawnSync } from 'node:child_process';
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
@@ -203,9 +205,23 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     };
 
     await expect(runCli(['--', 'help'], fixture.service, io)).resolves.toBe(0);
-    expect(output.join('')).toContain('pnpm collab -- send <taskId> <promptPath>');
+    expect(output.join('')).toContain('node "<skill-directory>/scripts/collab.ts" send <taskId> <promptPath>');
     await expect(runCli(['wait', 'only-task'], fixture.service, io)).resolves.toBe(1);
     expect(JSON.parse(errors.at(-1) ?? '{}')).toMatchObject({ ok: false, error: { code: 'USAGE' } });
+  });
+
+  it('runs the Skill entry from a host without a package manifest', async () => {
+    const hostDirectory = await mkdtemp(join(tmpdir(), 'collab-host-'));
+    const cliPath = fileURLToPath(new URL('../skills/chatgpt-pro-collab/scripts/collab.ts', import.meta.url));
+
+    const result = spawnSync(process.execPath, [cliPath, 'help'], {
+      cwd: hostDirectory,
+      encoding: 'utf8',
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe('');
+    expect(result.stdout).toContain('node "<skill-directory>/scripts/collab.ts" start');
   });
 });
 

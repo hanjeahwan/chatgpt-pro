@@ -4,7 +4,18 @@
 
 ## 用法
 
-运行环境需要 Node.js `>=22.19.0`、pnpm、npm/npx、Chrome，以及可交互登录的 ChatGPT Pro 账号。
+运行环境需要 Node.js `>=22.19.0`、npm/npx、Chrome，以及可交互登录的 ChatGPT Pro 账号。安装后的 Skill 以加载到的 `SKILL.md` 所在绝对目录替换 `<skill-directory>`，并保持宿主项目为当前工作目录：
+
+```sh
+node "<skill-directory>/scripts/collab.ts" setup
+node "<skill-directory>/scripts/collab.ts" start
+node "<skill-directory>/scripts/collab.ts" send <taskId> <promptPath> [attachmentPath ...]
+node "<skill-directory>/scripts/collab.ts" wait <taskId> <turnId>
+node "<skill-directory>/scripts/collab.ts" archive <taskId>
+node "<skill-directory>/scripts/collab.ts" close <taskId>
+```
+
+在本源码仓库开发时，先安装 pnpm 依赖，再使用 package script：
 
 ```sh
 pnpm install
