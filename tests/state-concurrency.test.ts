@@ -1,5 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
-import { access, mkdtemp, readFile } from 'node:fs/promises';
+import { access, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -11,6 +11,98 @@ import { StateStore } from '../skills/chatgpt-pro-collab/scripts/state.ts';
 const execFileAsync = promisify(execFile);
 
 describe('VER-011 SQLite cross-process concurrency', () => {
+  it.each(['capturing-frozen', 'response-published', 'artifact-published', 'partial-artifacts'] as const)(
+    'recovers after a real subprocess is killed at %s',
+    async (checkpoint) => {
+      const root = await mkdtemp(join(tmpdir(), `collab-capture-${checkpoint}-`));
+      const databasePath = join(root, 'state.sqlite');
+      const readyPath = join(root, 'prepare-ready');
+      const resultPath = join(root, 'recovery-result.json');
+      const workerPath = join(import.meta.dirname, 'support', 'capture-recovery-worker.ts');
+      const worker = spawn(process.execPath, [workerPath, 'prepare', databasePath, root, checkpoint, readyPath], {
+        stdio: 'ignore',
+      });
+      const workerCompletion = waitForExit(worker);
+      await waitForPath(readyPath);
+
+      worker.kill('SIGKILL');
+      await workerCompletion;
+      const interrupted = new StateStore(databasePath);
+      expect(interrupted.requireTurn('task-a', 'turn-a')).toMatchObject({
+        status: 'capturing',
+        responsePath: join(root, 'response.md'),
+        artifactSetRecorded: true,
+      });
+      expect(interrupted.listArtifacts('task-a', 'turn-a')).toHaveLength(2);
+      interrupted.close();
+
+      await execFileAsync(process.execPath, [workerPath, 'recover', databasePath, root, resultPath]);
+      const recovered = JSON.parse(await readFile(resultPath, 'utf8')) as {
+        readonly turn: { readonly status: string };
+        readonly artifacts: readonly { readonly status: string; readonly localPath: string }[];
+      };
+      expect(recovered.turn.status).toBe('completed');
+      expect(recovered.artifacts).toMatchObject([
+        { status: 'completed', localPath: join(root, 'artifact-1.txt') },
+        { status: 'completed', localPath: join(root, 'artifact-2.txt') },
+      ]);
+      await expect(readFile(join(root, 'response.md'), 'utf8')).resolves.toBe('stable response');
+      await expect(readFile(join(root, 'artifact-1.txt'), 'utf8')).resolves.toBe('artifact 1');
+      await expect(readFile(join(root, 'artifact-2.txt'), 'utf8')).resolves.toBe('artifact 2');
+    },
+  );
+
+  it('serializes a concurrent close behind subprocess capture recovery', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-capture-close-'));
+    const databasePath = join(root, 'state.sqlite');
+    const prepareReadyPath = join(root, 'prepare-ready');
+    const recoveryReadyPath = join(root, 'recovery-ready');
+    const continuePath = join(root, 'continue');
+    const recoveryResultPath = join(root, 'recovery-result.json');
+    const closeResultPath = join(root, 'close-result.json');
+    const closeReadyPath = join(root, 'close-ready');
+    const workerPath = join(import.meta.dirname, 'support', 'capture-recovery-worker.ts');
+    const interrupted = spawn(
+      process.execPath,
+      [workerPath, 'prepare', databasePath, root, 'partial-artifacts', prepareReadyPath],
+      { stdio: 'ignore' },
+    );
+    const interruptedCompletion = waitForExit(interrupted);
+    await waitForPath(prepareReadyPath);
+    interrupted.kill('SIGKILL');
+    await interruptedCompletion;
+
+    const recovery = spawn(
+      process.execPath,
+      [workerPath, 'recover', databasePath, root, recoveryResultPath, recoveryReadyPath, continuePath],
+      { stdio: 'ignore' },
+    );
+    const recoveryCompletion = waitForExit(recovery);
+    await waitForPath(recoveryReadyPath);
+    const close = spawn(process.execPath, [workerPath, 'close', databasePath, root, closeResultPath, closeReadyPath], {
+      stdio: 'ignore',
+    });
+    const closeCompletion = waitForExit(close);
+    await waitForPath(closeReadyPath);
+    await writeFile(continuePath, 'continue', { flag: 'wx' });
+
+    await expect(recoveryCompletion).resolves.toBe(0);
+    await expect(closeCompletion).resolves.toBe(0);
+    const closeResult = JSON.parse(await readFile(closeResultPath, 'utf8')) as {
+      readonly busyCount: number;
+      readonly task: { readonly status: string };
+    };
+    expect(closeResult.busyCount).toBeGreaterThan(0);
+    expect(closeResult.task.status).toBe('closed');
+    const reopened = new StateStore(databasePath);
+    expect(reopened.requireTurn('task-a', 'turn-a').status).toBe('completed');
+    expect(reopened.listArtifacts('task-a', 'turn-a')).toMatchObject([
+      { status: 'completed' },
+      { status: 'completed' },
+    ]);
+    reopened.close();
+  });
+
   it('does not lose or cross-contaminate task transitions', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collab-concurrency-'));
     const databasePath = join(root, 'state.sqlite');
