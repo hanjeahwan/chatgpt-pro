@@ -14,10 +14,11 @@ import {
   ensureCollabDirectories,
   ensureTaskDirectories,
   prepareInputs,
+  publishOrVerifyResponse,
   requireResponse,
   requireSeedState,
+  responsePath,
   savePromptCopy,
-  saveResponse,
   type CollabPaths,
 } from './session.ts';
 import { StateError, StateStore } from './state.ts';
@@ -268,9 +269,11 @@ export class CollabService {
           if (captured.conversationId !== task.conversationId || captured.conversationUrl !== task.conversationUrl) {
             throw new CollabError('CONVERSATION_MISMATCH', `wait observed a different conversation: ${taskId}`);
           }
-          const responsePath = await saveResponse(this.#paths, taskId, turnId, captured.response);
-          store.completeTurn(taskId, turnId, responsePath);
-          return { taskId, turnId, responsePath };
+          const targetResponsePath = responsePath(this.#paths, taskId, turnId);
+          store.beginCapture(taskId, turnId, targetResponsePath, []);
+          await publishOrVerifyResponse(targetResponsePath, captured.response);
+          store.completeTurn(taskId, turnId, targetResponsePath);
+          return { taskId, turnId, responsePath: targetResponsePath };
         });
         if (result !== null) {
           return result;

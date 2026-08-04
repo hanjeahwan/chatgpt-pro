@@ -2,7 +2,13 @@ import { existsSync, statSync } from 'node:fs';
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 
 export type TaskStatus = 'active' | 'closed' | 'failed';
-export type TurnStatus = 'sending' | 'pending' | 'completed' | 'failed' | 'unknown-submission';
+export type TurnStatus = 'sending' | 'pending' | 'capturing' | 'completed' | 'failed' | 'unknown-submission';
+export type ArtifactStatus = 'pending' | 'completed';
+
+export interface ArtifactDescription {
+  readonly sourceUrl: string;
+  readonly label: string;
+}
 
 export interface TaskRecord {
   readonly id: string;
@@ -22,6 +28,20 @@ export interface TurnRecord {
   readonly promptPath: string;
   readonly attachmentPaths: readonly string[];
   readonly responsePath: string | null;
+  readonly error: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface ArtifactRecord {
+  readonly taskId: string;
+  readonly turnId: string;
+  readonly ordinal: number;
+  readonly sourceUrl: string;
+  readonly label: string;
+  readonly filename: string | null;
+  readonly localPath: string | null;
+  readonly status: ArtifactStatus;
   readonly error: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -79,7 +99,7 @@ export class StateStore {
         task_id TEXT NOT NULL,
         id TEXT NOT NULL,
         status TEXT NOT NULL CHECK (
-          status IN ('sending', 'pending', 'completed', 'failed', 'unknown-submission')
+          status IN ('sending', 'pending', 'capturing', 'completed', 'failed', 'unknown-submission')
         ),
         prompt_path TEXT NOT NULL,
         attachments_json TEXT NOT NULL,
@@ -89,6 +109,23 @@ export class StateStore {
         updated_at TEXT NOT NULL,
         PRIMARY KEY (task_id, id),
         FOREIGN KEY (task_id) REFERENCES task(id)
+      ) STRICT;
+
+      CREATE TABLE IF NOT EXISTS artifact (
+        task_id TEXT NOT NULL,
+        turn_id TEXT NOT NULL,
+        ordinal INTEGER NOT NULL CHECK (ordinal > 0),
+        source_url TEXT NOT NULL,
+        label TEXT NOT NULL,
+        filename TEXT,
+        local_path TEXT,
+        status TEXT NOT NULL CHECK (status IN ('pending', 'completed')),
+        error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (task_id, turn_id, ordinal),
+        UNIQUE (task_id, turn_id, source_url),
+        FOREIGN KEY (task_id, turn_id) REFERENCES turn(task_id, id)
       ) STRICT;
     `);
   }
@@ -424,7 +461,7 @@ export class StateStore {
       const unfinished = this.#database
         .prepare(
           `SELECT id FROM turn
-           WHERE task_id = ? AND status IN ('sending', 'pending', 'unknown-submission')
+           WHERE task_id = ? AND status IN ('sending', 'pending', 'capturing', 'unknown-submission')
            LIMIT 1`,
         )
         .get(taskId);
@@ -553,32 +590,198 @@ export class StateStore {
   }
 
   /**
-   * Marks a pending turn completed only after its response file is visible.
+   * Atomically freezes the response path and ordered artifact set before files are published.
    *
    * @param taskId Owning task identifier.
-   * @param turnId Pending turn identifier.
-   * @param responsePath Immutable response transcript path.
-   * @returns The updated completed turn.
-   * @throws {StateError} If the turn is not pending or the response file is missing.
-   * @throws {Error} If SQLite cannot commit the transition.
+   * @param turnId Pending turn whose completed assistant response was observed.
+   * @param responsePath Deterministic immutable response transcript path.
+   * @param artifacts Ordered unique logical artifact targets discovered in that response.
+   * @returns The updated capturing turn.
+   * @throws {StateError} If the turn is not pending or artifact targets are duplicated.
+   * @throws {Error} If SQLite cannot commit the turn and artifact rows together.
    */
-  completeTurn(taskId: string, turnId: string, responsePath: string): TurnRecord {
-    if (!existsSync(responsePath) || !statSync(responsePath).isFile()) {
-      throw new StateError('RESPONSE_MISSING', `response must exist before completion: ${responsePath}`);
-    }
+  beginCapture(
+    taskId: string,
+    turnId: string,
+    responsePath: string,
+    artifacts: readonly ArtifactDescription[],
+  ): TurnRecord {
     return this.#transaction(() => {
       const turn = this.requireTurn(taskId, turnId);
       if (turn.status !== 'pending') {
         throw new StateError('TURN_STATE_CONFLICT', `turn is ${turn.status}, expected pending: ${turnId}`);
       }
+      const sourceUrls = new Set(
+        artifacts.map((artifact) => {
+          return artifact.sourceUrl;
+        }),
+      );
+      if (sourceUrls.size !== artifacts.length) {
+        throw new StateError('ARTIFACT_CONFLICT', `artifact source URLs must be unique: ${turnId}`);
+      }
+
       const now = new Date().toISOString();
       this.#database
         .prepare(
           `UPDATE turn
-           SET status = 'completed', response_path = ?, error = NULL, updated_at = ?
+           SET status = 'capturing', response_path = ?, error = NULL, updated_at = ?
            WHERE task_id = ? AND id = ?`,
         )
         .run(responsePath, now, taskId, turnId);
+      const insert = this.#database.prepare(
+        `INSERT INTO artifact (
+          task_id, turn_id, ordinal, source_url, label, filename,
+          local_path, status, error, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, NULL, NULL, 'pending', NULL, ?, ?)`,
+      );
+      for (const [index, artifact] of artifacts.entries()) {
+        insert.run(taskId, turnId, index + 1, artifact.sourceUrl, artifact.label, now, now);
+      }
+      return this.requireTurn(taskId, turnId);
+    });
+  }
+
+  /**
+   * Records the immutable destination selected after a browser download reports its suggested name.
+   *
+   * @param taskId Owning task identifier.
+   * @param turnId Capturing turn identifier.
+   * @param ordinal One-based artifact order.
+   * @param filename Browser-suggested original filename.
+   * @param localPath Deterministic final path inside the artifact ordinal directory.
+   * @returns The updated pending artifact.
+   * @throws {StateError} If the turn or artifact is not in a writable capture state.
+   * @throws {Error} If SQLite cannot commit the destination.
+   */
+  setArtifactDestination(
+    taskId: string,
+    turnId: string,
+    ordinal: number,
+    filename: string,
+    localPath: string,
+  ): ArtifactRecord {
+    return this.#transaction(() => {
+      const turn = this.requireTurn(taskId, turnId);
+      if (turn.status !== 'capturing') {
+        throw new StateError('TURN_STATE_CONFLICT', `turn is ${turn.status}, expected capturing: ${turnId}`);
+      }
+      const artifact = this.requireArtifact(taskId, turnId, ordinal);
+      if (artifact.status !== 'pending') {
+        throw new StateError('ARTIFACT_STATE_CONFLICT', `artifact is ${artifact.status}: ${ordinal}`);
+      }
+      if (
+        (artifact.filename !== null && artifact.filename !== filename) ||
+        (artifact.localPath !== null && artifact.localPath !== localPath)
+      ) {
+        throw new StateError('ARTIFACT_INCONSISTENT', `artifact destination changed: ${ordinal}`);
+      }
+      const now = new Date().toISOString();
+      this.#database
+        .prepare(
+          `UPDATE artifact
+           SET filename = ?, local_path = ?, error = NULL, updated_at = ?
+           WHERE task_id = ? AND turn_id = ? AND ordinal = ?`,
+        )
+        .run(filename, localPath, now, taskId, turnId, ordinal);
+      return this.requireArtifact(taskId, turnId, ordinal);
+    });
+  }
+
+  /**
+   * Retains a concrete retryable artifact failure without ending the capture.
+   *
+   * @param taskId Owning task identifier.
+   * @param turnId Capturing turn identifier.
+   * @param ordinal One-based artifact order.
+   * @param reason Concrete browser, download, or publication failure.
+   * @returns The still-pending artifact with updated diagnostic state.
+   * @throws {StateError} If the artifact is not pending.
+   * @throws {Error} If SQLite cannot commit the diagnostic.
+   */
+  recordArtifactError(taskId: string, turnId: string, ordinal: number, reason: string): ArtifactRecord {
+    return this.#transaction(() => {
+      const artifact = this.requireArtifact(taskId, turnId, ordinal);
+      if (artifact.status !== 'pending') {
+        throw new StateError('ARTIFACT_STATE_CONFLICT', `artifact is ${artifact.status}: ${ordinal}`);
+      }
+      const now = new Date().toISOString();
+      this.#database
+        .prepare(
+          `UPDATE artifact SET error = ?, updated_at = ?
+           WHERE task_id = ? AND turn_id = ? AND ordinal = ?`,
+        )
+        .run(reason, now, taskId, turnId, ordinal);
+      return this.requireArtifact(taskId, turnId, ordinal);
+    });
+  }
+
+  /**
+   * Marks one artifact complete only after its recorded final file is visible.
+   *
+   * @param taskId Owning task identifier.
+   * @param turnId Capturing turn identifier.
+   * @param ordinal One-based artifact order.
+   * @returns The completed artifact.
+   * @throws {StateError} If its destination is missing, unreadable, or in another state.
+   * @throws {Error} If SQLite cannot commit the transition.
+   */
+  completeArtifact(taskId: string, turnId: string, ordinal: number): ArtifactRecord {
+    const artifact = this.requireArtifact(taskId, turnId, ordinal);
+    if (artifact.localPath === null || !isRegularFile(artifact.localPath)) {
+      throw new StateError('ARTIFACT_MISSING', `artifact must exist before completion: ${ordinal}`);
+    }
+    return this.#transaction(() => {
+      const current = this.requireArtifact(taskId, turnId, ordinal);
+      if (current.status !== 'pending') {
+        throw new StateError('ARTIFACT_STATE_CONFLICT', `artifact is ${current.status}: ${ordinal}`);
+      }
+      const now = new Date().toISOString();
+      this.#database
+        .prepare(
+          `UPDATE artifact SET status = 'completed', error = NULL, updated_at = ?
+           WHERE task_id = ? AND turn_id = ? AND ordinal = ?`,
+        )
+        .run(now, taskId, turnId, ordinal);
+      return this.requireArtifact(taskId, turnId, ordinal);
+    });
+  }
+
+  /**
+   * Marks a capturing turn completed only after its response and every artifact are visible.
+   *
+   * @param taskId Owning task identifier.
+   * @param turnId Capturing turn identifier.
+   * @param responsePath Immutable response transcript path.
+   * @returns The updated completed turn.
+   * @throws {StateError} If the capture is incomplete, inconsistent, or missing a file.
+   * @throws {Error} If SQLite cannot commit the transition.
+   */
+  completeTurn(taskId: string, turnId: string, responsePath: string): TurnRecord {
+    if (!isRegularFile(responsePath)) {
+      throw new StateError('RESPONSE_MISSING', `response must exist before completion: ${responsePath}`);
+    }
+    return this.#transaction(() => {
+      const turn = this.requireTurn(taskId, turnId);
+      if (turn.status !== 'capturing') {
+        throw new StateError('TURN_STATE_CONFLICT', `turn is ${turn.status}, expected capturing: ${turnId}`);
+      }
+      if (turn.responsePath !== responsePath) {
+        throw new StateError('TRANSCRIPT_INCONSISTENT', `response path changed while capturing: ${turnId}`);
+      }
+      const artifacts = this.listArtifacts(taskId, turnId);
+      for (const artifact of artifacts) {
+        if (artifact.status !== 'completed' || artifact.localPath === null || !isRegularFile(artifact.localPath)) {
+          throw new StateError('ARTIFACT_INCOMPLETE', `artifact is not complete and readable: ${artifact.ordinal}`);
+        }
+      }
+      const now = new Date().toISOString();
+      this.#database
+        .prepare(
+          `UPDATE turn
+           SET status = 'completed', error = NULL, updated_at = ?
+           WHERE task_id = ? AND id = ?`,
+        )
+        .run(now, taskId, turnId);
       return this.requireTurn(taskId, turnId);
     });
   }
@@ -627,6 +830,43 @@ export class StateStore {
       .prepare('SELECT * FROM turn WHERE task_id = ? ORDER BY created_at, rowid')
       .all(taskId)
       .map(decodeTurn);
+  }
+
+  /**
+   * Lists one turn's artifacts in stable response order.
+   *
+   * @param taskId Owning task identifier.
+   * @param turnId Owning turn identifier.
+   * @returns Decoded artifact rows ordered by one-based ordinal.
+   * @throws {StateError} If the turn does not exist.
+   * @throws {Error} If SQLite cannot execute or decode the query.
+   */
+  listArtifacts(taskId: string, turnId: string): readonly ArtifactRecord[] {
+    this.requireTurn(taskId, turnId);
+    return this.#database
+      .prepare('SELECT * FROM artifact WHERE task_id = ? AND turn_id = ? ORDER BY ordinal')
+      .all(taskId, turnId)
+      .map(decodeArtifact);
+  }
+
+  /**
+   * Loads one artifact and rejects unknown ordinals.
+   *
+   * @param taskId Owning task identifier.
+   * @param turnId Owning turn identifier.
+   * @param ordinal One-based response order.
+   * @returns The artifact record.
+   * @throws {StateError} If the artifact does not exist.
+   * @throws {Error} If SQLite cannot execute or decode the query.
+   */
+  requireArtifact(taskId: string, turnId: string, ordinal: number): ArtifactRecord {
+    const row = this.#database
+      .prepare('SELECT * FROM artifact WHERE task_id = ? AND turn_id = ? AND ordinal = ?')
+      .get(taskId, turnId, ordinal);
+    if (row === undefined) {
+      throw new StateError('ARTIFACT_NOT_FOUND', `artifact does not exist for turn ${turnId}: ${ordinal}`);
+    }
+    return decodeArtifact(row);
   }
 
   /**
@@ -792,6 +1032,30 @@ function decodeTurn(value: unknown): TurnRecord {
 }
 
 /**
+ * Decodes one ordered artifact row.
+ *
+ * @param value Raw row returned by `node:sqlite`.
+ * @returns A typed artifact record.
+ * @throws {TypeError} If required fields violate the schema contract.
+ */
+function decodeArtifact(value: unknown): ArtifactRecord {
+  const row = record(value);
+  return {
+    taskId: text(row.task_id, 'artifact.task_id'),
+    turnId: text(row.turn_id, 'artifact.turn_id'),
+    ordinal: integer(row.ordinal, 'artifact.ordinal'),
+    sourceUrl: text(row.source_url, 'artifact.source_url'),
+    label: text(row.label, 'artifact.label'),
+    filename: nullableText(row.filename, 'artifact.filename'),
+    localPath: nullableText(row.local_path, 'artifact.local_path'),
+    status: artifactStatus(row.status),
+    error: nullableText(row.error, 'artifact.error'),
+    createdAt: text(row.created_at, 'artifact.created_at'),
+    updatedAt: text(row.updated_at, 'artifact.updated_at'),
+  };
+}
+
+/**
  * Narrows an unknown SQLite row to an object.
  *
  * @param value Raw query result.
@@ -854,6 +1118,32 @@ function nullableInteger(value: SQLInputValue | undefined, field: string): numbe
 }
 
 /**
+ * Narrows a required positive SQLite integer.
+ *
+ * @param value Raw column value.
+ * @param field Diagnostic field name.
+ * @returns The positive integer.
+ * @throws {TypeError} If the column is not a positive integer.
+ */
+function integer(value: SQLInputValue | undefined, field: string): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {
+    throw new TypeError(`${field} must be a positive integer`);
+  }
+  return value;
+}
+
+/**
+ * Checks a completed transcript path without following non-file directory entries.
+ *
+ * @param path Database-recorded absolute file path.
+ * @returns True only for an existing regular file.
+ * @throws {Error} Ordinary absence is converted to false.
+ */
+function isRegularFile(path: string): boolean {
+  return existsSync(path) && statSync(path).isFile();
+}
+
+/**
  * Checks whether a lease-owning process still exists without signaling it.
  *
  * @param pid Operating-system process identifier stored with the lease.
@@ -894,6 +1184,7 @@ function turnStatus(value: SQLInputValue | undefined): TurnStatus {
   if (
     value === 'sending' ||
     value === 'pending' ||
+    value === 'capturing' ||
     value === 'completed' ||
     value === 'failed' ||
     value === 'unknown-submission'
@@ -901,6 +1192,20 @@ function turnStatus(value: SQLInputValue | undefined): TurnStatus {
     return value;
   }
   throw new TypeError(`invalid turn status: ${String(value)}`);
+}
+
+/**
+ * Validates the closed artifact-status vocabulary.
+ *
+ * @param value Raw status column.
+ * @returns A valid artifact status.
+ * @throws {TypeError} If the database contains an unsupported status.
+ */
+function artifactStatus(value: SQLInputValue | undefined): ArtifactStatus {
+  if (value === 'pending' || value === 'completed') {
+    return value;
+  }
+  throw new TypeError(`invalid artifact status: ${String(value)}`);
 }
 
 /**

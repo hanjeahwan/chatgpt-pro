@@ -6,10 +6,14 @@ import { describe, expect, it } from 'vitest';
 
 import {
   collabPaths,
+  artifactPath,
+  artifactTemporaryPath,
   ensureCollabDirectories,
   prepareInputs,
+  publishOrVerifyArtifact,
+  publishOrVerifyResponse,
+  responsePath,
   savePromptCopy,
-  saveResponse,
 } from '../skills/chatgpt-pro-collab/scripts/session.ts';
 
 describe('BEH-003 and BEH-007 artifact boundaries', () => {
@@ -40,14 +44,17 @@ describe('BEH-003 and BEH-007 artifact boundaries', () => {
     await ensureCollabDirectories(paths);
 
     const promptPath = await savePromptCopy(paths, 'task-a', 'turn-a', Buffer.from('first'));
-    const responsePath = await saveResponse(paths, 'task-a', 'turn-a', 'response');
+    const targetResponsePath = responsePath(paths, 'task-a', 'turn-a');
+    await publishOrVerifyResponse(targetResponsePath, 'response');
 
     await expect(savePromptCopy(paths, 'task-a', 'turn-a', Buffer.from('replacement'))).rejects.toMatchObject({
       code: 'EEXIST',
     });
-    await expect(saveResponse(paths, 'task-a', 'turn-a', 'replacement')).rejects.toMatchObject({ code: 'EEXIST' });
+    await expect(publishOrVerifyResponse(targetResponsePath, 'replacement')).rejects.toMatchObject({
+      code: 'TRANSCRIPT_INCONSISTENT',
+    });
     expect(await readFile(promptPath, 'utf8')).toBe('first');
-    expect(await readFile(responsePath, 'utf8')).toBe('response');
+    expect(await readFile(targetResponsePath, 'utf8')).toBe('response');
   });
 
   it('rejects invalid UTF-8 instead of changing the submitted prompt bytes', async () => {
@@ -56,5 +63,32 @@ describe('BEH-003 and BEH-007 artifact boundaries', () => {
     await writeFile(promptPath, Buffer.from([0x66, 0x80, 0x6f]));
 
     await expect(prepareInputs(promptPath, [])).rejects.toThrow(/encoded data/i);
+  });
+
+  it('reuses identical interrupted capture files and rejects changed bytes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-capture-files-'));
+    const paths = collabPaths(root);
+    await ensureCollabDirectories(paths);
+    const targetResponsePath = responsePath(paths, 'task-a', 'turn-a');
+
+    await publishOrVerifyResponse(targetResponsePath, 'response');
+    await expect(publishOrVerifyResponse(targetResponsePath, 'response')).resolves.toBe(targetResponsePath);
+    await expect(publishOrVerifyResponse(targetResponsePath, 'changed')).rejects.toMatchObject({
+      code: 'TRANSCRIPT_INCONSISTENT',
+    });
+
+    const firstTemporary = await artifactTemporaryPath(paths, 'task-a', 'turn-a', 1);
+    const targetArtifactPath = artifactPath(paths, 'task-a', 'turn-a', 1, '../same-name.txt');
+    await writeFile(firstTemporary, 'artifact');
+    await publishOrVerifyArtifact(firstTemporary, targetArtifactPath);
+    const secondTemporary = await artifactTemporaryPath(paths, 'task-a', 'turn-a', 1);
+    await writeFile(secondTemporary, 'artifact');
+    await expect(publishOrVerifyArtifact(secondTemporary, targetArtifactPath)).resolves.toBe(targetArtifactPath);
+    const changedTemporary = await artifactTemporaryPath(paths, 'task-a', 'turn-a', 1);
+    await writeFile(changedTemporary, 'changed');
+    await expect(publishOrVerifyArtifact(changedTemporary, targetArtifactPath)).rejects.toMatchObject({
+      code: 'ARTIFACT_INCONSISTENT',
+    });
+    expect(await readFile(targetArtifactPath, 'utf8')).toBe('artifact');
   });
 });

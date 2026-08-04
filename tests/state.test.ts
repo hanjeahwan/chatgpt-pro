@@ -20,6 +20,7 @@ describe('BEH-002, BEH-005, and BEH-007 state gates', () => {
     store.markSubmissionAttempting('task-a', 'turn-a');
     store.markTurnPending('task-a', 'turn-a', 'conversation-a', 'https://chatgpt.com/c/conversation-a');
     const responsePath = join(root, 'response.md');
+    store.beginCapture('task-a', 'turn-a', responsePath, []);
     await writeFile(responsePath, 'response');
     store.completeTurn('task-a', 'turn-a', responsePath);
     store.beginTurn('task-a', 'turn-b', '/other.md', []);
@@ -28,6 +29,46 @@ describe('BEH-002, BEH-005, and BEH-007 state gates', () => {
     expect(() => {
       return store.markTurnPending('task-a', 'turn-b', 'conversation-b', 'https://chatgpt.com/c/conversation-b');
     }).toThrowError(/different conversation/);
+    store.close();
+  });
+
+  it('freezes ordered artifacts before publication and completes only readable files', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-artifact-state-'));
+    const store = new StateStore(join(root, 'state.sqlite'));
+    store.createTask('task-a', 'session-a');
+    store.beginTurn('task-a', 'turn-a', '/prompt.md', []);
+    store.markSubmissionAttempting('task-a', 'turn-a');
+    store.markTurnPending('task-a', 'turn-a', 'conversation-a', 'https://chatgpt.com/c/conversation-a');
+    const responsePath = join(root, 'response.md');
+    store.beginCapture('task-a', 'turn-a', responsePath, [
+      { sourceUrl: 'sandbox:/mnt/data/first.txt', label: 'first.txt' },
+      { sourceUrl: 'sandbox:/mnt/data/second.txt', label: 'second.txt' },
+    ]);
+
+    expect(store.requireTurn('task-a', 'turn-a')).toMatchObject({ status: 'capturing', responsePath });
+    expect(store.listArtifacts('task-a', 'turn-a')).toMatchObject([
+      { ordinal: 1, sourceUrl: 'sandbox:/mnt/data/first.txt', status: 'pending' },
+      { ordinal: 2, sourceUrl: 'sandbox:/mnt/data/second.txt', status: 'pending' },
+    ]);
+    expect(() => {
+      return store.beginTurn('task-a', 'turn-b', '/other.md', []);
+    }).toThrowError(/unfinished turn/);
+
+    await writeFile(responsePath, 'response');
+    for (const ordinal of [1, 2]) {
+      const localPath = join(root, `${ordinal}.txt`);
+      store.setArtifactDestination('task-a', 'turn-a', ordinal, `${ordinal}.txt`, localPath);
+      await writeFile(localPath, `artifact ${ordinal}`);
+      store.completeArtifact('task-a', 'turn-a', ordinal);
+    }
+    store.completeTurn('task-a', 'turn-a', responsePath);
+
+    expect(store.requireTurn('task-a', 'turn-a').status).toBe('completed');
+    expect(
+      store.listArtifacts('task-a', 'turn-a').map((artifact) => {
+        return artifact.status;
+      }),
+    ).toEqual(['completed', 'completed']);
     store.close();
   });
 

@@ -139,24 +139,134 @@ export async function savePromptCopy(
 }
 
 /**
- * Publishes an immutable captured response for a completed turn.
+ * Returns the deterministic response path recorded before capture files are published.
  *
  * @param paths Resolved Collab paths.
  * @param taskId Owning task identifier.
  * @param turnId Owning turn identifier.
- * @param response Exact text returned by the page-local Copy response interception.
- * @returns The absolute response transcript path.
- * @throws {Error} If the target already exists or cannot be written atomically.
+ * @returns The absolute immutable response path.
+ * @throws {Error} This pure path operation does not throw for validated string inputs.
  */
-export async function saveResponse(
+export function responsePath(paths: CollabPaths, taskId: string, turnId: string): string {
+  return join(turnDirectory(paths, taskId, turnId), 'response.md');
+}
+
+/**
+ * Publishes a response once, or verifies byte equality during interrupted capture recovery.
+ *
+ * @param target Database-recorded response path.
+ * @param response Newly copied exact response text.
+ * @returns The same absolute response path.
+ * @throws {Error} If publication fails or an existing response differs.
+ */
+export async function publishOrVerifyResponse(target: string, response: string): Promise<string> {
+  try {
+    await writeNewFileAtomically(target, response);
+  } catch (error) {
+    if (!isAlreadyExists(error)) {
+      throw error;
+    }
+    const existing = await readFile(target);
+    if (!existing.equals(Buffer.from(response))) {
+      throw new SessionError('TRANSCRIPT_INCONSISTENT', `captured response differs from ${target}`);
+    }
+  }
+  return target;
+}
+
+/**
+ * Resolves an artifact destination under its one-based ordinal directory.
+ *
+ * @param paths Resolved Collab paths.
+ * @param taskId Owning task identifier.
+ * @param turnId Owning turn identifier.
+ * @param ordinal One-based artifact order.
+ * @param suggestedFilename Browser-suggested original filename.
+ * @returns The absolute collision-free artifact path.
+ * @throws {SessionError} If the ordinal or filename cannot form a safe local path.
+ */
+export function artifactPath(
   paths: CollabPaths,
   taskId: string,
   turnId: string,
-  response: string,
+  ordinal: number,
+  suggestedFilename: string,
+): string {
+  if (!Number.isSafeInteger(ordinal) || ordinal <= 0) {
+    throw new SessionError('ARTIFACT_PATH_INVALID', `artifact ordinal must be positive: ${ordinal}`);
+  }
+  const filename = basename(suggestedFilename);
+  if (filename === '' || filename === '.' || filename === '..') {
+    throw new SessionError('ARTIFACT_PATH_INVALID', `artifact filename is invalid: ${suggestedFilename}`);
+  }
+  return join(turnDirectory(paths, taskId, turnId), 'artifacts', String(ordinal), filename);
+}
+
+/**
+ * Creates a unique browser download target beside the eventual artifact file.
+ *
+ * @param paths Resolved Collab paths.
+ * @param taskId Owning task identifier.
+ * @param turnId Owning turn identifier.
+ * @param ordinal One-based artifact order.
+ * @returns A fresh absolute temporary path not yet present on disk.
+ * @throws {Error} If the artifact directory cannot be created.
+ */
+export async function artifactTemporaryPath(
+  paths: CollabPaths,
+  taskId: string,
+  turnId: string,
+  ordinal: number,
 ): Promise<string> {
-  const target = join(turnDirectory(paths, taskId, turnId), 'response.md');
-  await writeNewFileAtomically(target, response);
+  const directory = dirname(artifactPath(paths, taskId, turnId, ordinal, 'artifact'));
+  await mkdir(directory, { recursive: true });
+  return join(directory, `.download-${randomUUID()}.tmp`);
+}
+
+/**
+ * Publishes downloaded bytes without overwrite, or verifies an interrupted prior publication.
+ *
+ * @param temporaryPath Complete browser-saved temporary download.
+ * @param target Database-recorded final artifact path.
+ * @returns The final artifact path.
+ * @throws {SessionError} If an existing final artifact has different bytes.
+ * @throws {Error} If reading, linking, or cleanup fails.
+ */
+export async function publishOrVerifyArtifact(temporaryPath: string, target: string): Promise<string> {
+  await assertReadableRegularFile(temporaryPath, 'downloaded artifact');
+  await mkdir(dirname(target), { recursive: true });
+  try {
+    await link(temporaryPath, target);
+  } catch (error) {
+    if (!isAlreadyExists(error)) {
+      throw error;
+    }
+    const [temporary, existing] = await Promise.all([readFile(temporaryPath), readFile(target)]);
+    if (!temporary.equals(existing)) {
+      throw new SessionError('ARTIFACT_INCONSISTENT', `downloaded artifact differs from ${target}`);
+    }
+  } finally {
+    await unlink(temporaryPath).catch(() => {
+      return undefined;
+    });
+  }
   return target;
+}
+
+/**
+ * Verifies a completed artifact remains a readable regular file.
+ *
+ * @param localPath Database-recorded artifact path.
+ * @returns The same absolute path.
+ * @throws {SessionError} If persisted state and filesystem differ.
+ */
+export async function requireArtifact(localPath: string): Promise<string> {
+  try {
+    await assertReadableRegularFile(localPath, 'completed artifact');
+  } catch (error) {
+    throw new SessionError('ARTIFACT_INCONSISTENT', `${localPath}: ${errorMessage(error)}`);
+  }
+  return localPath;
 }
 
 /**
@@ -206,6 +316,23 @@ export function turnDirectory(paths: CollabPaths, taskId: string, turnId: string
   return join(taskDirectory(paths, taskId), 'turns', turnId);
 }
 
+export class SessionError extends Error {
+  readonly code: string;
+
+  /**
+   * Creates a stable transcript or artifact publication error.
+   *
+   * @param code Machine-readable failure code.
+   * @param message Concrete filesystem inconsistency.
+   * @throws {Error} This constructor does not throw beyond ordinary allocation failures.
+   */
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = 'SessionError';
+    this.code = code;
+  }
+}
+
 /**
  * Checks readability without copying opaque attachment bytes.
  *
@@ -251,4 +378,26 @@ async function writeNewFileAtomically(target: string, data: Uint8Array | string)
       return undefined;
     });
   }
+}
+
+/**
+ * Classifies a no-overwrite publication collision.
+ *
+ * @param error Unknown filesystem failure.
+ * @returns True only for an `EEXIST` error.
+ * @throws {Error} This classifier does not throw for ordinary values.
+ */
+function isAlreadyExists(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'EEXIST';
+}
+
+/**
+ * Extracts a stable message without discarding non-Error failures.
+ *
+ * @param error Unknown thrown value.
+ * @returns Human-readable cause.
+ * @throws {Error} This formatter does not throw for ordinary values.
+ */
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
