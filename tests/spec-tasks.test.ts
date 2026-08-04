@@ -148,7 +148,7 @@ describe('validateLedger', () => {
     expect(errors).toContain('task dependency cycle: IMP-001 -> IMP-002 -> IMP-001');
   });
 
-  it('rejects a started task whose dependency is not done', () => {
+  it('rejects a started task whose dependency is not implemented', () => {
     const content = spec();
     const ledger = ledgerFor(content);
     ledger.tasks[1].status = 'in_progress';
@@ -158,7 +158,23 @@ describe('validateLedger', () => {
         expectedSpec: 'docs/specs/example.md',
         readiness: 'ready',
       }),
-    ).toContain('IMP-002 is in_progress before dependency IMP-001 is done');
+    ).toContain('IMP-002 is in_progress before dependency IMP-001 is implemented');
+  });
+
+  it('allows an implemented dependency without review to unlock downstream implementation', () => {
+    const content = spec();
+    const ledger = ledgerFor(content);
+    ledger.tasks[0].status = 'implemented';
+    ledger.tasks[0].evidence.commits = ['commit-a'];
+    ledger.tasks[0].evidence.checks = ['check-a'];
+    ledger.tasks[1].status = 'in_progress';
+
+    expect(
+      validateLedger(parseSpec(content), ledger, {
+        expectedSpec: 'docs/specs/example.md',
+        readiness: 'ready',
+      }),
+    ).toEqual([]);
   });
 
   it('requires evidence before a task can be done', () => {

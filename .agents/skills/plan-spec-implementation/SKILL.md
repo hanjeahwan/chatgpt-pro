@@ -43,7 +43,7 @@ description: 为已经成形的新 Spec 创建稳定的实施任务账本，或�
 - `scope` 只记录组件或职责边界，不把可能变化的完整文件清单当作合同。
 - 新任务使用当前历史最大 `IMP-*` 后的下一个编号。不得重排、重编号或复用删除、取消过的 ID。
 
-任务状态只使用：`pending`、`in_progress`、`blocked`、`done`、`invalidated`、`cancelled`。
+任务状态只使用：`pending`、`in_progress`、`implemented`、`blocked`、`done`、`invalidated`、`cancelled`。`implemented` 表示实现提交与相关检查已经取得，可满足下游实施依赖，但全量验证或 Review 尚未收口；它不能替代 `done`。
 
 ## 4. 创建新账本
 
@@ -80,13 +80,13 @@ description: 为已经成形的新 Spec 创建稳定的实施任务账本，或�
 
 根据 `diff` 结果逐项处理：
 
-| Spec 变化                | 账本动作                                                                               |
-| ------------------------ | -------------------------------------------------------------------------------------- |
-| 只移动章节               | 保留 IMP、状态和证据；更新 Spec 摘要                                                   |
-| 新增 BEH/VER             | 映射到现有未完成任务或追加新 IMP                                                       |
-| BEH/VER 内容变化         | 清空关联任务的旧证据，移出 `done`，重新设为 `pending`、`blocked` 或 `cancelled`        |
-| 删除 BEH/VER             | 删除对应引用并清空关联任务旧证据；失去全部目标的任务设为 `cancelled`，其余任务重新判断 |
-| 非编号边界或技术合同变化 | 根据实际影响处理关联 IMP，不得因编号未变而忽略                                         |
+| Spec 变化                | 账本动作                                                                                      |
+| ------------------------ | --------------------------------------------------------------------------------------------- |
+| 只移动章节               | 保留 IMP、状态和证据；更新 Spec 摘要                                                          |
+| 新增 BEH/VER             | 映射到现有未完成任务或追加新 IMP                                                              |
+| BEH/VER 内容变化         | 清空关联任务的旧证据，移出 `implemented`/`done`，重新设为 `pending`、`blocked` 或 `cancelled` |
+| 删除 BEH/VER             | 删除对应引用并清空关联任务旧证据；失去全部目标的任务设为 `cancelled`，其余任务重新判断        |
+| 非编号边界或技术合同变化 | 根据实际影响处理关联 IMP，不得因编号未变而忽略                                                |
 
 `contextChanged` 识别出的任务按相同规则清空旧证据并重新判断。完成任务调整后，用当前 `snapshot` 值替换 `specDigest`、`contextDigest` 和 `sourceDigests`。未受影响任务的 ID、状态、依赖和证据保持原样；不得整体重生成账本。
 
@@ -100,6 +100,7 @@ node <skill-directory>/scripts/spec-tasks.ts check --ready --spec docs/specs/<sp
 
 - `check --ready` 通过后，按依赖选择当前 IMP，并把运行时计划限定为这些任务。
 - 每次提交后记录对应 commit；每项 VER 通过后记录可复现命令或证据位置。
+- 实现提交与相关检查完成后把任务设为 `implemented`；下游任务可依赖 `implemented` 或 `done`，不必等待全量验证和 Review。
 - Spec 在执行中变化时停止受影响实现，重新执行第 2、5、6 节；未受影响任务可以保留。
 - Code Review 完成后记录 reviewer thread 或根 Review Task 及结论。只有实现、验证和 Review 证据齐全时才设为 `done`。
 - 交付前运行 `check --final`；账本收口产生的纯状态/证据更新不得夹带 Spec 或实现变化。
@@ -119,6 +120,7 @@ node <skill-directory>/scripts/spec-tasks.ts check --ready --spec docs/specs/<sp
 - [ ] 每个 BEH 是否至少由一个非取消任务覆盖？
 - [ ] 每个必需 VER 是否恰好由一个非取消任务负责？
 - [ ] 任务依赖是否存在且无环？
+- [ ] 已开始任务的依赖是否为 `implemented` 或 `done`？
 - [ ] Spec 变化是否已经增量对账，而非整体重建？
 - [ ] `check --ready` 是否真实通过？
 

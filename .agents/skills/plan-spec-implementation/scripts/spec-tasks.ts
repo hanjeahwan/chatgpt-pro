@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-type TaskStatus = 'pending' | 'in_progress' | 'blocked' | 'done' | 'invalidated' | 'cancelled';
+type TaskStatus = 'pending' | 'in_progress' | 'implemented' | 'blocked' | 'done' | 'invalidated' | 'cancelled';
 
 type Readiness = 'basic' | 'ready' | 'final';
 
@@ -53,7 +53,15 @@ export interface SpecDifference {
   impactedTasks: string[];
 }
 
-const TASK_STATUSES = new Set<TaskStatus>(['pending', 'in_progress', 'blocked', 'done', 'invalidated', 'cancelled']);
+const TASK_STATUSES = new Set<TaskStatus>([
+  'pending',
+  'in_progress',
+  'implemented',
+  'blocked',
+  'done',
+  'invalidated',
+  'cancelled',
+]);
 
 /**
  * Parses stable BEH and VER section headings from a product Spec.
@@ -265,11 +273,16 @@ export function validateLedger(snapshot: SpecSnapshot, value: unknown, options: 
         appendOwner(verificationOwners, verificationId, task.id);
       }
     }
-    if (task.status === 'done') {
-      for (const evidenceType of ['commits', 'checks', 'reviews'] as const) {
+    if (task.status === 'implemented' || task.status === 'done') {
+      for (const evidenceType of ['commits', 'checks'] as const) {
         if (task.evidence[evidenceType].length === 0) {
-          errors.push(`${task.id} is done but evidence.${evidenceType} is empty`);
+          errors.push(`${task.id} is ${task.status} but evidence.${evidenceType} is empty`);
         }
+      }
+    }
+    if (task.status === 'done') {
+      if (task.evidence.reviews.length === 0) {
+        errors.push(`${task.id} is done but evidence.reviews is empty`);
       }
     }
   }
@@ -286,8 +299,12 @@ export function validateLedger(snapshot: SpecSnapshot, value: unknown, options: 
         errors.push(`${task.id} depends on unknown task ${dependencyId}`);
       } else if (dependency.status === 'cancelled') {
         errors.push(`${task.id} depends on cancelled task ${dependencyId}`);
-      } else if ((task.status === 'in_progress' || task.status === 'done') && dependency.status !== 'done') {
-        errors.push(`${task.id} is ${task.status} before dependency ${dependencyId} is done`);
+      } else if (
+        (task.status === 'in_progress' || task.status === 'implemented' || task.status === 'done') &&
+        dependency.status !== 'implemented' &&
+        dependency.status !== 'done'
+      ) {
+        errors.push(`${task.id} is ${task.status} before dependency ${dependencyId} is implemented`);
       }
       if (dependencyId === task.id) {
         errors.push(`${task.id} cannot depend on itself`);

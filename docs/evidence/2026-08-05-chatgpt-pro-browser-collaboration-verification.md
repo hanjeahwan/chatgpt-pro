@@ -56,28 +56,28 @@
 
 ## 5. 最终确定性检查
 
-| 检查                                                                        | 结果                                                                        |
-| --------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| `pnpm format:check`                                                         | ✅ 47 个文件格式通过                                                        |
-| `pnpm lint`                                                                 | ✅ 退出码 0                                                                 |
-| `pnpm typecheck`                                                            | ✅ 退出码 0                                                                 |
-| `pnpm test`                                                                 | ✅ 8 个 test file、66 个测试通过                                            |
-| `pnpm collab -- help`                                                       | ✅ 退出码 0；wait usage 含两个独立时长参数                                  |
-| 无 `package.json` 临时目录中用绝对路径执行 `collab.ts help`                 | ✅ 退出码 0                                                                 |
-| Node v25.9.0 与 Node v22.19.0 的 `node:sqlite` 和 TypeScript CLI smoke test | ✅ 两个版本均退出码 0                                                       |
-| `npx -y @playwright/cli@0.1.17 --help`                                      | ✅ 退出码 0                                                                 |
-| `git diff --check`                                                          | ✅ 退出码 0                                                                 |
-| 任务账本 `spec-tasks diff`                                                  | ✅ Spec/context 无漂移                                                      |
-| 任务账本 `spec-tasks check --ready`                                         | ⚠️ `ok=false`；所有任务仍为 `in_progress`，尚无 review 且必需验证未全部通过 |
+| 检查                                                                        | 结果                                                      |
+| --------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `pnpm format:check`                                                         | ✅ 47 个文件格式通过                                      |
+| `pnpm lint`                                                                 | ✅ 退出码 0                                               |
+| `pnpm typecheck`                                                            | ✅ 退出码 0                                               |
+| `pnpm test`                                                                 | ✅ 8 个 test file、66 个测试通过                          |
+| `pnpm collab -- help`                                                       | ✅ 退出码 0；wait usage 含两个独立时长参数                |
+| 无 `package.json` 临时目录中用绝对路径执行 `collab.ts help`                 | ✅ 退出码 0                                               |
+| Node v25.9.0 与 Node v22.19.0 的 `node:sqlite` 和 TypeScript CLI smoke test | ✅ 两个版本均退出码 0                                     |
+| `npx -y @playwright/cli@0.1.17 --help`                                      | ✅ 退出码 0                                               |
+| `git diff --check`                                                          | ✅ 退出码 0                                               |
+| 任务账本 `spec-tasks diff`                                                  | ✅ Spec/context 无漂移                                    |
+| 任务账本 `spec-tasks check --ready`                                         | ✅ 所有实现任务均为 `implemented`，实施依赖与覆盖检查通过 |
 
-`check --ready` 的非零就绪结论是当前账本真实状态，不记作通过，也不通过篡改任务状态消除。
+`implemented` 只证明实现提交与相关检查已取得，可满足后续实施依赖；它不代表全量 VER 或 Review 已通过，`check --final` 仍应拒绝交付。
 
 ## 6. 失败尝试与边界
 
 - 一次并发 live 复验中 Task A 的远端生成超过 300 秒仍为 pending；Task B 仍完成六文件捕获。停止该 runner 并显式关闭两个会话，未把远端未完成写成产品实现失败或验证通过。
 - 专用 archive 全链路复验的第一条简单回复超过 120 秒仍未完成，因此没有进入 archive 阶段。继续重试不会引入新假设或证据来源，依照 Spec 停止重复尝试。
 - Live 临时根包含认证 seed 副本和下载产物，只用于当次检查；交付前已按核对后的精确路径从 `/private/tmp` 移入系统废纸篓，仍可由系统废纸篓恢复。本报告不依赖这些临时根持续存在。
-- 任务账本保持 `in_progress` 且 `evidence.reviews` 为空。原因是本 worker 不执行 Code Review，且 VER-001、VER-013、VER-014 以及若干严格 live 证据仍未取得；不得伪造 `done` 或 review 证据。
+- 任务账本保持 `implemented` 且 `evidence.reviews` 为空。原因是本 worker 不执行 Code Review，且 VER-001、VER-013、VER-014 以及若干严格 live 证据仍未取得；不得伪造 `done` 或 review 证据。
 
 ## 7. 交付前检查
 
@@ -91,4 +91,4 @@
 
 ## 8. 最终判断
 
-实现与确定性测试已完成，live forward test 发现的问题也已修复；但本 Spec 的完成条件要求 VER-001 至 VER-015 全部通过，当前证据不满足该条件。因此实现可交给 reviewer 检查，但任务账本必须继续保持 `in_progress`，不能宣称本 Spec 已最终验收。
+实现与确定性测试已完成，live forward test 发现的问题也已修复；但本 Spec 的完成条件要求 VER-001 至 VER-015 全部通过，当前证据不满足该条件。因此实现可交给 reviewer 检查，但任务账本必须继续保持 `implemented`，不能宣称本 Spec 已最终验收。

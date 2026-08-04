@@ -37,7 +37,7 @@ flowchart TD
 - Implementation worker 按账本中的 `dependsOn` 选择可执行的 `IMP-*`。运行时计划只镜像当前任务，任务身份、状态和依赖以账本为准。
 - 每个 `IMP-*` 是可独立实现、验证、提交和返工的最小行为切片；不要求 BEH、IMP 与 commit 一一对应。
 - 每个提交执行：实现 → 相关验证 → 自查 diff → 修复 → 复验 → commit。
-- 提交后在对应 IMP 中记录 commit 和已取得的验证证据。实现、验证或 Review 尚未齐全时不得标记 `done`。
+- 提交后在对应 IMP 中记录 commit 和已取得的验证证据。实现提交与相关检查完成后标记 `implemented`，允许下游 IMP 开始；全量验证或 Review 尚未齐全时不得标记 `done`。
 - Spec 在执行中发生变化时，worker 停止受影响任务并报告宿主；重新对账并通过 `check --ready` 后才能继续。
 - Worker 完成后发送一次 `worker_done`；宿主等待并处理结果，不接管实现。
 - 禁止跳过有效测试。
