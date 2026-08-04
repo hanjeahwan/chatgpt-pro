@@ -118,7 +118,11 @@
       "dependsOn": ["IMP-002", "IMP-004"],
       "scope": ["Browser boundary", "State store", "Transcript/artifact store"],
       "evidence": {
-        "commits": ["7a42428d9bf07e7f9fb65c0c71b6133ff322e46d", "08e1a38c050011f0dbd362e56b7b88d5b2cb3c76"],
+        "commits": [
+          "7a42428d9bf07e7f9fb65c0c71b6133ff322e46d",
+          "08e1a38c050011f0dbd362e56b7b88d5b2cb3c76",
+          "8da196df7980244387c343827e36e6f29f001f4f"
+        ],
         "checks": [
           "pnpm format:check",
           "pnpm lint",
@@ -126,7 +130,9 @@
           "pnpm test",
           "git diff --check",
           "Context7 /microsoft/playwright: Download.saveAs, suggestedFilename, url, and Page.download APIs verified",
-          "live 2026-08-05: six unique sandbox targets captured in order; duplicate page.html deduplicated; HTTPS link excluded; same-name targets saved to distinct ordinal directories"
+          "live 2026-08-05: six unique sandbox targets captured in order; duplicate page.html deduplicated; HTTPS link excluded; same-name targets saved to distinct ordinal directories",
+          "VER-015 deterministic evidence reset to not passed after Review task_f83d3a0d427b found generated page functions were not executed",
+          "pnpm exec vitest --run tests/browser.test.ts: generated capture/download page functions executed against a live-compatible fixture; occurrence/button count, row order, control relationship, direct/artifact download events, timeout boundary, and capturing invariant covered"
         ],
         "reviews": []
       }
@@ -183,7 +189,11 @@
       "dependsOn": ["IMP-001", "IMP-002", "IMP-003", "IMP-004", "IMP-005", "IMP-006", "IMP-007"],
       "scope": ["CLI", "State store", "Transcript/artifact store", "Test suite"],
       "evidence": {
-        "commits": ["0070235444624d30daeb38f232fe47c08707c04b"],
+        "commits": [
+          "0070235444624d30daeb38f232fe47c08707c04b",
+          "56d21d9ed42694659bce992b7bf88ed33ad37014",
+          "ff87186162b8558e40af013aac4d81826c345ca7"
+        ],
         "checks": [
           "pnpm format:check",
           "pnpm lint",
@@ -193,6 +203,8 @@
           "node v25.9.0 and npx -y node@22.19.0: node:sqlite smoke test and collab.ts help",
           "npx -y @playwright/cli@0.1.17 --help",
           "absolute collab.ts help from a temporary host directory without package.json",
+          "VER-011 reset to not passed after Review task_f83d3a0d427b found no real capture checkpoint subprocess kill/reopen matrix",
+          "pnpm exec vitest --run tests/state-concurrency.test.ts: 9 tests passed, including real child-process SIGKILL/reopen checkpoints after frozen capturing state, response publication, artifact publication before state update, partial artifact completion, and concurrent close",
           "node .agents/skills/plan-spec-implementation/scripts/spec-tasks.ts diff --spec docs/specs/2026-08-03-chatgpt-pro-browser-collaboration.md --ledger docs/execution/2026-08-03-chatgpt-pro-browser-collaboration.tasks.json",
           "node .agents/skills/plan-spec-implementation/scripts/spec-tasks.ts check --ready --spec docs/specs/2026-08-03-chatgpt-pro-browser-collaboration.md --ledger docs/execution/2026-08-03-chatgpt-pro-browser-collaboration.tasks.json"
         ],
