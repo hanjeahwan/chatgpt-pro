@@ -80,7 +80,7 @@
 
 - 一次并发 live 复验中 Task A 的远端生成超过 300 秒仍为 pending；Task B 仍完成六文件捕获。停止该 runner 并显式关闭两个会话，未把远端未完成写成产品实现失败或验证通过。
 - 专用 archive 全链路复验的第一条简单回复超过 120 秒仍未完成，因此没有进入 archive 阶段。继续重试不会引入新假设或证据来源，依照 Spec 停止重复尝试。
-- 首次 Review 的 F1/F2 暴露当前 Spec 冲突：line 217 禁止在取得完整 Copy/artifact 描述前进入 `capturing`，BEH-004 与 lines 161/176/233 又要求此前发生 capture timeout 时返回 `CAPTURE_TIMEOUT` 并保持 `capturing`。已通过 orchestration ask 请求产品裁决，收到裁决前不修改 Spec 或相关实现。
+- 首次 Review 的 F1/F2 暴露当前 Spec 冲突：line 217 禁止在取得完整 Copy/artifact 描述前进入 `capturing`，BEH-004 与 lines 161/176/233 又要求此前发生 capture timeout 时返回 `CAPTURE_TIMEOUT` 并保持 `capturing`。首次 orchestration ask 只收到暂停 F1/F2、等待产品裁决的中间答复；完成其余 finding 后再次请求处置，thread `msg_77b553beaac0` 在 600000 ms 内未获答复，因此未修改 Spec 或相关实现。
 - Live 临时根包含认证 seed 副本和下载产物，只用于当次检查；交付前已按核对后的精确路径从 `/private/tmp` 移入系统废纸篓，仍可由系统废纸篓恢复。本报告不依赖这些临时根持续存在。
 - 任务账本保持 `implemented` 且 `evidence.reviews` 为空。原因是本 worker 不执行 Code Review，且 VER-001、VER-013、VER-014 以及若干严格 live 证据仍未取得；不得伪造 `done` 或 review 证据。
 
