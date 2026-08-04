@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -362,6 +362,121 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     await expect(fixture.service.archive(task.taskId)).rejects.toMatchObject({ code: 'TASK_NOT_ACTIVE' });
   });
 
+  it('verifies and reuses an already-published file left pending at capture timeout', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.service.start();
+    const promptPath = join(fixture.root, 'prompt.md');
+    await writeFile(promptPath, 'interrupt after artifact publication');
+    const sourceUrl = 'sandbox:/mnt/data/result.txt';
+    fixture.browser.responseArtifacts.push({ sourceUrl, label: 'result.txt' });
+    fixture.browser.downloadDelayMs = 300;
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 20_000, 200)).rejects.toMatchObject({
+      code: 'CAPTURE_TIMEOUT',
+    });
+    const interruptedStore = new StateStore(fixture.paths.database);
+    const interruptedArtifact = interruptedStore.requireArtifact(task.taskId, turn.turnId, 1);
+    expect(interruptedArtifact).toMatchObject({ status: 'pending', localPath: expect.any(String) });
+    interruptedStore.close();
+    if (interruptedArtifact.localPath === null) {
+      throw new Error('fixture artifact destination was not recorded');
+    }
+    expect(await readFile(interruptedArtifact.localPath, 'utf8')).toBe(`artifact for ${sourceUrl}`);
+
+    fixture.browser.downloadDelayMs = 0;
+    const completed = await fixture.service.wait(task.taskId, turn.turnId, 1, 20_000);
+    expect(completed).toMatchObject({ status: 'completed', artifactPaths: [interruptedArtifact.localPath] });
+    expect(fixture.browser.downloadedArtifacts).toEqual([sourceUrl, sourceUrl]);
+  });
+
+  it('rejects changed response bytes during capture recovery without overwriting the transcript', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.service.start();
+    const promptPath = join(fixture.root, 'prompt.md');
+    await writeFile(promptPath, 'response consistency');
+    const sourceUrl = 'sandbox:/mnt/data/result.txt';
+    fixture.browser.responseArtifacts.push({ sourceUrl, label: 'result.txt' });
+    fixture.browser.nextDownloadFailureSourceUrl = sourceUrl;
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 20_000, 20_000)).rejects.toThrow(
+      /injected download failure/,
+    );
+    const store = new StateStore(fixture.paths.database);
+    const responsePath = store.requireTurn(task.taskId, turn.turnId).responsePath;
+    store.close();
+    if (responsePath === null) {
+      throw new Error('fixture response path was not recorded');
+    }
+    await writeFile(responsePath, 'changed bytes');
+
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 1, 20_000)).rejects.toMatchObject({
+      code: 'TRANSCRIPT_INCONSISTENT',
+    });
+    expect(await readFile(responsePath, 'utf8')).toBe('changed bytes');
+  });
+
+  it('rejects a changed logical artifact set before resuming downloads', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.service.start();
+    const promptPath = join(fixture.root, 'prompt.md');
+    await writeFile(promptPath, 'artifact set consistency');
+    const sourceUrl = 'sandbox:/mnt/data/result.txt';
+    fixture.browser.responseArtifacts.push({ sourceUrl, label: 'result.txt' });
+    fixture.browser.nextDownloadFailureSourceUrl = sourceUrl;
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 20_000, 20_000)).rejects.toThrow(
+      /injected download failure/,
+    );
+    fixture.browser.responseArtifacts.splice(0, 1, {
+      sourceUrl: 'sandbox:/mnt/data/changed.txt',
+      label: 'changed.txt',
+    });
+
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 1, 20_000)).rejects.toMatchObject({
+      code: 'ARTIFACT_SET_INCONSISTENT',
+    });
+    expect(fixture.browser.downloadedArtifacts).toEqual([sourceUrl]);
+  });
+
+  it('rejects changed pending artifact bytes and a missing completed artifact', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.service.start();
+    const promptPath = join(fixture.root, 'prompt.md');
+    await writeFile(promptPath, 'artifact byte consistency');
+    const sourceUrl = 'sandbox:/mnt/data/result.txt';
+    fixture.browser.responseArtifacts.push({ sourceUrl, label: 'result.txt' });
+    fixture.browser.downloadDelayMs = 300;
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 20_000, 200)).rejects.toMatchObject({
+      code: 'CAPTURE_TIMEOUT',
+    });
+    const pendingStore = new StateStore(fixture.paths.database);
+    const pendingPath = pendingStore.requireArtifact(task.taskId, turn.turnId, 1).localPath;
+    pendingStore.close();
+    if (pendingPath === null) {
+      throw new Error('fixture artifact destination was not recorded');
+    }
+    await writeFile(pendingPath, 'changed bytes');
+    fixture.browser.downloadDelayMs = 0;
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 1, 20_000)).rejects.toMatchObject({
+      code: 'ARTIFACT_INCONSISTENT',
+    });
+    expect(await readFile(pendingPath, 'utf8')).toBe('changed bytes');
+
+    await writeFile(pendingPath, `artifact for ${sourceUrl}`);
+    const completed = await fixture.service.wait(task.taskId, turn.turnId, 1, 20_000);
+    expect(completed.status).toBe('completed');
+    await unlink(pendingPath);
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 1, 1)).rejects.toMatchObject({
+      code: 'ARTIFACT_INCONSISTENT',
+    });
+  });
+
   it('re-reads archive lifecycle state after acquiring the task lease', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
@@ -460,6 +575,7 @@ class FakeBrowser implements CollabBrowser {
   pendingWaitPolls = 0;
   waitPollDelayMs = 0;
   captureDelayMs = 0;
+  downloadDelayMs = 0;
   activeCaptures = 0;
   maxConcurrentCaptures = 0;
   nextCaptureFailureTaskId: string | null = null;
@@ -658,6 +774,11 @@ class FakeBrowser implements CollabBrowser {
     if (this.nextDownloadFailureSourceUrl === sourceUrl) {
       this.nextDownloadFailureSourceUrl = null;
       throw new Error(`injected download failure for ${sourceUrl}`);
+    }
+    if (this.downloadDelayMs > 0) {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, this.downloadDelayMs);
+      });
     }
     await writeFile(temporaryPath, `artifact for ${sourceUrl}`);
     return {
