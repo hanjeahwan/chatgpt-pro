@@ -85,7 +85,7 @@
     {
       "id": "IMP-003",
       "title": "发送显式输入并支持单归档附件",
-      "status": "implemented",
+      "status": "done",
       "covers": ["BEH-003", "BEH-010"],
       "verifies": ["VER-003", "VER-013"],
       "dependsOn": ["IMP-001", "IMP-002"],
@@ -102,7 +102,10 @@
           "Final Review reconciliation: remains implemented because VER-003 passed but required VER-013 is only partial; independent hosts completed archive selection and upload evidence but did not obtain the Pro-side terminal extraction evidence",
           "VER-013 independent host A task_c4fbc6efab2a: no format was specified, so the Agent chose COPYFILE_DISABLE=1 tar --no-xattrs --no-recursion; 100 selected regular .ts files had 100 unique markers and source xattrs, the archive had no xattr/AppleDouble/extra file, local extraction matched, and send used one Web upload item",
           "VER-013 independent host B task_823bbdaa4c97: only a cross-platform receiver without assumed tar was stated, so the Agent chose zip -X; 100 selected regular .ts files had 100 markers and source xattrs, the ZIP had no extra metadata/member, local extraction matched, and send used one Web upload item",
-          "VER-013 remains partial: live tasks e5f2f859-9d85-4259-95fc-cf3cf83c0bc5 and 4088b600-e555-41f2-87ba-173ef2ad0608 each used one finite wait and returned pending, so Pro-side extraction count, all markers, and summary were not obtained; coordinator prohibited an unapproved rerun"
+          "VER-013 historical attempts: live tasks e5f2f859-9d85-4259-95fc-cf3cf83c0bc5 and 4088b600-e555-41f2-87ba-173ef2ad0608 each used one finite wait and returned pending, so those runs did not establish Pro-side extraction",
+          "VER-013 current-HEAD tar.gz task ce881056-79ae-45c3-bcb3-019633cc4459 turn 384fd850-093d-4bf5-9404-a2fa05ec18f9 and ZIP task 2daa2bb6-1c29-4230-8f9c-78fe6a50ca6a turn f6e28eeb-2175-4908-b001-d64d40e655a9 each uploaded exactly one archive and completed one finite wait; both response.md files have SHA-256 c3aabbf2191f005db660d4fb370702c68c9a7dd2aa450cccaddc5349da2e9839",
+          "Both Pro responses report fileCount=100, the exact 100-marker sorted array, relativePathsSha256=45728905f6592675cd1bda3781fefabaac70d36f6bb20237286fc82d37c2c558, markersSha256=66d650fda463d8bbfc33e0d37ea86c000992b12ecca9d577de15518c824fbc7d, contentSummarySha256=59c83c3137caebcd4b338e96f69e8cc8513bcac2d1230c5781e4b800ecd0ce54, and empty missing/duplicate/unreadable arrays; exact comparison against expected-manifest.json passed",
+          "Current reconciliation: done because VER-003 and VER-013, implementation checks, and root Review evidence are complete"
         ],
         "reviews": [
           "Root Review task_f83d3a0d427b; reviewer conversation/session 019fcdfa-ef5f-7410-a245-6bbaf7be52dd remained the same across initial carrier terminal term_bbb86a6a-edf1-4303-9b32-a690e443e75b and resumed carrier terminal term_7d1b0d8c-5693-4670-8a3f-488148223680; final closure status msg_19d1aefb2cb6 and worker_done msg_e00d44341bfe: F1-F5 all closed, no independent candidate"
