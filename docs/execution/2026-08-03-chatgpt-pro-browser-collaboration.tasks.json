@@ -48,23 +48,35 @@
           "pnpm test -- tests/browser.test.ts",
           "git diff --check",
           "live 2026-08-05: two distinct named sessions and conversation IDs used the same copied seed; copied seed SHA-256 remained unchanged",
-          "VER-001 live setup intentionally not repeated by coordinator decision; existing seed reuse is not fresh setup evidence"
+          "VER-001 live setup intentionally not repeated by coordinator decision; existing seed reuse is not fresh setup evidence",
+          "Final Review reconciliation: remains implemented because VER-001 is not obtained and VER-002 is partial; Review closure does not replace either verification"
         ],
-        "reviews": []
+        "reviews": [
+          "Root Review task_f83d3a0d427b; reviewer conversation/session 019fcdfa-ef5f-7410-a245-6bbaf7be52dd remained the same across initial carrier terminal term_bbb86a6a-edf1-4303-9b32-a690e443e75b and resumed carrier terminal term_7d1b0d8c-5693-4670-8a3f-488148223680; final closure status msg_19d1aefb2cb6 and worker_done msg_e00d44341bfe: F1-F5 all closed, no independent candidate"
+        ]
       }
     },
     {
       "id": "IMP-002",
       "title": "建立逐 turn 状态与可审计 transcript",
-      "status": "implemented",
+      "status": "done",
       "covers": ["BEH-007"],
       "verifies": [],
       "dependsOn": ["IMP-001"],
       "scope": ["State store", "Transcript/artifact store"],
       "evidence": {
         "commits": ["2d81754353357ab76124654c452cfc6da914e034"],
-        "checks": ["pnpm format:check", "pnpm lint", "pnpm typecheck", "pnpm test", "git diff --check"],
-        "reviews": []
+        "checks": [
+          "pnpm format:check",
+          "pnpm lint",
+          "pnpm typecheck",
+          "pnpm test",
+          "git diff --check",
+          "Final Review reconciliation: done because implementation checks and Review evidence are complete and this IMP has no mapped VER"
+        ],
+        "reviews": [
+          "Root Review task_f83d3a0d427b; reviewer conversation/session 019fcdfa-ef5f-7410-a245-6bbaf7be52dd remained the same across initial carrier terminal term_bbb86a6a-edf1-4303-9b32-a690e443e75b and resumed carrier terminal term_7d1b0d8c-5693-4670-8a3f-488148223680; final closure status msg_19d1aefb2cb6 and worker_done msg_e00d44341bfe: F1-F5 all closed, no independent candidate"
+        ]
       }
     },
     {
@@ -83,9 +95,12 @@
           "pnpm typecheck",
           "pnpm test",
           "git diff --check",
-          "live 2026-08-05: only workspace-selected.txt and outside-selected.txt were uploaded; selected-inputs.tar.gz listed selected-one.txt and nested/selected-two.txt only"
+          "live 2026-08-05: only workspace-selected.txt and outside-selected.txt were uploaded; selected-inputs.tar.gz listed selected-one.txt and nested/selected-two.txt only",
+          "Final Review reconciliation: remains implemented because VER-003 passed but required VER-013 is not obtained"
         ],
-        "reviews": []
+        "reviews": [
+          "Root Review task_f83d3a0d427b; reviewer conversation/session 019fcdfa-ef5f-7410-a245-6bbaf7be52dd remained the same across initial carrier terminal term_bbb86a6a-edf1-4303-9b32-a690e443e75b and resumed carrier terminal term_7d1b0d8c-5693-4670-8a3f-488148223680; final closure status msg_19d1aefb2cb6 and worker_done msg_e00d44341bfe: F1-F5 all closed, no independent candidate"
+        ]
       }
     },
     {
@@ -111,15 +126,18 @@
           "live 2026-08-05: response.md preserved heading, fenced TypeScript, and exact response text; wait returned one terminal result per invocation",
           "pnpm exec vitest --run tests/collab.test.ts: 23 tests passed; pre-freeze pending retry, 1ms delayed failure, never-resolving capture abort, pre-deadline browser error preservation, and post-freeze capturing timeout covered",
           "Review task_8de74c002256 reset F2 to still-open: the host watchdog covered captureResponse but not post-freeze downloadArtifact, so a never-settling download retained the wait operation lease",
-          "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts tests/browser-command-gate.test.ts: 58 tests passed; response and every artifact share one monotonic capture deadline, delayed and never-settling downloads return CAPTURE_TIMEOUT, gate/command processes exit, and the operation lease is reacquirable"
+          "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts tests/browser-command-gate.test.ts: 58 tests passed; response and every artifact share one monotonic capture deadline, delayed and never-settling downloads return CAPTURE_TIMEOUT, gate/command processes exit, and the operation lease is reacquirable",
+          "Final Review reconciliation: remains implemented because VER-004 is partial and required VER-014 is not obtained"
         ],
-        "reviews": []
+        "reviews": [
+          "Root Review task_f83d3a0d427b; reviewer conversation/session 019fcdfa-ef5f-7410-a245-6bbaf7be52dd remained the same across initial carrier terminal term_bbb86a6a-edf1-4303-9b32-a690e443e75b and resumed carrier terminal term_7d1b0d8c-5693-4670-8a3f-488148223680; final closure status msg_19d1aefb2cb6 and worker_done msg_e00d44341bfe: F1-F5 all closed, no independent candidate"
+        ]
       }
     },
     {
       "id": "IMP-005",
       "title": "捕获返回文件并支持可恢复发布",
-      "status": "implemented",
+      "status": "done",
       "covers": ["BEH-012"],
       "verifies": ["VER-015"],
       "dependsOn": ["IMP-002", "IMP-004"],
@@ -148,9 +166,12 @@
           "VER-015 reset to not passed after Review task_8de74c002256 reproduced a never-settling post-freeze artifact download that did not return CAPTURE_TIMEOUT or release the wait operation lease",
           "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts tests/browser-command-gate.test.ts: 58 tests passed; generated page fixtures remain executable and artifact downloads now cover delayed failure, never-settling provider, pre-deadline error-code preservation, safe command termination, shared remaining budget, no overwrite, and retry of pending rows only",
           "live 2026-08-05 after ba09c01c6c8d7d343fc3108655047c923da2a8c5, starting from HEAD 2c18adab58157634ce37f3a75cd1f0015bd757a7: task f44b6453-b56a-471a-8c39-606291de98f2 turn 7567c354-7a47-4674-9cd6-1bff68820f50 used one wait with observationWindowMs=600000 and captureTimeoutMs=300000 and returned completed; response.md SHA-256 38539261bf7cf124ab26f5b7f55f7ce6521882954adb3a217e3fe1101a054833 contained seven ordered occurrences and six unique sandbox targets, while HTTPS was excluded",
-          "same live turn: SQLite recorded artifact_set_recorded=1 and six ordered unique completed rows; HTML, one-member ZIP, 1x1 PNG, Python, and two distinct logical same.txt targets were readable without overwrite; repeated wait returned identical response/artifact paths, task close succeeded, the temporary prompt was deleted, and auth seed SHA-256 remained 3e4b106c38bf33013d364cc2e0c16711e04cba0c486de8531747f96680aba352"
+          "same live turn: SQLite recorded artifact_set_recorded=1 and six ordered unique completed rows; HTML, one-member ZIP, 1x1 PNG, Python, and two distinct logical same.txt targets were readable without overwrite; repeated wait returned identical response/artifact paths, task close succeeded, the temporary prompt was deleted, and auth seed SHA-256 remained 3e4b106c38bf33013d364cc2e0c16711e04cba0c486de8531747f96680aba352",
+          "Final Review reconciliation: done because VER-015 passed after the last related implementation change and implementation checks plus Review evidence are complete"
         ],
-        "reviews": []
+        "reviews": [
+          "Root Review task_f83d3a0d427b; reviewer conversation/session 019fcdfa-ef5f-7410-a245-6bbaf7be52dd remained the same across initial carrier terminal term_bbb86a6a-edf1-4303-9b32-a690e443e75b and resumed carrier terminal term_7d1b0d8c-5693-4670-8a3f-488148223680; final closure status msg_19d1aefb2cb6 and worker_done msg_e00d44341bfe: F1-F5 all closed, no independent candidate"
+        ]
       }
     },
     {
@@ -175,9 +196,12 @@
           "git diff --check",
           "live 2026-08-05: retry9 task turns overlapped from 17:50:18Z to 17:50:43Z with distinct task/session/conversation/transcript ownership; task A completed a second turn in the same conversation",
           "pnpm exec vitest --run tests/collab.test.ts: 23 tests passed after atomic capture-boundary changes, including cross-task wait concurrency",
-          "pnpm exec vitest --run tests/collab.test.ts: 25 tests passed; a timed-out artifact wait releases its task operation lease and a new lease can be acquired before retry"
+          "pnpm exec vitest --run tests/collab.test.ts: 25 tests passed; a timed-out artifact wait releases its task operation lease and a new lease can be acquired before retry",
+          "Final Review reconciliation: remains implemented because VER-005 passed but VER-006 is partial"
         ],
-        "reviews": []
+        "reviews": [
+          "Root Review task_f83d3a0d427b; reviewer conversation/session 019fcdfa-ef5f-7410-a245-6bbaf7be52dd remained the same across initial carrier terminal term_bbb86a6a-edf1-4303-9b32-a690e443e75b and resumed carrier terminal term_7d1b0d8c-5693-4670-8a3f-488148223680; final closure status msg_19d1aefb2cb6 and worker_done msg_e00d44341bfe: F1-F5 all closed, no independent candidate"
+        ]
       }
     },
     {
@@ -197,9 +221,12 @@
           "pnpm test",
           "git diff --check",
           "live 2026-08-05: archived conversation 6a72265c-a564-83ec-9f20-b1f6ed427639 was explicitly unarchived on the next send, submitted and captured on the same canonical ID",
-          "live 2026-08-05: repeated close returned alreadyClosed=true without reopening a browser"
+          "live 2026-08-05: repeated close returned alreadyClosed=true without reopening a browser",
+          "Final Review reconciliation: remains implemented because VER-008 and VER-009 are partial"
         ],
-        "reviews": []
+        "reviews": [
+          "Root Review task_f83d3a0d427b; reviewer conversation/session 019fcdfa-ef5f-7410-a245-6bbaf7be52dd remained the same across initial carrier terminal term_bbb86a6a-edf1-4303-9b32-a690e443e75b and resumed carrier terminal term_7d1b0d8c-5693-4670-8a3f-488148223680; final closure status msg_19d1aefb2cb6 and worker_done msg_e00d44341bfe: F1-F5 all closed, no independent candidate"
+        ]
       }
     },
     {
@@ -239,9 +266,13 @@
           "pnpm exec vitest --run tests/state-concurrency.test.ts: 10 tests passed after artifact watchdog propagation; the SQLite transaction and subprocess recovery matrix remains valid",
           "pnpm test: 8 test files and 89 tests passed on ba09c01c6c8d7d343fc3108655047c923da2a8c5",
           "pnpm collab -- help and absolute collab.ts help from a temporary directory without package.json both exited 0 and retained independent observationWindowMs/captureTimeoutMs parameters",
-          "node .agents/skills/plan-spec-implementation/scripts/spec-tasks.ts check --final: expected exit 1 on ba09c01c6c8d7d343fc3108655047c923da2a8c5 because all IMP tasks remain implemented pending Review; reviews remain empty"
+          "node .agents/skills/plan-spec-implementation/scripts/spec-tasks.ts check --final: expected exit 1 on ba09c01c6c8d7d343fc3108655047c923da2a8c5 because all IMP tasks remain implemented pending Review; reviews remain empty",
+          "Final Review reconciliation: remains implemented because VER-010, VER-011, and VER-012 passed but VER-007 is partial",
+          "Final ledger checks after Review closure: spec-tasks diff reported no Spec/context drift and check --ready passed; check --final exited 1 only because IMP-001, IMP-003, IMP-004, IMP-006, IMP-007, and IMP-008 remain implemented due their recorded required VER gaps"
         ],
-        "reviews": []
+        "reviews": [
+          "Root Review task_f83d3a0d427b; reviewer conversation/session 019fcdfa-ef5f-7410-a245-6bbaf7be52dd remained the same across initial carrier terminal term_bbb86a6a-edf1-4303-9b32-a690e443e75b and resumed carrier terminal term_7d1b0d8c-5693-4670-8a3f-488148223680; final closure status msg_19d1aefb2cb6 and worker_done msg_e00d44341bfe: F1-F5 all closed, no independent candidate"
+        ]
       }
     }
   ]
