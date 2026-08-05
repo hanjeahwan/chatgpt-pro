@@ -9,7 +9,7 @@
 - Spec 原子捕获边界裁决提交：`9b7c5881b8f4b0ac3a51c67671bdc3dd1b88a5ba`
 - 首次增量账本对账提交：`713772dc377ef53cb27831a2fc05540873d99a45`
 - 最后一个产品实现提交：`0ccb41a432f0608cbf0bfba5a4c20fa964ac4ebc`
-- 范围：依照 `dependsOn` 完成 IMP-001 至 IMP-008。根 Review Task `task_f83d3a0d427b` 的 F1–F5 已由同一 reviewer conversation `019fcdfa-ef5f-7410-a245-6bbaf7be52dd` 全部关闭；独立 Review `task_1775af5d8e88` 已接受 confirmed-pending 诊断修复。独立 reviewer thread `task_d8758885857a` 对 repeated-close 初次修复发现一个 P1；同一 reviewer conversation/terminal `term_1f28048f-d0f0-44b1-92f0-18251e33850c` 随后通过 re-review task `task_0b1df9dbb32c` 接受 `0ccb41a`，关闭该 P1，且无 P1/P2/P3 finding。
+- 范围：依照 `dependsOn` 完成 IMP-001 至 IMP-008。根 Review Task `task_f83d3a0d427b` 的 F1–F5 已由同一 reviewer conversation `019fcdfa-ef5f-7410-a245-6bbaf7be52dd` 全部关闭；独立 Review `task_1775af5d8e88` 已接受 confirmed-pending 诊断修复。独立 reviewer thread `task_d8758885857a` 对 repeated-close 初次修复发现一个 P1；同一 reviewer conversation/terminal `term_1f28048f-d0f0-44b1-92f0-18251e33850c` 随后通过 re-review task `task_0b1df9dbb32c` 接受 `0ccb41a`，并以 accepted/closed status `msg_93650f033b36` 明确关闭该 P1，且无 P1/P2/P3 finding。
 
 ## 2. IMP、行为、验证与提交
 
@@ -32,7 +32,7 @@
 
 `ba09c01c6c8d7d343fc3108655047c923da2a8c5` 完成 F2 剩余实现：`captureResponse` 与每个 `downloadArtifact` 复用同一绝对单调 deadline；AbortSignal 从服务穿透 Playwright page command、gate 与实际子进程。deadline 前下载错误保留原码；deadline 后即使 provider 忽略取消或永不 settle，服务也在有限清理宽限后返回 `CAPTURE_TIMEOUT`、保持 `capturing` 并释放 operation lease，重试只处理剩余 artifact。
 
-`18b91f1435c1582d1f7f83e48297b08be56cb8b3` 首次修复 VER-008 live 发现的 repeated-close 副作用；独立 Review `task_d8758885857a` 随后发现事务外 closed 快速读取与 lease 获取之间仍有跨连接 P1。`0ccb41a432f0608cbf0bfba5a4c20fa964ac4ebc` 把 closed 判定与 close lease 获取合并到同一 `BEGIN IMMEDIATE` 状态门，已 closed 分支不写 lease 或 `updated_at`，并保留顺序重复 close 测试、增加两连接确定性交错回归；同一 reviewer conversation 的 re-review task `task_0b1df9dbb32c`（dispatch `ctx_f1f1f4a70d6b`、worker_done `msg_72c28447f251`）已接受该修复并关闭 P1，无 P1/P2/P3 finding。`7255f52a0f39a96f332a12f8ece34ed1890217e8` 修复 confirmed submission 进入 `pending` 后保留陈旧 `error` 的问题，已由独立 Review `task_1775af5d8e88` 接受且无 P1/P2/P3 finding。
+`18b91f1435c1582d1f7f83e48297b08be56cb8b3` 首次修复 VER-008 live 发现的 repeated-close 副作用；独立 Review `task_d8758885857a` 随后发现事务外 closed 快速读取与 lease 获取之间仍有跨连接 P1。`0ccb41a432f0608cbf0bfba5a4c20fa964ac4ebc` 把 closed 判定与 close lease 获取合并到同一 `BEGIN IMMEDIATE` 状态门，已 closed 分支不写 lease 或 `updated_at`，并保留顺序重复 close 测试、增加两连接确定性交错回归；同一 reviewer conversation 的 re-review task `task_0b1df9dbb32c`（dispatch `ctx_f1f1f4a70d6b`、accepted/closed status `msg_93650f033b36`、worker_done `msg_72c28447f251`）已接受该修复并关闭 P1，无 P1/P2/P3 finding。`7255f52a0f39a96f332a12f8ece34ed1890217e8` 修复 confirmed submission 进入 `pending` 后保留陈旧 `error` 的问题，已由独立 Review `task_1775af5d8e88` 接受且无 P1/P2/P3 finding。
 
 ## 3. Live 取证事实
 
@@ -118,7 +118,7 @@
 - 首次 live 重跑创建的 task `3a577a54-bd5f-4a04-a610-84c511810fbf` 因既有开发数据库缺少 `artifact_set_recorded` 而在创建 turn 与 Web 提交前失败；task 随后成功关闭。协调员确认旧开发数据无需保留并授权精确删除；当时只有 `/Users/codeartz/.local/chatgpt-pro-collab/state.sqlite` 存在，`state.sqlite-wal` 与 `state.sqlite-shm` 不存在，认证 seed 未删除。当前实现随后创建全新数据库并完成 live VER-015；旧数据库未备份、不可恢复。
 - 先前 live 临时根已按旧记录移入系统废纸篓；本次通过证据保留在 Collab 的 task session 与当前 SQLite 中，临时 `.ver015-live-prompt.md` 已删除。
 - `ba09c01` 后的 VER-015 live 证据保留在 task `f44b6453-b56a-471a-8c39-606291de98f2` 的 session 与当前 SQLite 中；临时 `.ver015-post-ba09-live-prompt.md` 已删除，认证 seed 未删除或改写。
-- 根 Review Task `task_f83d3a0d427b` 的稳定证据已写入每个 IMP：reviewer conversation/session 始终为 `019fcdfa-ef5f-7410-a245-6bbaf7be52dd`，最终 closure status `msg_19d1aefb2cb6`、worker_done `msg_e00d44341bfe`，F1–F5 全部关闭。pending-error 独立 Review `task_1775af5d8e88` 已 accepted；repeated-close 独立 Review `task_d8758885857a` 的 status `msg_464a398c1f50` 与 worker_done `msg_65fce671152b` 提出 P1，同一 reviewer conversation/terminal `term_1f28048f-d0f0-44b1-92f0-18251e33850c` 通过 re-review task `task_0b1df9dbb32c`、dispatch `ctx_f1f1f4a70d6b`、worker_done `msg_72c28447f251` 接受 `0ccb41a` 并关闭 P1，且无 P1/P2/P3 finding。
+- 根 Review Task `task_f83d3a0d427b` 的稳定证据已写入每个 IMP：reviewer conversation/session 始终为 `019fcdfa-ef5f-7410-a245-6bbaf7be52dd`，最终 closure status `msg_19d1aefb2cb6`、worker_done `msg_e00d44341bfe`，F1–F5 全部关闭。pending-error 独立 Review `task_1775af5d8e88` 已 accepted；repeated-close 独立 Review `task_d8758885857a` 的 status `msg_464a398c1f50` 与 worker_done `msg_65fce671152b` 提出 P1，同一 reviewer conversation/terminal `term_1f28048f-d0f0-44b1-92f0-18251e33850c` 通过 re-review task `task_0b1df9dbb32c`、dispatch `ctx_f1f1f4a70d6b`、accepted/closed status `msg_93650f033b36`、worker_done `msg_72c28447f251` 接受 `0ccb41a` 并关闭 P1，且无 P1/P2/P3 finding。
 
 ## 7. 交付前检查
 
@@ -129,7 +129,7 @@
 - [x] 明确区分完整通过、部分证据和未取得证据。
 - [ ] VER-001 fresh setup 仍按用户决定不重跑；因此 VER-002、VER-006 的必需前置仍缺。
 - [ ] VER-013 双宿主已完成归档选择与上传边界，但两次 live wait 均 pending，仍缺 Pro 解压 100 文件、全部 marker 与摘要。
-- [x] `0ccb41a` 的 repeated-close P1 修复已由 `task_d8758885857a` 的同一 reviewer conversation 通过 re-review task `task_0b1df9dbb32c` 接受并关闭。
+- [x] `0ccb41a` 的 repeated-close P1 修复已由 `task_d8758885857a` 的同一 reviewer conversation 通过 re-review task `task_0b1df9dbb32c` 接受，并以 status `msg_93650f033b36` 明确关闭。
 
 ## 8. 最终判断
 
