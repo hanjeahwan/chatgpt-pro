@@ -1234,7 +1234,7 @@ async function executableObservationBrowserFixture(options: ObservationPageOptio
                 ) {
                   throw new Error('fixture digest rejected');
                 }
-                return webcrypto.subtle.digest('SHA-256', data);
+                return webcrypto.subtle.digest('SHA-256', new Uint8Array(data));
               },
             },
           },
