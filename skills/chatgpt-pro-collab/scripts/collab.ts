@@ -48,7 +48,6 @@ export interface CollabBrowser {
     taskId: string,
     sessionName: string,
     expectedConversationId: string,
-    localTurnId: string,
     observationWindowMs: number,
     observer?: BrowserOperationObserver,
   ): Promise<BrowserObservationResult>;
@@ -56,13 +55,10 @@ export interface CollabBrowser {
     taskId: string,
     sessionName: string,
     expectedConversationId: string,
-    localTurnId: string,
     expectedAssistantTurnId: string | null,
     captureTimeoutMs: number,
     signal: AbortSignal,
     observer?: BrowserOperationObserver,
-    expectedCompletionMode?: 'normal' | 'recovered-stuck' | null,
-    expectedContentFingerprint?: string | null,
   ): Promise<BrowserCaptureResult>;
   downloadArtifact(
     taskId: string,
@@ -319,8 +315,6 @@ export class CollabService {
 
           let targetResponsePath = turn.responsePath;
           let expectedAssistantTurnId: string | null = null;
-          let expectedCompletionMode: 'normal' | 'recovered-stuck' | null = null;
-          let expectedContentFingerprint: string | null = null;
           const captureWasPending = turn.status === 'pending';
           if (turn.status === 'pending') {
             const remainingObservationMs = remainingMilliseconds(observationDeadline);
@@ -331,7 +325,6 @@ export class CollabService {
               taskId,
               task.playwrightSession,
               task.conversationId,
-              turnId,
               remainingObservationMs,
               observer,
             );
@@ -342,8 +335,6 @@ export class CollabService {
             }
             assertConversation(taskId, task.conversationId, task.conversationUrl, observed);
             expectedAssistantTurnId = observed.assistantTurnId;
-            expectedCompletionMode = observed.completionMode;
-            expectedContentFingerprint = observed.contentFingerprint;
             targetResponsePath = responsePath(this.#paths, taskId, turnId);
             captureDeadline = performance.now() + captureTimeoutMs;
           }
@@ -360,13 +351,10 @@ export class CollabService {
                 taskId,
                 task.playwrightSession,
                 conversationId,
-                turnId,
                 expectedAssistantTurnId,
                 remainingCaptureMs,
                 signal,
                 observer,
-                expectedCompletionMode,
-                expectedContentFingerprint,
               );
             },
           );
