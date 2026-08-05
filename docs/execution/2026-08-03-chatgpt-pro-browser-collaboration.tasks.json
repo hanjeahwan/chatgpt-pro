@@ -1,12 +1,12 @@
 {
   "spec": "docs/specs/2026-08-03-chatgpt-pro-browser-collaboration.md",
-  "specDigest": "sha256:dd4692398c31510051b5069964d754ec2fdd17108b58fbe1841b8e9cc86862f5",
-  "contextDigest": "sha256:0316e4802e853cf1befe79bd07978e42455352bc11f981cf1f468c3f71a2dfbc",
+  "specDigest": "sha256:a91858baa7435d2559e5d4813d95db71b2c5997f3a646321140997fe6f2211de",
+  "contextDigest": "sha256:5ad8f3e7585f16ca19612fe8472dfe27860cefa0aa0b0589d89b8240f6b0a656",
   "sourceDigests": {
     "BEH-001": "sha256:81fc722eeffe25bb65e2eecd66fa5632133c4fa1cd9fc193ee60814d1fb3b0ae",
     "BEH-002": "sha256:a6b90a57305e58f15ae9b0d5868fe3182950dfd2743a0b335e00ffde43be7e43",
     "BEH-003": "sha256:3a33a5375fe8d0f24241e22a298ddce5dca588b827a649be9743ffb1edf10fd0",
-    "BEH-004": "sha256:484b17dbd283e00ad5c1a397ff4c7fdcbc955d8a29187af42b27fac1f9f3fd71",
+    "BEH-004": "sha256:18fafefb438774cc049981837b5ee00514aea2b07d5d9e93dd4fcea68094035b",
     "BEH-005": "sha256:3a92560c8d7f89bef76669ba25c88c31182da0ea2a22052184252c32414d1bc3",
     "BEH-006": "sha256:42e460ac18db205b5071bba3fa4757244153e186168bd0038cda5cd332b16648",
     "BEH-007": "sha256:06557b88fb956877901122ac16e98134aba1cbe59c709a3e919dbbe494e132fe",
@@ -18,7 +18,7 @@
     "VER-001": "sha256:c05d8ecd99ba7277afc64f21d661ae5ca77f4542a50ba50b8534789b0817db63",
     "VER-002": "sha256:55e0c5659c76a100be65c593db9c78352f69bfe112966e638c15e54df6d82489",
     "VER-003": "sha256:7707532a8944369bb139c708146758ef058c9da5d03ecf55befb871eb31ef7ed",
-    "VER-004": "sha256:7d790962ac876dca6bfda817c23429ffb5556b1eeb4295949184a3b9c7d60fbe",
+    "VER-004": "sha256:6eb9c62502684cefe3fcd68204592c07d8d306c0b3c00766fd96ad0cc09cba71",
     "VER-005": "sha256:5b723ada9786cd3d392edffec5f5fa356489ad9f61d0379b925bcc889c8d6368",
     "VER-006": "sha256:fa0e9fcceb838cd692b2feac9ed537e654047668832243f3f589ac1cb9c1eaca",
     "VER-007": "sha256:8d53c9eb45049b4cb12c69d304a12b925da0c1e09a029e66b54e5a80d6305073",
@@ -110,23 +110,18 @@
     {
       "id": "IMP-004",
       "title": "实现单次 wait 的内部观察与原始文字捕获",
-      "status": "implemented",
+      "status": "pending",
       "covers": ["BEH-004", "BEH-011"],
       "verifies": ["VER-004", "VER-014"],
       "dependsOn": ["IMP-001", "IMP-002", "IMP-003"],
       "scope": ["CLI", "Browser boundary", "Transcript/artifact store"],
       "evidence": {
         "commits": [
-          "8957de64082a53596eb4988d683dbcd2cf09ecfa",
-          "321928bd20895c3f6a10daef92bedcfcc63f6348",
-          "2c176443222e8cd5adee196bca4d4cef42ae2792",
-          "43b0a193667856aaa695e5fd39fa018732222a39",
-          "0120378d800ce4bfb19068fa320bc52c0f08a571",
-          "8175136100a3716b189b7efb552467cf71849250",
-          "435d72d766ea273d5fdf67ab5f1e7a285970d114",
-          "126c15d23ab25d2a81c211967c7120693b846807",
-          "2b516f00dffdbce3fce3137ae6ecf26ebe69d979",
-          "7119a25d8a2c1bf364646a0b1c579664574c3da2"
+          "8f10d2c8aca3bd123594071bd7a945ae9972c948",
+          "fe6c221706fbfe9a87844b064038927e0fcaf029",
+          "ba09c01c6c8d7d343fc3108655047c923da2a8c5",
+          "7255f52a0f39a96f332a12f8ece34ed1890217e8",
+          "435d72d766ea273d5fdf67ab5f1e7a285970d114"
         ],
         "checks": [
           "pnpm exec vitest --run tests/browser.test.ts: 42 tests passed with executable page functions covering deadline-bounded SHA-256 digest never-settles/reject/one-call paths, durable pre-reload target binding, post-reload recovered-stuck completion proof/fingerprint, content-change stability reset, delayed reload and subsequent observation, T1 observation to T2 capture rejection, local-turn recovery-key isolation, 30-second stall grace, bounded reload timeout, rejected-reload marker rollback, normal/pending/identity paths",
@@ -150,11 +145,10 @@
           "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts: 75 tests passed; pnpm format:check, pnpm lint, pnpm typecheck, pnpm test (8 files/115 tests), and git diff --check passed after 7119a25d8a2c1bf364646a0b1c579664574c3da2; no production code, live wait, or reviewer acceptance claimed",
           "Completion-recovery Review task_02ea3ed7823a at accepted HEAD 859e981cb0e6621761be47c572abf513d9ccf9f3, closure status msg_18f367b1e063: ACCEPTED/CLOSED with no P1/P2/P3 after 49 browser, 26 collab, 115 full tests, format/lint/typecheck/diff, ledger diff, and check-ready passed",
           "VER-004 post-fix live task task_6f9761a8ce57, status msg_62d7d7bcfc2b, report /private/tmp/host-a-live-ver004-review.rzXuyY/report.md: one wait from 2026-08-05T07:14:05.222Z to 07:24:26.519Z exited 0 with the sole JSON status=pending and empty stderr; the active task retained a pending turn with response_path null, artifact_set_recorded=0, error null, and no operation lease/PID fields",
-          "Current reconciliation: remains implemented because Review is accepted and VER-014 passes, but the required post-fix VER-004 live recovery returned pending; no response/artifact manifest or reload count was obtained"
+          "Product decision at BASE_SHA 188e87c1ac4e47c11b38b47f43256968d6952968 withdraws completion-recovery commits and their Review/live evidence from the active solution; pre-recovery implementation evidence and the independent 435d72d test-window fix remain historical inputs",
+          "Current reconciliation: pending until the normal Copy-visible/Stop-absent contract, exact observed assistant identity capture, deterministic clipboard fixture, full checks, and a new Review are complete"
         ],
-        "reviews": [
-          "Completion-recovery Review task_02ea3ed7823a, closure status msg_18f367b1e063, accepted/closed HEAD 859e981cb0e6621761be47c572abf513d9ccf9f3 with no P1/P2/P3; 49 browser, 26 collab, 115 full tests, format/lint/typecheck/diff, ledger diff, and check-ready passed"
-        ]
+        "reviews": []
       }
     },
     {
@@ -272,23 +266,20 @@
     {
       "id": "IMP-008",
       "title": "完成中断恢复矩阵与全量运行基线验证",
-      "status": "done",
+      "status": "pending",
       "covers": ["BEH-002", "BEH-004", "BEH-006", "BEH-007", "BEH-012"],
       "verifies": ["VER-007", "VER-010", "VER-011", "VER-012"],
       "dependsOn": ["IMP-001", "IMP-002", "IMP-003", "IMP-004", "IMP-005", "IMP-006", "IMP-007"],
       "scope": ["CLI", "State store", "Transcript/artifact store", "Test suite"],
       "evidence": {
         "commits": [
-          "8957de64082a53596eb4988d683dbcd2cf09ecfa",
-          "321928bd20895c3f6a10daef92bedcfcc63f6348",
-          "2c176443222e8cd5adee196bca4d4cef42ae2792",
-          "43b0a193667856aaa695e5fd39fa018732222a39",
-          "0120378d800ce4bfb19068fa320bc52c0f08a571",
-          "8175136100a3716b189b7efb552467cf71849250",
-          "435d72d766ea273d5fdf67ab5f1e7a285970d114",
-          "126c15d23ab25d2a81c211967c7120693b846807",
-          "2b516f00dffdbce3fce3137ae6ecf26ebe69d979",
-          "7119a25d8a2c1bf364646a0b1c579664574c3da2"
+          "0070235444624d30daeb38f232fe47c08707c04b",
+          "56d21d9ed42694659bce992b7bf88ed33ad37014",
+          "ff87186162b8558e40af013aac4d81826c345ca7",
+          "fe6c221706fbfe9a87844b064038927e0fcaf029",
+          "ba09c01c6c8d7d343fc3108655047c923da2a8c5",
+          "7255f52a0f39a96f332a12f8ece34ed1890217e8",
+          "435d72d766ea273d5fdf67ab5f1e7a285970d114"
         ],
         "checks": [
           "pnpm format:check",
@@ -306,11 +297,10 @@
           "Reviewer task_59c34acc776e identified the remaining P2 fixture evidence gap for the real clipboard interception chain and canonical URL edge matrix; 7119a25d8a2c1bf364646a0b1c579664574c3da2 closes the deterministic test gap without product or Spec changes",
           "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts: 75 tests passed with actual clipboard install/write/read/restore and URL success/failure paths; pnpm format:check, pnpm lint, pnpm typecheck, pnpm test (8 files/115 tests), and git diff --check passed; no live or reviewer acceptance claimed",
           "Completion-recovery Review task_02ea3ed7823a at accepted HEAD 859e981cb0e6621761be47c572abf513d9ccf9f3, closure status msg_18f367b1e063: ACCEPTED/CLOSED with no P1/P2/P3 after 49 browser, 26 collab, 115 full tests, format/lint/typecheck/diff, ledger diff, and check-ready passed",
-          "Current reconciliation: done because mapped VER-007, VER-010, VER-011, and VER-012 pass, implementation checks are complete, and completion-recovery Review task_02ea3ed7823a accepted/closed the current HEAD; VER-004 is owned by IMP-004 and does not replace these mapped gates"
+          "Product decision at BASE_SHA 188e87c1ac4e47c11b38b47f43256968d6952968 withdraws completion-recovery commits and their Review evidence from the active solution; pre-recovery interrupt/state evidence and the independent 435d72d test-window fix remain historical inputs",
+          "Current reconciliation: pending until the affected browser/collab test baseline, full checks, and a new Review validate the rollback without regressing VER-007/010/011/012"
         ],
-        "reviews": [
-          "Completion-recovery Review task_02ea3ed7823a, closure status msg_18f367b1e063, accepted/closed HEAD 859e981cb0e6621761be47c572abf513d9ccf9f3 with no P1/P2/P3; 49 browser, 26 collab, 115 full tests, format/lint/typecheck/diff, ledger diff, and check-ready passed"
-        ]
+        "reviews": []
       }
     }
   ]
