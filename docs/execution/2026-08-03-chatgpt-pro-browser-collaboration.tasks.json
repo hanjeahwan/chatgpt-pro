@@ -110,7 +110,7 @@
     {
       "id": "IMP-004",
       "title": "实现单次 wait 的内部观察与原始文字捕获",
-      "status": "implemented",
+      "status": "done",
       "covers": ["BEH-004", "BEH-011"],
       "verifies": ["VER-004", "VER-014"],
       "dependsOn": ["IMP-001", "IMP-002", "IMP-003"],
@@ -136,10 +136,12 @@
           "VER-004 live task a07ea1df-5f57-43b8-961a-5acaebb65c70 turn 9fe0a34a-4f4e-48fa-8c1e-0396a59ae446: one wait 600000/300000 completed; generated page capture confirmed target assistant, Stop absent, unique visible Copy, and page-internal clipboard interception; 4,121 Copy bytes equaled response.md SHA-256 62494e1f396c1de8c4477a467663a53921d33e1b06981e22cc9b316ddbd8a54a; artifactPaths was empty and repeated wait preserved path/inode/mtime/hash",
           "VER-014 independent host task_8c09b3657e50 status msg_e39e894f1103: completed, pending, CAPTURE_TIMEOUT, and BROWSER_COMMAND_FAILED each used one real Skill/CLI wait with 0 host browser polls, page checks 8/3/6/0, no pre-terminal stdout/stderr, one terminal JSON, and fully exited CLI/gate/guarded command PIDs",
           "after 7255f52a0f39a96f332a12f8ece34ed1890217e8, targeted VER-014 fixture task be5fa062-8eea-4f74-a9f4-75986e4852ca used one wait 1100/2000, performed three generated page-function checks, returned one pending terminal, retained response_path=NULL/artifact_set_recorded=0/error=NULL, and released every operation lease field",
-          "Current reconciliation: VER-004 and VER-014 pass, but IMP-004 remains implemented because independent fix 7255f52a0f39a96f332a12f8ece34ed1890217e8 was made after root Review task_f83d3a0d427b and has no new Review closure evidence"
+          "Independent Review task_1775af5d8e88 accepted 7255f52a0f39a96f332a12f8ece34ed1890217e8 with no P1/P2/P3 finding; status msg_125124b44bcc and worker_done msg_2072e50a65b2 recorded pnpm format:check, lint, typecheck, test (90), and git diff --check passing",
+          "Current reconciliation: done because VER-004 and VER-014 pass, root Review task_f83d3a0d427b is closed, and independent Review task_1775af5d8e88 accepted the post-Review pending-error fix"
         ],
         "reviews": [
-          "Root Review task_f83d3a0d427b; reviewer conversation/session 019fcdfa-ef5f-7410-a245-6bbaf7be52dd remained the same across initial carrier terminal term_bbb86a6a-edf1-4303-9b32-a690e443e75b and resumed carrier terminal term_7d1b0d8c-5693-4670-8a3f-488148223680; final closure status msg_19d1aefb2cb6 and worker_done msg_e00d44341bfe: F1-F5 all closed, no independent candidate"
+          "Root Review task_f83d3a0d427b; reviewer conversation/session 019fcdfa-ef5f-7410-a245-6bbaf7be52dd remained the same across initial carrier terminal term_bbb86a6a-edf1-4303-9b32-a690e443e75b and resumed carrier terminal term_7d1b0d8c-5693-4670-8a3f-488148223680; final closure status msg_19d1aefb2cb6 and worker_done msg_e00d44341bfe: F1-F5 all closed, no independent candidate",
+          "Independent Review task_1775af5d8e88 on reviewer terminal/session term_06b82156-4ca3-40e8-aa18-cd01a4a74ed9; status msg_125124b44bcc and worker_done msg_2072e50a65b2: commit 7255f52 accepted with no P1/P2/P3 finding"
         ]
       }
     },
@@ -225,7 +227,8 @@
         "commits": [
           "0d2a857b91bf1a3a575f4e5b859f15aa5c56149f",
           "08e1a38c050011f0dbd362e56b7b88d5b2cb3c76",
-          "18b91f1435c1582d1f7f83e48297b08be56cb8b3"
+          "18b91f1435c1582d1f7f83e48297b08be56cb8b3",
+          "0ccb41a432f0608cbf0bfba5a4c20fa964ac4ebc"
         ],
         "checks": [
           "pnpm format:check",
@@ -240,17 +243,22 @@
           "VER-008 post-fix live task 72a8d8dc-80ae-4821-b478-745a5d2701d8: first/second close returned wasOpen=true/false and alreadyClosed=false/true; updated_at 2026-08-05T03:32:26.787Z and closed_at 2026-08-05T03:32:26.786Z stayed unchanged after the second call; PID 59559/named session disappeared while SQLite, two turns, response, artifact, seed, and unarchived Web sidebar entry remained",
           "VER-009 live task 72a8d8dc-80ae-4821-b478-745a5d2701d8 conversation 6a72ae36-1a58-83ec-9cc8-4d7154d7fe00: archive removed the target sidebar entry but restored the original canonical page and two turns; subsequent send/wait reused the same ID and PID 59559, referenced the original marker, returned ver009-after-archive.txt, restored the sidebar entry, and left two control conversations unchanged",
           "pnpm exec vitest --run tests/collab.test.ts: 26 tests passed after repeated-close and pending-error fixes",
-          "Current reconciliation: VER-008 and VER-009 pass, but IMP-007 remains implemented because independent fix 18b91f1435c1582d1f7f83e48297b08be56cb8b3 has no new Review closure evidence"
+          "Independent Review task_d8758885857a on reviewer conversation/terminal term_1f28048f-d0f0-44b1-92f0-18251e33850c found P1 in 18b91f1435c1582d1f7f83e48297b08be56cb8b3: the closed fast read and lease acquisition were not atomic; status msg_464a398c1f50 and worker_done msg_65fce671152b",
+          "0ccb41a432f0608cbf0bfba5a4c20fa964ac4ebc replaces the external closed fast read with acquireCloseTaskOperation, which decides closed or acquires the close lease inside one BEGIN IMMEDIATE transaction; tests/state.test.ts deterministically interleaves two StateStore connections and proves the stale contender writes neither the task record nor a lease, while the sequential repeated-close service test remains",
+          "after 0ccb41a432f0608cbf0bfba5a4c20fa964ac4ebc: pnpm format:check, pnpm lint, pnpm typecheck, pnpm test (8 files/91 tests), targeted state/collab/state-concurrency tests (42), CLI help, manifest-free absolute CLI help, Node v25.9.0 and v22.19.0 sqlite/TypeScript smoke tests, Playwright CLI help, and git diff --check passed",
+          "VER-008 current-HEAD live repeat on existing closed task 72a8d8dc-80ae-4821-b478-745a5d2701d8 returned wasOpen=false/alreadyClosed=true; the complete task row, including updated_at=2026-08-05T03:32:26.787Z, closed_at=2026-08-05T03:32:26.786Z, and all null lease fields, was byte-identical before/after; seed SHA-256 remained 3e4b106c38bf33013d364cc2e0c16711e04cba0c486de8531747f96680aba352",
+          "Current reconciliation: VER-008 and VER-009 pass, but IMP-007 remains implemented until the same reviewer conversation term_1f28048f-d0f0-44b1-92f0-18251e33850c re-reviews and closes P1 for 0ccb41a432f0608cbf0bfba5a4c20fa964ac4ebc"
         ],
         "reviews": [
-          "Root Review task_f83d3a0d427b; reviewer conversation/session 019fcdfa-ef5f-7410-a245-6bbaf7be52dd remained the same across initial carrier terminal term_bbb86a6a-edf1-4303-9b32-a690e443e75b and resumed carrier terminal term_7d1b0d8c-5693-4670-8a3f-488148223680; final closure status msg_19d1aefb2cb6 and worker_done msg_e00d44341bfe: F1-F5 all closed, no independent candidate"
+          "Root Review task_f83d3a0d427b; reviewer conversation/session 019fcdfa-ef5f-7410-a245-6bbaf7be52dd remained the same across initial carrier terminal term_bbb86a6a-edf1-4303-9b32-a690e443e75b and resumed carrier terminal term_7d1b0d8c-5693-4670-8a3f-488148223680; final closure status msg_19d1aefb2cb6 and worker_done msg_e00d44341bfe: F1-F5 all closed, no independent candidate",
+          "Independent Review task_d8758885857a uses reviewer conversation/terminal term_1f28048f-d0f0-44b1-92f0-18251e33850c; status msg_464a398c1f50 and worker_done msg_65fce671152b found the repeated-close P1; fix 0ccb41a432f0608cbf0bfba5a4c20fa964ac4ebc awaits re-review in that same conversation and has no closure evidence yet"
         ]
       }
     },
     {
       "id": "IMP-008",
       "title": "完成中断恢复矩阵与全量运行基线验证",
-      "status": "implemented",
+      "status": "done",
       "covers": ["BEH-002", "BEH-004", "BEH-006", "BEH-007", "BEH-012"],
       "verifies": ["VER-007", "VER-010", "VER-011", "VER-012"],
       "dependsOn": ["IMP-001", "IMP-002", "IMP-003", "IMP-004", "IMP-005", "IMP-006", "IMP-007"],
@@ -280,22 +288,25 @@
           "pnpm exec vitest --run tests/state-concurrency.test.ts: 10 tests passed, including SIGKILL after the first artifact insert with SQLite rollback to a complete pending state, the post-freeze recovery matrix, and concurrent close",
           "pnpm exec vitest --run tests/spec-tasks.test.ts tests/state-concurrency.test.ts tests/browser.test.ts tests/collab.test.ts: 68 tests passed after F1/F2 without invalidating F3/F4/F5",
           "pnpm test: 8 test files and 86 tests passed on fe6c221706fbfe9a87844b064038927e0fcaf029",
-          "node .agents/skills/plan-spec-implementation/scripts/spec-tasks.ts check --final: expected exit 1 because IMP-001 through IMP-008 remain implemented pending Review; no review evidence or done status was fabricated",
+          "historical fe6c221706fbfe9a87844b064038927e0fcaf029 checkpoint: spec-tasks check --final exited 1 because IMP-001 through IMP-008 were then implemented pending Review; no review evidence or done status was fabricated at that checkpoint",
           "Review task_8de74c002256 invalidated the VER-015 overall pass claim until the shared capture deadline also bounds artifact downloads and releases their operation lease",
           "pnpm exec vitest --run tests/state-concurrency.test.ts: 10 tests passed after artifact watchdog propagation; the SQLite transaction and subprocess recovery matrix remains valid",
           "pnpm test: 8 test files and 89 tests passed on ba09c01c6c8d7d343fc3108655047c923da2a8c5",
           "pnpm collab -- help and absolute collab.ts help from a temporary directory without package.json both exited 0 and retained independent observationWindowMs/captureTimeoutMs parameters",
           "historical ba09c01c6c8d7d343fc3108655047c923da2a8c5 checkpoint: spec-tasks check --final exited 1 because all IMP tasks were implemented and Review evidence was not yet recorded; this was superseded by the root Review closure reconciliation",
           "Final Review reconciliation superseded by current evidence: VER-007, VER-010, VER-011, and VER-012 now pass, while the post-Review fix 7255f52a0f39a96f332a12f8ece34ed1890217e8 still requires independent Review closure",
-          "Final ledger checks after Review closure: spec-tasks diff reported no Spec/context drift and check --ready passed; check --final exited 1 because IMP-001, IMP-003, IMP-004, IMP-006, IMP-007, and IMP-008 retain their recorded VER or independent-Review gaps",
+          "Historical ledger checks after the root Review closure: spec-tasks diff reported no Spec/context drift and check --ready passed; check --final then exited 1 because IMP-001, IMP-003, IMP-004, IMP-006, IMP-007, and IMP-008 retained their recorded VER or independent-Review gaps",
           "VER-007 live task fc4bad58-0475-4725-9e03-662255b55adb turns 0af0b2c4-88ec-43ae-8a26-bf6322330720 and 1daef080-027a-473c-be60-f19edbe4958a: the same host prompt and attachment paths plus same-result.txt name were reused; after host files changed and task closed, fresh CLI/SQLite processes reread stable per-turn prompt copies, responses, artifact paths/inodes/mtime/hashes, and found zero session copies of the attachment body marker",
           "7255f52a0f39a96f332a12f8ece34ed1890217e8 fixes a live-discovered audit inconsistency by clearing the provisional unknown-submission error in the same markTurnPending transaction; tests/state.test.ts and the direct runCli pending test assert status=pending/error=NULL",
-          "current HEAD full checks: pnpm format:check, pnpm lint, pnpm typecheck, pnpm test (8 files/90 tests), pnpm exec vitest --run tests/state-concurrency.test.ts (10 subprocess recovery/concurrency tests), pnpm collab -- help, absolute collab.ts help from a manifest-free host, and git diff --check all passed",
-          "Current reconciliation: VER-007, VER-010, VER-011, and VER-012 pass, but IMP-008 remains implemented because independent fix 7255f52a0f39a96f332a12f8ece34ed1890217e8 has no new Review closure evidence",
-          "final ledger checks on current evidence: spec-tasks diff reported specChanged=false/contextChanged=false with no impacted tasks; check --ready returned ok=true/readiness=ready for 12 behaviors, 15 verifications, and 8 tasks; check --final exited 1 and named exactly IMP-001, IMP-003, IMP-004, IMP-006, IMP-007, and IMP-008 because each remains implemented rather than done/cancelled"
+          "current HEAD full checks before the close-gate P1 repair: pnpm format:check, pnpm lint, pnpm typecheck, pnpm test (8 files/90 tests), pnpm exec vitest --run tests/state-concurrency.test.ts (10 subprocess recovery/concurrency tests), pnpm collab -- help, absolute collab.ts help from a manifest-free host, and git diff --check all passed",
+          "Independent Review task_1775af5d8e88 accepted 7255f52a0f39a96f332a12f8ece34ed1890217e8 with no P1/P2/P3 finding; status msg_125124b44bcc and worker_done msg_2072e50a65b2 recorded all repository checks passing",
+          "after 0ccb41a432f0608cbf0bfba5a4c20fa964ac4ebc, VER-010/VER-011/VER-012 checks passed: pnpm format:check, lint, typecheck, test (8 files/91 tests), state-concurrency (10 subprocess tests), CLI and manifest-free help, Node v25.9.0/v22.19.0 sqlite and TypeScript entry smoke tests, Playwright CLI help, and git diff --check",
+          "Current reconciliation: done because VER-007, VER-010, VER-011, and VER-012 pass, root Review task_f83d3a0d427b is closed, and independent Review task_1775af5d8e88 accepted the pending-error fix; the close P1 belongs to IMP-007",
+          "final ledger checks after 0ccb41a432f0608cbf0bfba5a4c20fa964ac4ebc: spec-tasks diff reported specChanged=false/contextChanged=false with no impacted tasks; check --ready returned ok=true/readiness=ready for 12 behaviors, 15 verifications, and 8 tasks; check --final exited 1 and named exactly IMP-001, IMP-003, IMP-006, and IMP-007 because each remains implemented rather than done/cancelled"
         ],
         "reviews": [
-          "Root Review task_f83d3a0d427b; reviewer conversation/session 019fcdfa-ef5f-7410-a245-6bbaf7be52dd remained the same across initial carrier terminal term_bbb86a6a-edf1-4303-9b32-a690e443e75b and resumed carrier terminal term_7d1b0d8c-5693-4670-8a3f-488148223680; final closure status msg_19d1aefb2cb6 and worker_done msg_e00d44341bfe: F1-F5 all closed, no independent candidate"
+          "Root Review task_f83d3a0d427b; reviewer conversation/session 019fcdfa-ef5f-7410-a245-6bbaf7be52dd remained the same across initial carrier terminal term_bbb86a6a-edf1-4303-9b32-a690e443e75b and resumed carrier terminal term_7d1b0d8c-5693-4670-8a3f-488148223680; final closure status msg_19d1aefb2cb6 and worker_done msg_e00d44341bfe: F1-F5 all closed, no independent candidate",
+          "Independent Review task_1775af5d8e88 on reviewer terminal/session term_06b82156-4ca3-40e8-aa18-cd01a4a74ed9; status msg_125124b44bcc and worker_done msg_2072e50a65b2: commit 7255f52 accepted with no P1/P2/P3 finding"
         ]
       }
     }
