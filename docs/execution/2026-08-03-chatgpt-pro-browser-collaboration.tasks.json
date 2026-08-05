@@ -120,15 +120,18 @@
           "8957de64082a53596eb4988d683dbcd2cf09ecfa",
           "321928bd20895c3f6a10daef92bedcfcc63f6348",
           "2c176443222e8cd5adee196bca4d4cef42ae2792",
-          "43b0a193667856aaa695e5fd39fa018732222a39"
+          "43b0a193667856aaa695e5fd39fa018732222a39",
+          "0120378d800ce4bfb19068fa320bc52c0f08a571",
+          "8175136100a3716b189b7efb552467cf71849250",
+          "435d72d766ea273d5fdf67ab5f1e7a285970d114"
         ],
         "checks": [
-          "pnpm exec vitest --run tests/browser.test.ts: 39 tests passed with executable page functions covering durable pre-reload target binding, post-reload recovered-stuck completion proof/fingerprint, content-change stability reset, delayed reload and subsequent observation, T1 observation to T2 capture rejection, local-turn recovery-key isolation, 30-second stall grace, bounded reload timeout, rejected-reload marker rollback, normal/pending/identity paths",
+          "pnpm exec vitest --run tests/browser.test.ts: 42 tests passed with executable page functions covering deadline-bounded SHA-256 digest never-settles/reject/one-call paths, durable pre-reload target binding, post-reload recovered-stuck completion proof/fingerprint, content-change stability reset, delayed reload and subsequent observation, T1 observation to T2 capture rejection, local-turn recovery-key isolation, 30-second stall grace, bounded reload timeout, rejected-reload marker rollback, normal/pending/identity paths",
           "pnpm exec vitest --run tests/collab.test.ts: 26 tests passed",
           "pnpm format:check",
           "pnpm lint",
           "pnpm typecheck",
-          "pnpm test: 8 test files and 105 tests passed",
+          "pnpm test: 8 test files and 108 tests passed",
           "git diff --check",
           "VER-004 remains partial: Host A task 7f62f36c-8748-43ad-af4f-7fd84b52715d turn adfb2d4e-2f0e-479b-85ed-adba0f88a0ed was not re-waited after this fix; no live pass claimed"
         ],
@@ -260,14 +263,17 @@
           "8957de64082a53596eb4988d683dbcd2cf09ecfa",
           "321928bd20895c3f6a10daef92bedcfcc63f6348",
           "2c176443222e8cd5adee196bca4d4cef42ae2792",
-          "43b0a193667856aaa695e5fd39fa018732222a39"
+          "43b0a193667856aaa695e5fd39fa018732222a39",
+          "0120378d800ce4bfb19068fa320bc52c0f08a571",
+          "8175136100a3716b189b7efb552467cf71849250",
+          "435d72d766ea273d5fdf67ab5f1e7a285970d114"
         ],
         "checks": [
           "pnpm format:check",
           "pnpm lint",
           "pnpm typecheck",
-          "pnpm test: 8 test files and 105 tests passed",
-          "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts: 65 tests passed",
+          "pnpm test: 8 test files and 108 tests passed",
+          "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts: 68 tests passed",
           "node .agents/skills/plan-spec-implementation/scripts/spec-tasks.ts diff after digest reconciliation: specChanged=false, contextChanged=false, no impacted tasks",
           "VER-011 was not rerun because this fix changes only browser completion observation/capture identity and reload recovery, not SQLite schema, state transitions, or recovery subprocess code",
           "VER-004 live recovery and independent Review remain outstanding; no review evidence copied; this fix has no live wait evidence"
