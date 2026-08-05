@@ -1,3 +1,4 @@
+import { webcrypto } from 'node:crypto';
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -547,6 +548,59 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
       fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 5000),
     ).resolves.toEqual({ status: 'pending' });
     expect(fixture.reloadCount()).toBe(0);
+  });
+
+  it('returns pending without proof when observation SHA-256 never settles', async () => {
+    const fixture = await executableObservationBrowserFixture({
+      stopVisibleBeforeReload: false,
+      digestBehavior: 'never',
+    });
+
+    await expect(
+      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 50),
+    ).resolves.toEqual({ status: 'pending' });
+    expect(
+      fixture.events.some((event) => {
+        return event.includes('completion-target:');
+      }),
+    ).toBe(false);
+    expect(
+      fixture.events.some((event) => {
+        return event.includes('completion-proof:');
+      }),
+    ).toBe(false);
+  });
+
+  it('fails closed on observation SHA-256 rejection without proof', async () => {
+    const fixture = await executableObservationBrowserFixture({
+      stopVisibleBeforeReload: false,
+      digestBehavior: 'reject',
+    });
+
+    await expect(
+      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 5000),
+    ).rejects.toMatchObject({ code: 'PLAYWRIGHT_CONTRACT_DRIFT' });
+    expect(
+      fixture.events.some((event) => {
+        return event.includes('completion-target:');
+      }),
+    ).toBe(false);
+    expect(
+      fixture.events.some((event) => {
+        return event.includes('completion-proof:');
+      }),
+    ).toBe(false);
+  });
+
+  it('uses one successful observation SHA-256 digest and does not issue a second call', async () => {
+    const fixture = await executableObservationBrowserFixture({
+      stopVisibleBeforeReload: false,
+      digestBehavior: 'second-reject',
+    });
+
+    await expect(
+      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 5000),
+    ).resolves.toMatchObject({ status: 'completed', completionMode: 'normal' });
   });
 
   it('keeps the pre-reload target bound across a delayed successful reload and next observation', async () => {
@@ -1160,6 +1214,32 @@ async function executableObservationBrowserFixture(options: ObservationPageOptio
       invocation.onCommandSpawned?.(invocationChildPid + 1000);
       const source = await scriptForInvocation(invocation);
       const runPageFunction = new Function(`return (${source})`)() as (page: object) => Promise<string>;
+      if (globalThis.crypto === undefined) {
+        Object.defineProperty(globalThis, 'crypto', { configurable: true, value: webcrypto });
+      }
+      let digestCalls = 0;
+      if (options.digestBehavior !== undefined) {
+        Object.defineProperty(globalThis, 'crypto', {
+          configurable: true,
+          value: {
+            subtle: {
+              digest: async (_algorithm: string, data: Uint8Array) => {
+                digestCalls += 1;
+                if (options.digestBehavior === 'never') {
+                  return new Promise<ArrayBuffer>(() => {});
+                }
+                if (
+                  options.digestBehavior === 'reject' ||
+                  (options.digestBehavior === 'second-reject' && digestCalls > 1)
+                ) {
+                  throw new Error('fixture digest rejected');
+                }
+                return webcrypto.subtle.digest('SHA-256', data);
+              },
+            },
+          },
+        });
+      }
       try {
         const result = await runPageFunction(pageFixture.page);
         return output(`### Ran Playwright code\n${JSON.stringify(result)}\n`);
@@ -1167,6 +1247,9 @@ async function executableObservationBrowserFixture(options: ObservationPageOptio
         return output(`### Error\n${error instanceof Error ? error.message : String(error)}\n`);
       }
     } finally {
+      if (options.digestBehavior !== undefined) {
+        Object.defineProperty(globalThis, 'crypto', { configurable: true, value: webcrypto });
+      }
       invocation.onChildExited?.(invocationChildPid);
     }
   });

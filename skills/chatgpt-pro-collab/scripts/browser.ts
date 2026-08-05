@@ -1530,7 +1530,24 @@ function observationScript(
       if (globalThis.crypto?.subtle === undefined || globalThis.TextEncoder === undefined) {
         throw new Error('page contract drift: Web Crypto SHA-256 is unavailable');
       }
-      const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(content));
+      const remaining = Math.max(0, observationDeadline - Date.now());
+      if (remaining <= 0) return null;
+      const digestPromise = Promise.resolve()
+        .then(() => globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(content)))
+        .then(
+          (digest) => ({ status: 'fulfilled', digest }),
+          (error) => ({ status: 'rejected', error }),
+        );
+      let timer;
+      const timeoutPromise = new Promise((resolve) => {
+        timer = setTimeout(() => resolve({ status: 'timeout' }), remaining);
+      });
+      const result = await Promise.race([digestPromise, timeoutPromise]);
+      clearTimeout(timer);
+      if (result.status === 'timeout') return null;
+      if (result.status === 'rejected') throw result.error;
+      if (Date.now() >= observationDeadline) return null;
+      const digest = result.digest;
       return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
     };
     while (stableCompletedPolls < 6 && polls < 24 && Date.now() < observationDeadline) {
@@ -1695,6 +1712,10 @@ function observationScript(
     ) {
       throw new Error('conversation identity changed while observing response completion');
     }
+    const contentFingerprint = await fingerprint(completionContent ?? '');
+    if (contentFingerprint === null || Date.now() >= observationDeadline) {
+      return JSON.stringify({ protocol: '${PROTOCOL}', kind: 'observe', status: 'pending' });
+    }
     await page.evaluate(
       (argument) => {
         sessionStorage.setItem(argument.key, argument.turnId);
@@ -1708,7 +1729,7 @@ function observationScript(
         turnId: assistantTurnId,
         proofKey: 'chatgpt-pro-collab:completion-proof:' + expectedConversationId + ':' + localTurnId,
         mode: completionMode,
-        fingerprint: await fingerprint(completionContent ?? ''),
+        fingerprint: contentFingerprint,
       },
     );
     return JSON.stringify({
@@ -1719,7 +1740,7 @@ function observationScript(
       conversationUrl: completedUrl.origin + '/c/' + completedMatch[1],
       assistantTurnId,
       completionMode,
-      contentFingerprint: await fingerprint(completionContent ?? ''),
+      contentFingerprint,
     });
   }`;
 }
@@ -1792,7 +1813,24 @@ function captureScript(
       if (globalThis.crypto?.subtle === undefined || globalThis.TextEncoder === undefined) {
         throw new Error('page contract drift: Web Crypto SHA-256 is unavailable');
       }
-      const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(content));
+      const remaining = Math.max(0, captureDeadline - Date.now());
+      if (remaining <= 0) throw new Error('page contract drift: capture fingerprint deadline expired');
+      const digestPromise = Promise.resolve()
+        .then(() => globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(content)))
+        .then(
+          (digest) => ({ status: 'fulfilled', digest }),
+          (error) => ({ status: 'rejected', error }),
+        );
+      let timer;
+      const timeoutPromise = new Promise((resolve) => {
+        timer = setTimeout(() => resolve({ status: 'timeout' }), remaining);
+      });
+      const result = await Promise.race([digestPromise, timeoutPromise]);
+      clearTimeout(timer);
+      if (result.status === 'timeout') throw new Error('page contract drift: capture fingerprint timed out');
+      if (result.status === 'rejected') throw result.error;
+      if (Date.now() >= captureDeadline) throw new Error('page contract drift: capture fingerprint deadline expired');
+      const digest = result.digest;
       return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
     };
     const copySelector = '[data-testid="copy-turn-action-button"]';

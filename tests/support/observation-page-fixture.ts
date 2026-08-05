@@ -15,6 +15,7 @@ export interface ObservationPageOptions {
   readonly reloadReject?: boolean;
   readonly reloadRejectCount?: number;
   readonly reloadDelayMs?: number;
+  readonly digestBehavior?: 'never' | 'reject' | 'second-reject';
 }
 
 export interface ObservationPageFixture {
