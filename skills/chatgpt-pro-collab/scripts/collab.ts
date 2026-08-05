@@ -491,6 +491,9 @@ export class CollabService {
     taskId: string,
   ): Promise<{ readonly taskId: string; readonly wasOpen: boolean; readonly alreadyClosed: boolean }> {
     return this.#withStore(async (store) => {
+      if (store.requireTask(taskId).status === 'closed') {
+        return { taskId, wasOpen: false, alreadyClosed: true };
+      }
       while (true) {
         try {
           return await this.#withTaskOperation(store, taskId, 'close', async (observer) => {

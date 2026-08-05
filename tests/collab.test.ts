@@ -69,7 +69,16 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     await fixture.service.wait(firstTask.taskId, afterArchiveTurn.turnId, 20_000, 20_000);
     expect(fixture.browser.expectedConversationIds.at(-1)).toBe(`conversation-${firstTask.taskId}`);
     await expect(fixture.service.close(firstTask.taskId)).resolves.toMatchObject({ alreadyClosed: false });
+    const closedStore = new StateStore(fixture.paths.database);
+    const closedBeforeRepeat = closedStore.requireTask(firstTask.taskId);
+    closedStore.close();
+    await new Promise((resolve) => {
+      setTimeout(resolve, 5);
+    });
     await expect(fixture.service.close(firstTask.taskId)).resolves.toMatchObject({ alreadyClosed: true });
+    const repeatedCloseStore = new StateStore(fixture.paths.database);
+    expect(repeatedCloseStore.requireTask(firstTask.taskId)).toEqual(closedBeforeRepeat);
+    repeatedCloseStore.close();
     expect(fixture.browser.closed).toEqual([firstTask.taskId]);
     expect(fixture.browser.observedOperations).toBe(11);
     await expect(fixture.service.wait(firstTask.taskId, firstTurn.turnId, 20_000, 20_000)).resolves.toEqual(repeated);
