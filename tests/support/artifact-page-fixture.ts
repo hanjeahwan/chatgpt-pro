@@ -6,6 +6,9 @@ export interface ArtifactPageOptions {
   readonly contentText?: string;
   readonly contentTextAfterFingerprint?: string;
   readonly conversationIdAfterFingerprint?: string;
+  readonly hostnameAfterFingerprint?: string;
+  readonly pathnameAfterFingerprint?: string;
+  readonly responsePlain?: string;
   readonly responseHtml: string;
   readonly behaviorButtonCount: number;
   readonly artifactRows?: readonly string[];
@@ -17,6 +20,7 @@ export interface ArtifactPageOptions {
 export interface ArtifactPageFixture {
   readonly page: object;
   readonly events: string[];
+  globalsRestored(): boolean;
 }
 
 interface FixtureAnchor {
@@ -103,6 +107,51 @@ export function artifactPageFixture(options: ArtifactPageOptions): ArtifactPageF
   const events: string[] = [];
   const storage = new Map<string, string>();
   const attributes = new WeakMap<object, Map<string, string>>();
+  const globals = globalThis as unknown as Record<string, unknown>;
+  const trackedGlobalNames = [
+    '__chatgptProCollabClipboard',
+    'document',
+    'getComputedStyle',
+    'HTMLElement',
+    'location',
+    'navigator',
+  ] as const;
+  const initialGlobalDescriptors = new Map(
+    trackedGlobalNames.map((name) => {
+      return [name, Object.getOwnPropertyDescriptor(globalThis, name)];
+    }),
+  );
+  const originalClipboardWrite = async (_items: readonly unknown[]) => {};
+  const originalClipboardWriteText = async (_text: string) => {};
+  const clipboard = {
+    write: originalClipboardWrite,
+    writeText: originalClipboardWriteText,
+  };
+  const navigator = { clipboard };
+  let pendingClipboardWrite: Promise<void> | undefined;
+
+  const triggerCopy = (): Promise<void> => {
+    events.push('copy');
+    const plain = options.responsePlain ?? 'fixture response';
+    const html = options.responseHtml;
+    pendingClipboardWrite = clipboard
+      .write([
+        {
+          types: ['text/plain', 'text/html'],
+          async getType(type: string) {
+            return {
+              async text() {
+                return type === 'text/plain' ? plain : html;
+              },
+            };
+          },
+        },
+      ])
+      .then(() => {
+        events.push('clipboard:write');
+      });
+    return pendingClipboardWrite;
+  };
   const assistantElement = fixtureElement(attributes, {
     behaviorButtonCount: options.behaviorButtonCount,
     dataTestId: options.assistantTurnId ?? 'conversation-turn-2',
@@ -115,7 +164,7 @@ export function artifactPageFixture(options: ArtifactPageOptions): ArtifactPageF
     innerText: options.contentTextAfterFingerprint ?? options.contentText,
   });
   const copyElement = new FixtureHtmlElement(() => {
-    events.push('copy');
+    void triggerCopy();
   });
   finalAssistantElement.querySelectorAll = (selector: string) => {
     return selector === '[data-testid="copy-turn-action-button"]' ? [copyElement] : [];
@@ -193,10 +242,7 @@ export function artifactPageFixture(options: ArtifactPageOptions): ArtifactPageF
   const assistant = {
     locator(selector: string) {
       if (selector === '[data-testid="copy-turn-action-button"]') {
-        return visibleControl(() => {
-          events.push('copy');
-          return Promise.resolve();
-        });
+        return visibleControl(triggerCopy);
       }
       if (selector === 'button.behavior-btn') {
         return locatorCollection(behaviorButtons);
@@ -242,10 +288,6 @@ export function artifactPageFixture(options: ArtifactPageOptions): ArtifactPageF
     },
   };
 
-  const response = {
-    plain: 'fixture response',
-    html: options.responseHtml,
-  };
   const page = {
     evaluate(callback: unknown, argument?: unknown) {
       const source = String(callback);
@@ -264,8 +306,10 @@ export function artifactPageFixture(options: ArtifactPageOptions): ArtifactPageF
               },
               HTMLElement: FixtureHtmlElement,
               location: {
-                hostname: 'chatgpt.com',
-                pathname: `/c/${options.conversationIdAfterFingerprint ?? 'conversation-a'}`,
+                hostname: options.hostnameAfterFingerprint ?? 'chatgpt.com',
+                pathname:
+                  options.pathnameAfterFingerprint ??
+                  `/c/${options.conversationIdAfterFingerprint ?? 'conversation-a'}`,
               },
             },
             callback,
@@ -282,14 +326,17 @@ export function artifactPageFixture(options: ArtifactPageOptions): ArtifactPageF
       }
       if (source.includes('const clipboard = navigator.clipboard')) {
         events.push('clipboard:install');
-        return Promise.resolve();
+        return Promise.resolve(withGlobals({ navigator }, callback, argument));
       }
       if (source.includes('const state = globalThis.__chatgptProCollabClipboard')) {
+        const result = withGlobals({ navigator }, callback, argument);
         events.push('clipboard:restore');
-        return Promise.resolve();
+        return Promise.resolve(result);
       }
       if (source.includes('globalThis.__chatgptProCollabClipboard.captured')) {
-        return Promise.resolve(response);
+        const result = invoke(callback, argument);
+        events.push('clipboard:read');
+        return Promise.resolve(result);
       }
       if (source.includes('sessionStorage.getItem')) {
         const sessionStorage = {
@@ -317,8 +364,11 @@ export function artifactPageFixture(options: ArtifactPageOptions): ArtifactPageF
       events.push('reload');
       return Promise.resolve();
     },
-    waitForFunction() {
-      return Promise.resolve();
+    async waitForFunction(callback: unknown, argument?: unknown) {
+      await pendingClipboardWrite;
+      if (invoke(callback, argument) !== true) {
+        throw new Error('fixture clipboard capture did not settle');
+      }
     },
     waitForEvent(event: string) {
       if (event !== 'download') {
@@ -334,7 +384,23 @@ export function artifactPageFixture(options: ArtifactPageOptions): ArtifactPageF
     },
   };
 
-  return { page, events };
+  return {
+    page,
+    events,
+    globalsRestored() {
+      return (
+        trackedGlobalNames.every((name) => {
+          return descriptorsEqual(
+            Object.getOwnPropertyDescriptor(globalThis, name),
+            initialGlobalDescriptors.get(name),
+          );
+        }) &&
+        clipboard.write === originalClipboardWrite &&
+        clipboard.writeText === originalClipboardWriteText &&
+        globals.__chatgptProCollabClipboard === undefined
+      );
+    },
+  };
 }
 
 /**
@@ -518,21 +584,7 @@ function invoke(callback: unknown, ...arguments_: readonly unknown[]): unknown {
  * @throws {TypeError} If the generated callback is not callable.
  */
 function withGlobal(name: string, value: unknown, callback: unknown, argument: unknown): unknown {
-  const globals = globalThis as unknown as Record<string, unknown>;
-  const previous = globals[name];
-  globals[name] = value;
-  try {
-    if (typeof callback !== 'function') {
-      throw new TypeError('fixture callback is not a function');
-    }
-    return Reflect.apply(callback, undefined, [argument]);
-  } finally {
-    if (previous === undefined) {
-      delete globals[name];
-    } else {
-      globals[name] = previous;
-    }
-  }
+  return withGlobals({ [name]: value }, callback, argument);
 }
 
 /**
@@ -545,23 +597,43 @@ function withGlobal(name: string, value: unknown, callback: unknown, argument: u
  * @throws {TypeError} If the generated callback is not callable.
  */
 function withGlobals(values: Readonly<Record<string, unknown>>, callback: unknown, argument: unknown): unknown {
-  const globals = globalThis as unknown as Record<string, unknown>;
-  const previous = new Map<string, unknown>();
+  const previous = new Map<string, PropertyDescriptor | undefined>();
   for (const [name, value] of Object.entries(values)) {
-    previous.set(name, globals[name]);
-    globals[name] = value;
+    previous.set(name, Object.getOwnPropertyDescriptor(globalThis, name));
+    Object.defineProperty(globalThis, name, { configurable: true, writable: true, value });
   }
   try {
     return invoke(callback, argument);
   } finally {
-    for (const [name, value] of previous) {
-      if (value === undefined) {
-        delete globals[name];
+    for (const [name, descriptor] of previous) {
+      if (descriptor === undefined) {
+        Reflect.deleteProperty(globalThis, name);
       } else {
-        globals[name] = value;
+        Object.defineProperty(globalThis, name, descriptor);
       }
     }
   }
+}
+
+/**
+ * Compares two global property descriptors by the fields used by this fixture.
+ *
+ * @param actual Descriptor after a generated callback settles.
+ * @param expected Descriptor captured before the callback.
+ * @returns True when both descriptors represent the same global property.
+ */
+function descriptorsEqual(actual: PropertyDescriptor | undefined, expected: PropertyDescriptor | undefined): boolean {
+  if (actual === undefined || expected === undefined) {
+    return actual === expected;
+  }
+  return (
+    actual.configurable === expected.configurable &&
+    actual.enumerable === expected.enumerable &&
+    actual.get === expected.get &&
+    actual.set === expected.set &&
+    actual.value === expected.value &&
+    actual.writable === expected.writable
+  );
 }
 
 /** Minimal parser for the anchor-only Copy response contract exercised by the generated functions. */

@@ -801,6 +801,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     const second = 'sandbox:/mnt/data/second.txt';
     const fixture = await executableBrowserFixture({
       responseHtml: `<p>files</p><a href="${first}">first</a><a href="${first}">again</a><a href="${second}">second</a>`,
+      responsePlain: 'clipboard occurrence response',
       behaviorButtonCount: 3,
     });
 
@@ -815,13 +816,20 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
         new AbortController().signal,
       ),
     ).resolves.toMatchObject({
-      response: 'fixture response',
+      response: 'clipboard occurrence response',
       artifacts: [
         { sourceUrl: first, label: 'first' },
         { sourceUrl: second, label: 'second' },
       ],
     });
-    expect(fixture.events).toEqual(['clipboard:install', 'copy', 'clipboard:restore']);
+    expect(fixture.events).toEqual([
+      'clipboard:install',
+      'copy',
+      'clipboard:write',
+      'clipboard:read',
+      'clipboard:restore',
+    ]);
+    expect(fixture.globalsRestored()).toBe(true);
   });
 
   it('rejects the reviewer collision pair when recovered content changes before capture', async () => {
@@ -846,6 +854,8 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
       ),
     ).rejects.toMatchObject({ code: 'PLAYWRIGHT_CONTRACT_DRIFT' });
     expect(fixture.events).not.toContain('copy');
+    expect(fixture.events).not.toContain('clipboard:write');
+    expect(fixture.globalsRestored()).toBe(true);
   });
 
   it('rechecks recovered content synchronously after a delayed capture digest before Copy', async () => {
@@ -872,11 +882,13 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
       ),
     ).rejects.toMatchObject({ code: 'PLAYWRIGHT_CONTRACT_DRIFT' });
     expect(fixture.events).toEqual(['clipboard:install', 'clipboard:restore']);
+    expect(fixture.globalsRestored()).toBe(true);
   });
 
   it('copies unchanged recovered content in the synchronous post-digest critical section', async () => {
     const fixture = await executableBrowserFixture({
       responseHtml: '<p>response</p>',
+      responsePlain: 'clipboard recovered response',
       behaviorButtonCount: 0,
       contentText: 'zcl5rbjm02',
       captureDigestDelayMs: 10,
@@ -895,18 +907,72 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
         'recovered-stuck',
         '0a2628977748c14ba2648142c9bcabbfcc96bcce67866fd47a4e04fe219bd876',
       ),
-    ).resolves.toMatchObject({ response: 'fixture response', artifacts: [] });
-    expect(fixture.events).toEqual(['clipboard:install', 'copy', 'clipboard:restore']);
+    ).resolves.toMatchObject({ response: 'clipboard recovered response', artifacts: [] });
+    expect(fixture.events).toEqual([
+      'clipboard:install',
+      'copy',
+      'clipboard:write',
+      'clipboard:read',
+      'clipboard:restore',
+    ]);
+    expect(fixture.globalsRestored()).toBe(true);
   });
 
-  it('keeps a service turn pending when navigation changes during the recovered capture digest', async () => {
+  it('captures recovered content on the canonical conversation URL with a trailing slash', async () => {
+    const fixture = await executableBrowserFixture({
+      responseHtml: '<p>trailing slash html</p>',
+      responsePlain: 'trailing slash plain',
+      behaviorButtonCount: 0,
+      contentText: 'zcl5rbjm02',
+      pathnameAfterFingerprint: '/c/conversation-a/',
+      captureDigestDelayMs: 10,
+    });
+
+    await expect(
+      fixture.browser.captureResponse(
+        'task-a',
+        'session-a',
+        'conversation-a',
+        'turn-a',
+        'conversation-turn-2',
+        5000,
+        new AbortController().signal,
+        undefined,
+        'recovered-stuck',
+        '0a2628977748c14ba2648142c9bcabbfcc96bcce67866fd47a4e04fe219bd876',
+      ),
+    ).resolves.toMatchObject({ response: 'trailing slash plain', responseHtml: '<p>trailing slash html</p>' });
+    expect(fixture.events).toEqual([
+      'clipboard:install',
+      'copy',
+      'clipboard:write',
+      'clipboard:read',
+      'clipboard:restore',
+    ]);
+    expect(fixture.globalsRestored()).toBe(true);
+  });
+
+  it.each([
+    {
+      label: 'conversation id changes',
+      finalLocation: { conversationIdAfterFingerprint: 'conversation-b' },
+    },
+    {
+      label: 'hostname changes',
+      finalLocation: { hostnameAfterFingerprint: 'example.com' },
+    },
+    {
+      label: 'pathname is not canonical',
+      finalLocation: { pathnameAfterFingerprint: '/c/conversation-a/extra' },
+    },
+  ])('keeps a service turn pending when $label during the recovered capture digest', async ({ finalLocation }) => {
     const fixture = await executableBrowserFixture({
       responseHtml: '<p>response</p>',
       behaviorButtonCount: 0,
       contentText: 'zcl5rbjm02',
       contentTextAfterFingerprint: 'zcl5rbjm02',
-      conversationIdAfterFingerprint: 'conversation-b',
       captureDigestDelayMs: 10,
+      ...finalLocation,
     });
     await ensureTaskDirectories(fixture.paths, 'task-a');
     const store = new StateStore(fixture.paths.database);
@@ -947,6 +1013,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     expect(reopened.listArtifacts('task-a', 'turn-a')).toEqual([]);
     reopened.close();
     expect(fixture.events).toEqual(['clipboard:install', 'clipboard:restore']);
+    expect(fixture.globalsRestored()).toBe(true);
   });
 
   it('keeps a service turn pending when recovered content mutates during the capture digest', async () => {
@@ -996,6 +1063,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     expect(reopened.listArtifacts('task-a', 'turn-a')).toEqual([]);
     reopened.close();
     expect(fixture.events).toEqual(['clipboard:install', 'clipboard:restore']);
+    expect(fixture.globalsRestored()).toBe(true);
   });
 
   it('rejects an executed Copy response whose occurrence and behavior-button counts differ', async () => {
@@ -1358,7 +1426,16 @@ async function executableBrowserFixture(options: ArtifactPageOptions) {
       invocation.onChildExited?.(invocationChildPid);
     }
   });
-  return { browser, events: pageFixture.events, invocations, paths, root };
+  return {
+    browser,
+    events: pageFixture.events,
+    globalsRestored() {
+      return pageFixture.globalsRestored();
+    },
+    invocations,
+    paths,
+    root,
+  };
 }
 
 /**
