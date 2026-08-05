@@ -697,6 +697,7 @@ export class PlaywrightBrowser {
    * @param taskId Owning task identifier.
    * @param sessionName Owning Playwright named session.
    * @param conversationId Canonical conversation identity to archive.
+   * @param conversationUrl Canonical conversation URL recorded at submission, plain or project-scoped.
    * @param observer Task-lease child-process observer.
    * @returns The confirmed archived conversation identity.
    * @throws {BrowserError} If selectors drift, the target differs, or archive cannot be observed.
@@ -706,13 +707,14 @@ export class PlaywrightBrowser {
     taskId: string,
     sessionName: string,
     conversationId: string,
+    conversationUrl: string,
     observer?: BrowserOperationObserver,
   ): Promise<{ readonly conversationId: string }> {
     const result = await this.#runCode<ArchiveProtocolResult>(
       sessionName,
       taskId,
       'archive',
-      archiveScript(conversationId),
+      archiveScript(conversationUrl, conversationId),
       'archive conversation',
       'archive',
       observer,
@@ -1635,7 +1637,8 @@ const SEND_TARGET_OK = `
       if (expectedConversationId === null) {
         return normalized === '' || /^\\/g\\/g-p-[^/]+\\/project$/.test(normalized);
       }
-      return normalized === '/c/' + expectedConversationId;
+      const match = /\\/c\\/([^/?#]+)\\/?$/.exec(pathname);
+      return match !== null && !match[1].startsWith('WEB:') && match[1] === expectedConversationId;
     };`;
 
 /**
@@ -2321,21 +2324,32 @@ function downloadArtifactScript(
 /**
  * Builds the exact target archive flow and observes its sidebar result after refresh.
  *
+ * The conversation identity uses the shared last-`/c/<id>` contract so both plain and
+ * project-scoped canonical URLs are accepted; the sidebar link, leave-wait, and restore
+ * navigation all use the recorded canonical URL.
+ *
+ * @param canonicalUrl Recorded canonical conversation URL, plain or project-scoped.
  * @param expectedConversationId Database-bound canonical identity.
  * @returns A Playwright page function source.
  * @throws {Error} This pure source builder does not throw.
  */
-function archiveScript(expectedConversationId: string): string {
+function archiveScript(canonicalUrl: string, expectedConversationId: string): string {
   return `async (page) => {
     const conversationId = ${JSON.stringify(expectedConversationId)};
-    const targetPath = '/c/' + conversationId;
+    const canonicalUrl = ${JSON.stringify(canonicalUrl)};
+    const canonicalPath = canonicalUrl.replace(/^https?:\\/\\/[^/]+/u, '');
+    const sidebarPath = '/c/' + conversationId;
+    const conversationIdOf = (pathname) => {
+      const match = /\\/c\\/([^/?#]+)\\/?$/.exec(pathname);
+      return match === null || match[1].startsWith('WEB:') ? null : match[1];
+    };
     const url = await page.evaluate(() => {
       return { hostname: location.hostname, pathname: location.pathname };
     });
-    if (url.hostname !== 'chatgpt.com' || url.pathname.replace(/\\/$/, '') !== targetPath) {
+    if (url.hostname !== 'chatgpt.com' || conversationIdOf(url.pathname) !== conversationId) {
       throw new Error('conversation identity does not match archive target');
     }
-    const targetLink = page.locator('a[href="' + targetPath + '"]');
+    const targetLink = page.locator('a[href="' + sidebarPath + '"]');
     await targetLink.first().waitFor({ state: 'attached', timeout: 60000 });
     if (await targetLink.count() !== 1) throw new Error('page contract drift: archive target link is not unique');
     const options = page.locator('[data-testid="conversation-options-button"]');
@@ -2349,7 +2363,7 @@ function archiveScript(expectedConversationId: string): string {
       throw new Error('page contract drift: Archive menu item is not unique and visible');
     }
     await archive.click();
-    await page.waitForURL((nextUrl) => nextUrl.pathname.replace(/\\/$/, '') !== targetPath, { timeout: 60000 });
+    await page.waitForURL((nextUrl) => nextUrl.pathname.replace(/\\/$/, '') !== canonicalPath, { timeout: 60000 });
     await page.reload({ waitUntil: 'domcontentloaded' });
     const sidebar = page.locator('nav').first();
     await sidebar.waitFor({ state: 'visible', timeout: 60000 });
@@ -2362,27 +2376,20 @@ function archiveScript(expectedConversationId: string): string {
       if (absentPolls < 6) await page.waitForTimeout(500);
     }
     if (absentPolls < 6) throw new Error('archive was not visible after sidebar refresh');
-    await page.goto('https://chatgpt.com' + targetPath, { waitUntil: 'domcontentloaded' });
-    const restoredUrl = await page.evaluate(() => {
-      return { hostname: location.hostname, pathname: location.pathname };
-    });
-    if (restoredUrl.hostname !== 'chatgpt.com' || restoredUrl.pathname.replace(/\\/$/, '') !== targetPath) {
-      throw new Error('archived conversation could not be restored as the task page');
-    }
-    await page.waitForFunction((path) => {
+    await page.goto(canonicalUrl, { waitUntil: 'domcontentloaded' });
+    await page.waitForFunction((id) => {
+      const match = /\\/c\\/([^/?#]+)\\/?$/.exec(location.pathname);
+      const identity = match === null || match[1].startsWith('WEB:') ? null : match[1];
       return (
         location.hostname === 'chatgpt.com' &&
-        location.pathname.replace(/\\/$/, '') === path &&
+        identity === id &&
         document.querySelector('[data-testid^="conversation-turn-"][data-turn]') !== null
       );
-    }, targetPath, { timeout: 60000, polling: 100 });
+    }, conversationId, { timeout: 60000, polling: 100 });
     const finalRestoredUrl = await page.evaluate(() => {
       return { hostname: location.hostname, pathname: location.pathname };
     });
-    if (
-      finalRestoredUrl.hostname !== 'chatgpt.com' ||
-      finalRestoredUrl.pathname.replace(/\\/$/, '') !== targetPath
-    ) {
+    if (finalRestoredUrl.hostname !== 'chatgpt.com' || conversationIdOf(finalRestoredUrl.pathname) !== conversationId) {
       throw new Error('conversation identity changed while restoring the archived task page');
     }
     return JSON.stringify({ protocol: '${PROTOCOL}', kind: 'archive', conversationId });

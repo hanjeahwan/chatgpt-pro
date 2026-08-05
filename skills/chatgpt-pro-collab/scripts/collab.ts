@@ -80,6 +80,7 @@ export interface CollabBrowser {
     taskId: string,
     sessionName: string,
     conversationId: string,
+    conversationUrl: string,
     observer?: BrowserOperationObserver,
   ): Promise<{ readonly conversationId: string }>;
 }
@@ -537,7 +538,14 @@ export class CollabService {
           throw new CollabError('CONVERSATION_NOT_ESTABLISHED', `task has no submitted conversation: ${taskId}`);
         }
         const conversationId = task.conversationId;
-        const result = await this.#browser.archive(taskId, task.playwrightSession, conversationId, observer);
+        const conversationUrl = task.conversationUrl ?? `https://chatgpt.com/c/${conversationId}`;
+        const result = await this.#browser.archive(
+          taskId,
+          task.playwrightSession,
+          conversationId,
+          conversationUrl,
+          observer,
+        );
         return { taskId, conversationId: result.conversationId };
       });
     });

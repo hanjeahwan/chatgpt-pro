@@ -69,7 +69,7 @@
     {
       "id": "IMP-003",
       "title": "发送显式输入并支持单归档附件",
-      "status": "done",
+      "status": "implemented",
       "covers": ["BEH-003", "BEH-010"],
       "verifies": ["VER-003", "VER-013"],
       "dependsOn": ["IMP-001", "IMP-002"],
@@ -82,7 +82,8 @@
           "pnpm test",
           "git diff --check",
           "VER-013 host A task_c4fbc6efab2a (tar), host B task_823bbdaa4c97 (zip): one upload item, extraction matched, manifest comparison passed",
-          "VER-013 current-HEAD tasks ce881056-79ae-45c3-bcb3-019633cc4459, 2daa2bb6-1c29-4230-8f9c-78fe6a50ca6a: one finite wait each, exact manifest comparison passed"
+          "VER-013 current-HEAD tasks ce881056-79ae-45c3-bcb3-019633cc4459, 2daa2bb6-1c29-4230-8f9c-78fe6a50ca6a: one finite wait each, exact manifest comparison passed",
+          "2026-08-06 sendTargetOk 沿用 conversation identity 合同：bound conversation 接受 project-scoped pathname 并按最后 /c/<id> 段核对，null 首次发送仍接受 / 或 /g/g-p-<id>/project；live task b40073ac-143c-4d21-9f95-5e41eb73c843 归档后二次 send 成功（turn b7fb1cd4-5cfe-4e52-8144-a646b37e8c17），conversation_id 与 conversation_url 不变"
         ],
         "reviews": [
           "task_f83d3a0d427b / conversation 019fcdfa-ef5f-7410-a245-6bbaf7be52dd: F1-F5 closed, no independent candidate"
@@ -157,7 +158,7 @@
     {
       "id": "IMP-007",
       "title": "分离本地关闭与 Web conversation 归档",
-      "status": "done",
+      "status": "implemented",
       "covers": ["BEH-008", "BEH-009"],
       "verifies": ["VER-008", "VER-009"],
       "dependsOn": ["IMP-001", "IMP-002"],
@@ -167,11 +168,12 @@
           "pnpm format:check",
           "pnpm lint",
           "pnpm typecheck",
-          "pnpm test",
+          "pnpm test (8 files/113 tests)",
           "git diff --check",
           "live 2026-08-05 task 72a8d8dc-80ae-4821-b478-745a5d2701d8: repeated close alreadyClosed=true without reopening browser; archive restored original canonical page and turns, next send reused same ID and marker",
           "tests/state.test.ts two-connection interleaved regression: repeated close byte-stable",
-          "pnpm exec vitest --run tests/collab.test.ts: 26 tests passed"
+          "pnpm exec vitest --run tests/collab.test.ts: 26 tests passed",
+          "2026-08-06 BEH-009 project-scoped archive 回归修复：archive 边界改用共享 conversation identity 合同（初始与恢复核对按最后 /c/<id> 段，侧栏链接按 /c/<id>，离开与恢复导航用录制 canonical URL）；确定性回归 tests/browser.test.ts 新增 project-scoped 成功与恢复路径；live 2026-08-06 task b40073ac-143c-4d21-9f95-5e41eb73c843：复现旧 /c/<id> 判定失败后修复成功，归档后侧栏链接消失、恢复回 canonical project-scoped URL 且 turn 可定位，二次 send（b7fb1cd4）与 wait 均成功且 conversation_id/conversation_url 不变"
         ],
         "reviews": [
           "task_f83d3a0d427b / conversation 019fcdfa-ef5f-7410-a245-6bbaf7be52dd: F1-F5 closed, no independent candidate",

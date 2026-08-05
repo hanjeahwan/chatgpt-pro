@@ -966,7 +966,9 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
   it('uses only the exact target options button and Archive menu item', async () => {
     const fixture = await browserFixture([pageResult({ protocol, kind: 'archive', conversationId: 'conversation-a' })]);
 
-    await expect(fixture.browser.archive('task-a', 'session-a', 'conversation-a')).resolves.toEqual({
+    await expect(
+      fixture.browser.archive('task-a', 'session-a', 'conversation-a', 'https://chatgpt.com/c/conversation-a'),
+    ).resolves.toEqual({
       conversationId: 'conversation-a',
     });
     const source = await lastScript(fixture.invocations);
@@ -974,27 +976,65 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     expect(source).toContain("name: 'Archive', exact: true");
     expect(source).toContain("targetLink.first().waitFor({ state: 'attached', timeout: 60000 })");
     expect(source).toContain('while (absentPolls < 6 && verificationPolls < 120)');
-    expect(source).toContain("page.goto('https://chatgpt.com' + targetPath");
+    expect(source).toContain("await page.goto(canonicalUrl, { waitUntil: 'domcontentloaded' })");
+    expect(source).toContain('conversationIdOf(url.pathname) !== conversationId');
+    expect(source).toContain('conversationIdOf(finalRestoredUrl.pathname) !== conversationId');
     expect(source).toContain('document.querySelector(\'[data-testid^="conversation-turn-"][data-turn]\') !== null');
-    expect(source).toContain("finalRestoredUrl.pathname.replace(/\\/$/, '') !== targetPath");
     expect(source).not.toContain("const composer = page.locator('#prompt-textarea')");
     expect(source).not.toContain('Open conversation options');
     expect(source).not.toContain('new URL(page.url())');
     expectPageFunctionSyntax(source);
   });
 
+  it('archives a project-scoped conversation using its canonical URL', async () => {
+    const fixture = await browserFixture([pageResult({ protocol, kind: 'archive', conversationId: 'conversation-a' })]);
+
+    await expect(
+      fixture.browser.archive(
+        'task-a',
+        'session-a',
+        'conversation-a',
+        'https://chatgpt.com/g/g-p-123-chatgpt-pro-collab/c/conversation-a',
+      ),
+    ).resolves.toEqual({
+      conversationId: 'conversation-a',
+    });
+    const source = await lastScript(fixture.invocations);
+    expect(source).toContain('https://chatgpt.com/g/g-p-123-chatgpt-pro-collab/c/conversation-a');
+    expect(source).toContain("page.locator('a[href=\"' + sidebarPath + '\"]')");
+    expect(source).not.toContain("targetPath = '/c/' + conversationId");
+    expectPageFunctionSyntax(source);
+  });
+
   it('rejects an archived task page that redirects after its turn appears', async () => {
     const fixture = await browserFixture([pageResult({ protocol, kind: 'archive', conversationId: 'conversation-a' })]);
-    await fixture.browser.archive('task-a', 'session-a', 'conversation-a');
+    await fixture.browser.archive('task-a', 'session-a', 'conversation-a', 'https://chatgpt.com/c/conversation-a');
     const source = await lastScript(fixture.invocations);
     const runArchive = new Function(`return (${source})`)() as (page: object) => Promise<string>;
     const page = archivePageFixture([
-      { hostname: 'chatgpt.com', pathname: '/c/conversation-a' },
       { hostname: 'chatgpt.com', pathname: '/c/conversation-a' },
       { hostname: 'chatgpt.com', pathname: '/c/conversation-b' },
     ]);
 
     await expect(runArchive(page)).rejects.toThrow('conversation identity changed while restoring');
+  });
+
+  it('restores a project-scoped archived conversation under its canonical URL', async () => {
+    const fixture = await browserFixture([pageResult({ protocol, kind: 'archive', conversationId: 'conversation-a' })]);
+    await fixture.browser.archive(
+      'task-a',
+      'session-a',
+      'conversation-a',
+      'https://chatgpt.com/g/g-p-123-chatgpt-pro-collab/c/conversation-a',
+    );
+    const source = await lastScript(fixture.invocations);
+    const runArchive = new Function(`return (${source})`)() as (page: object) => Promise<string>;
+    const page = archivePageFixture([
+      { hostname: 'chatgpt.com', pathname: '/g/g-p-123-chatgpt-pro-collab/c/conversation-a' },
+      { hostname: 'chatgpt.com', pathname: '/g/g-p-123-chatgpt-pro-collab/c/conversation-a' },
+    ]);
+
+    await expect(runArchive(page)).resolves.toContain('conversation-a');
   });
 });
 

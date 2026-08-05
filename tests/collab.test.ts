@@ -1033,11 +1033,18 @@ class FakeBrowser implements CollabBrowser {
    * @param taskId Task identifier.
    * @param _sessionName Unused named session.
    * @param conversationId Database-bound identity.
+   * @param _conversationUrl Unused canonical conversation URL.
    * @param observer Task-lease child-process observer.
    * @returns The same conversation identity.
    * @throws {Error} This fake archive does not throw.
    */
-  archive(taskId: string, _sessionName: string, conversationId: string, observer?: BrowserOperationObserver) {
+  archive(
+    taskId: string,
+    _sessionName: string,
+    conversationId: string,
+    _conversationUrl: string,
+    observer?: BrowserOperationObserver,
+  ) {
     this.observe(observer);
     this.archived.push(taskId);
     return Promise.resolve({ conversationId });
