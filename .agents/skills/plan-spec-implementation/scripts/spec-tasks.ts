@@ -8,13 +8,11 @@ type TaskStatus = 'pending' | 'in_progress' | 'implemented' | 'blocked' | 'done'
 type Readiness = 'basic' | 'ready' | 'final';
 
 export interface SpecSnapshot {
-  specDigest: string;
   contextDigest: string;
   sourceDigests: Record<string, string>;
 }
 
 export interface TaskEvidence {
-  commits: string[];
   checks: string[];
   reviews: string[];
 }
@@ -32,10 +30,8 @@ export interface ImplementationTask {
 
 export interface TaskLedger {
   spec: string;
-  specDigest: string;
   contextDigest: string;
   sourceDigests: Record<string, string>;
-  baseSha: string;
   tasks: ImplementationTask[];
 }
 
@@ -67,7 +63,7 @@ const TASK_STATUSES = new Set<TaskStatus>([
  * Parses stable BEH and VER section headings from a product Spec.
  *
  * @param content Complete Markdown Spec content.
- * @returns Digests for the complete Spec, non-BEH/VER context, and every BEH/VER definition.
+ * @returns Digests for non-BEH/VER context and every BEH/VER definition.
  * @throws When the Spec contains duplicate definitions or no BEH/VER definitions.
  */
 export function parseSpec(content: string): SpecSnapshot {
@@ -102,7 +98,6 @@ export function parseSpec(content: string): SpecSnapshot {
   }
 
   return {
-    specDigest: digest(normalizedContent),
     contextDigest: digest(
       lines
         .filter((_line, index) => {
@@ -148,7 +143,8 @@ export function compareSpec(snapshot: SpecSnapshot, ledger: TaskLedger): SpecDif
       return storedIds.has(id) && snapshot.sourceDigests[id] !== ledger.sourceDigests[id];
     })
     .sort();
-  const specChanged = snapshot.specDigest !== ledger.specDigest;
+  const contextChanged = snapshot.contextDigest !== ledger.contextDigest;
+  const specChanged = contextChanged || added.length > 0 || changed.length > 0 || removed.length > 0;
   const changedOrRemoved = new Set([...changed, ...removed]);
   const impactedTasks = ledger.tasks
     .filter((task) => {
@@ -163,7 +159,7 @@ export function compareSpec(snapshot: SpecSnapshot, ledger: TaskLedger): SpecDif
 
   return {
     specChanged,
-    contextChanged: snapshot.contextDigest !== ledger.contextDigest,
+    contextChanged,
     added,
     changed,
     removed,
@@ -172,7 +168,8 @@ export function compareSpec(snapshot: SpecSnapshot, ledger: TaskLedger): SpecDif
 }
 
 /**
- * Validates ledger shape, current Spec identity, coverage, dependencies, and evidence.
+ * Validates ledger shape, current Spec identity, coverage, dependencies, task states, and required evidence presence.
+ * Evidence truth, relevance, and freshness require the workflow's Integration Gate.
  *
  * @param snapshot Current parsed Spec snapshot.
  * @param value Parsed JSON value for the ledger.
@@ -187,22 +184,13 @@ export function validateLedger(snapshot: SpecSnapshot, value: unknown, options: 
 
   const ledger = value;
   requireString(ledger, 'spec', errors);
-  requireString(ledger, 'specDigest', errors);
   requireString(ledger, 'contextDigest', errors);
-  requireString(ledger, 'baseSha', errors);
   if (ledger.spec !== options.expectedSpec) {
     errors.push(`ledger.spec must equal ${options.expectedSpec}`);
-  }
-  if (ledger.specDigest !== snapshot.specDigest) {
-    errors.push('ledger.specDigest is stale; run diff and reconcile the ledger');
   }
   if (ledger.contextDigest !== snapshot.contextDigest) {
     errors.push('ledger.contextDigest is stale; review non-BEH/VER Spec changes');
   }
-  if (typeof ledger.baseSha === 'string' && !/^[0-9a-f]{40}$/.test(ledger.baseSha)) {
-    errors.push('ledger.baseSha must be a complete 40-character lowercase Git SHA');
-  }
-
   const storedDigests = readStringRecord(ledger.sourceDigests, 'sourceDigests', errors);
   if (storedDigests) {
     for (const id of Object.keys(snapshot.sourceDigests)) {
@@ -274,10 +262,8 @@ export function validateLedger(snapshot: SpecSnapshot, value: unknown, options: 
       }
     }
     if (task.status === 'implemented' || task.status === 'done') {
-      for (const evidenceType of ['commits', 'checks'] as const) {
-        if (task.evidence[evidenceType].length === 0) {
-          errors.push(`${task.id} is ${task.status} but evidence.${evidenceType} is empty`);
-        }
+      if (task.evidence.checks.length === 0) {
+        errors.push(`${task.id} is ${task.status} but evidence.checks is empty`);
       }
     }
     if (task.status === 'done') {
@@ -338,7 +324,7 @@ export function validateLedger(snapshot: SpecSnapshot, value: unknown, options: 
   if (readiness === 'final') {
     for (const task of tasks) {
       if (task.status !== 'done' && task.status !== 'cancelled') {
-        errors.push(`${task.id} must be done or cancelled for final delivery`);
+        errors.push(`${task.id} must be done or cancelled for final ledger closure`);
       }
     }
   }
@@ -431,7 +417,6 @@ function readTask(value: unknown, index: number, errors: string[]): Implementati
     errors.push(`${label}.evidence must be an object`);
     return undefined;
   }
-  const commits = readStringArray(value.evidence, 'commits', `${label}.evidence`, errors);
   const checks = readStringArray(value.evidence, 'checks', `${label}.evidence`, errors);
   const reviews = readStringArray(value.evidence, 'reviews', `${label}.evidence`, errors);
   if (
@@ -445,7 +430,6 @@ function readTask(value: unknown, index: number, errors: string[]): Implementati
     !verifies ||
     !dependsOn ||
     !scope ||
-    !commits ||
     !checks ||
     !reviews
   ) {
@@ -459,7 +443,7 @@ function readTask(value: unknown, index: number, errors: string[]): Implementati
     verifies,
     dependsOn,
     scope,
-    evidence: { commits, checks, reviews },
+    evidence: { checks, reviews },
   };
 }
 
@@ -522,10 +506,7 @@ function readJson(path: string): unknown {
 
 function asLedger(value: unknown): TaskLedger {
   if (!isRecord(value) || !isRecord(value.sourceDigests)) {
-    throw new Error('ledger must contain specDigest, contextDigest, and sourceDigests');
-  }
-  if (typeof value.specDigest !== 'string') {
-    throw new Error('ledger.specDigest must be a string');
+    throw new Error('ledger must contain contextDigest and sourceDigests');
   }
   if (typeof value.contextDigest !== 'string') {
     throw new Error('ledger.contextDigest must be a string');
@@ -579,6 +560,9 @@ function printHelp(): void {
   spec-tasks.ts snapshot --spec <spec.md>
   spec-tasks.ts diff --spec <spec.md> --ledger <tasks.json>
   spec-tasks.ts check [--ready|--final] --spec <spec.md> --ledger <tasks.json>
+
+--ready runs the Ready Gate; the workflow runs it exactly once after implementation inputs are committed.
+--final validates structural ledger closure only; evaluate evidence semantics through the workflow Integration Gate.
 `);
 }
 

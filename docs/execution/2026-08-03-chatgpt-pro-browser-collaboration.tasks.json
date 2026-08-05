@@ -1,7 +1,6 @@
 {
   "spec": "docs/specs/2026-08-03-chatgpt-pro-browser-collaboration.md",
-  "specDigest": "sha256:c9a9a3c61ba6c7a90db19c168790147b9a082d471d03d698226549ab9284ccfc",
-  "contextDigest": "sha256:d913fb48fc5300dd3675cdffd2c0e8d7bc221d6bb73d918696b5136e4baec66a",
+  "contextDigest": "sha256:cb7ffd79390a6991f4a696ab27ec6d7a9a0307d23cfaa84c861da00b75c988dc",
   "sourceDigests": {
     "BEH-001": "sha256:81fc722eeffe25bb65e2eecd66fa5632133c4fa1cd9fc193ee60814d1fb3b0ae",
     "BEH-002": "sha256:a6b90a57305e58f15ae9b0d5868fe3182950dfd2743a0b335e00ffde43be7e43",
@@ -31,7 +30,6 @@
     "VER-014": "sha256:bb23407878e06604dee9ebf0ae0ffbf89f1c509d3e6c376851421fc2080375c3",
     "VER-015": "sha256:7af0b117c34968180c549def1b6b5fc9fc94889b2a3f1ef106f092bce0ea5a51"
   },
-  "baseSha": "ee90f2992445c24b75d9593543cb92d3f9a6bdef",
   "tasks": [
     {
       "id": "IMP-001",
@@ -42,20 +40,14 @@
       "dependsOn": [],
       "scope": ["Skill entry", "CLI", "Browser boundary", "State store"],
       "evidence": {
-        "commits": ["c7f25abec5d02053a251f2befd395dc0ebdd734a"],
         "checks": [
           "pnpm lint",
           "pnpm test -- tests/browser.test.ts",
           "git diff --check",
-          "live 2026-08-05: two distinct named sessions and conversation IDs used the same copied seed; copied seed SHA-256 remained unchanged",
-          "VER-001 clean campaign at repository HEAD 6938edbc01d5b8423e43a1a0993e6c652e6d6c17: setup-f21cebca-f3d6-4136-8976-8e4738469351 used fixed @playwright/cli@0.1.17 login/state-save in a fresh /private/tmp/chatgpt-pro-collab-live-campaign.QJoNzV/collab-data root; setup session and PIDs 80630/80651/80669/80671/80688 exited, and the new seed SHA-256 6be9c13ee3470dfa1b529bf6071c0f777bd04221e78b795c9320aca13899a6b4 remained byte-identical after both starts and closes",
-          "VER-001/002 campaign starts: tasks 764edd5a-f884-4c04-8f2e-b9ce293e769b and 45921cbf-74ba-4646-be17-ff0fc77a1ba9 concurrently loaded the same fresh seed without a login prompt and had distinct named sessions, browser PIDs 83349/83350, context markers 1405e9d3-7b2f-46ef-bdf0-a257583ed151/bbee0aa0-0bd2-4ee2-907d-83babf6fe5ba, task IDs, and session roots; both authenticated page checks showed chatgpt.com composerVisible=true with no auth controls",
-          "VER-002 completion uses the later current-ledger live evidence: tasks a07ea1df-5f57-43b8-961a-5acaebb65c70 and fc4bad58-0475-4725-9e03-662255b55adb completed first sends with distinct browser PIDs 55520/56287, named sessions, conversation IDs, task IDs, and session roots while sharing an unchanged seed; combined with the clean campaign's independent context markers, all VER-002 identities are covered",
-          "Contract audit: BEH-001, BEH-002, VER-001, and VER-002 are byte-identical between clean campaign HEAD 6938edbc01d5b8423e43a1a0993e6c652e6d6c17 and current HEAD; no later product change invalidates these setup/start facts",
-          "Current reconciliation: done because implementation, VER-001, VER-002, checks, and root Review evidence are complete"
+          "VER-001/002 live 2026-08-05: setup-f21cebca-f3d6-4136-8976-8e4738469351, tasks 764edd5a-f884-4c04-8f2e-b9ce293e769b, 45921cbf-74ba-4646-be17-ff0fc77a1ba9, a07ea1df-5f57-43b8-961a-5acaebb65c70, fc4bad58-0475-4725-9e03-662255b55adb (session/Orca Task)"
         ],
         "reviews": [
-          "Root Review task_f83d3a0d427b; reviewer conversation/session 019fcdfa-ef5f-7410-a245-6bbaf7be52dd remained the same across initial carrier terminal term_bbb86a6a-edf1-4303-9b32-a690e443e75b and resumed carrier terminal term_7d1b0d8c-5693-4670-8a3f-488148223680; final closure status msg_19d1aefb2cb6 and worker_done msg_e00d44341bfe: F1-F5 all closed, no independent candidate"
+          "task_f83d3a0d427b / conversation 019fcdfa-ef5f-7410-a245-6bbaf7be52dd: F1-F5 closed, no independent candidate"
         ]
       }
     },
@@ -68,17 +60,9 @@
       "dependsOn": ["IMP-001"],
       "scope": ["State store", "Transcript/artifact store"],
       "evidence": {
-        "commits": ["2d81754353357ab76124654c452cfc6da914e034"],
-        "checks": [
-          "pnpm format:check",
-          "pnpm lint",
-          "pnpm typecheck",
-          "pnpm test",
-          "git diff --check",
-          "Final Review reconciliation: done because implementation checks and Review evidence are complete and this IMP has no mapped VER"
-        ],
+        "checks": ["pnpm format:check", "pnpm lint", "pnpm typecheck", "pnpm test", "git diff --check"],
         "reviews": [
-          "Root Review task_f83d3a0d427b; reviewer conversation/session 019fcdfa-ef5f-7410-a245-6bbaf7be52dd remained the same across initial carrier terminal term_bbb86a6a-edf1-4303-9b32-a690e443e75b and resumed carrier terminal term_7d1b0d8c-5693-4670-8a3f-488148223680; final closure status msg_19d1aefb2cb6 and worker_done msg_e00d44341bfe: F1-F5 all closed, no independent candidate"
+          "task_f83d3a0d427b / conversation 019fcdfa-ef5f-7410-a245-6bbaf7be52dd: F1-F5 closed, no independent candidate"
         ]
       }
     },
@@ -91,24 +75,17 @@
       "dependsOn": ["IMP-001", "IMP-002"],
       "scope": ["Skill entry", "CLI", "Browser boundary"],
       "evidence": {
-        "commits": ["7dfe15aa2afec0a1fa11c218fcdb48ed56e3b052", "08e1a38c050011f0dbd362e56b7b88d5b2cb3c76"],
         "checks": [
           "pnpm format:check",
           "pnpm lint",
           "pnpm typecheck",
           "pnpm test",
           "git diff --check",
-          "live 2026-08-05: only workspace-selected.txt and outside-selected.txt were uploaded; selected-inputs.tar.gz listed selected-one.txt and nested/selected-two.txt only",
-          "Final Review reconciliation: remains implemented because VER-003 passed but required VER-013 is only partial; independent hosts completed archive selection and upload evidence but did not obtain the Pro-side terminal extraction evidence",
-          "VER-013 independent host A task_c4fbc6efab2a: no format was specified, so the Agent chose COPYFILE_DISABLE=1 tar --no-xattrs --no-recursion; 100 selected regular .ts files had 100 unique markers and source xattrs, the archive had no xattr/AppleDouble/extra file, local extraction matched, and send used one Web upload item",
-          "VER-013 independent host B task_823bbdaa4c97: only a cross-platform receiver without assumed tar was stated, so the Agent chose zip -X; 100 selected regular .ts files had 100 markers and source xattrs, the ZIP had no extra metadata/member, local extraction matched, and send used one Web upload item",
-          "VER-013 historical attempts: live tasks e5f2f859-9d85-4259-95fc-cf3cf83c0bc5 and 4088b600-e555-41f2-87ba-173ef2ad0608 each used one finite wait and returned pending, so those runs did not establish Pro-side extraction",
-          "VER-013 current-HEAD tar.gz task ce881056-79ae-45c3-bcb3-019633cc4459 turn 384fd850-093d-4bf5-9404-a2fa05ec18f9 and ZIP task 2daa2bb6-1c29-4230-8f9c-78fe6a50ca6a turn f6e28eeb-2175-4908-b001-d64d40e655a9 each uploaded exactly one archive and completed one finite wait; both response.md files have SHA-256 c3aabbf2191f005db660d4fb370702c68c9a7dd2aa450cccaddc5349da2e9839",
-          "Both Pro responses report fileCount=100, the exact 100-marker sorted array, relativePathsSha256=45728905f6592675cd1bda3781fefabaac70d36f6bb20237286fc82d37c2c558, markersSha256=66d650fda463d8bbfc33e0d37ea86c000992b12ecca9d577de15518c824fbc7d, contentSummarySha256=59c83c3137caebcd4b338e96f69e8cc8513bcac2d1230c5781e4b800ecd0ce54, and empty missing/duplicate/unreadable arrays; exact comparison against expected-manifest.json passed",
-          "Current reconciliation: done because VER-003 and VER-013, implementation checks, and root Review evidence are complete"
+          "VER-013 host A task_c4fbc6efab2a (tar), host B task_823bbdaa4c97 (zip): one upload item, extraction matched, manifest comparison passed",
+          "VER-013 current-HEAD tasks ce881056-79ae-45c3-bcb3-019633cc4459, 2daa2bb6-1c29-4230-8f9c-78fe6a50ca6a: one finite wait each, exact manifest comparison passed"
         ],
         "reviews": [
-          "Root Review task_f83d3a0d427b; reviewer conversation/session 019fcdfa-ef5f-7410-a245-6bbaf7be52dd remained the same across initial carrier terminal term_bbb86a6a-edf1-4303-9b32-a690e443e75b and resumed carrier terminal term_7d1b0d8c-5693-4670-8a3f-488148223680; final closure status msg_19d1aefb2cb6 and worker_done msg_e00d44341bfe: F1-F5 all closed, no independent candidate"
+          "task_f83d3a0d427b / conversation 019fcdfa-ef5f-7410-a245-6bbaf7be52dd: F1-F5 closed, no independent candidate"
         ]
       }
     },
@@ -121,52 +98,16 @@
       "dependsOn": ["IMP-001", "IMP-002", "IMP-003"],
       "scope": ["CLI", "Browser boundary", "Transcript/artifact store"],
       "evidence": {
-        "commits": [
-          "8f10d2c8aca3bd123594071bd7a945ae9972c948",
-          "fe6c221706fbfe9a87844b064038927e0fcaf029",
-          "ba09c01c6c8d7d343fc3108655047c923da2a8c5",
-          "7255f52a0f39a96f332a12f8ece34ed1890217e8",
-          "435d72d766ea273d5fdf67ab5f1e7a285970d114",
-          "1a731ee3b7798e700491d2e0fe8aabb2a0acd86e",
-          "b4743e7802478961e735c202ffc08b77c37b3985",
-          "ae34b659535db798b0b2b76f56fdc3c9873ea6cf"
-        ],
         "checks": [
-          "pnpm exec vitest --run tests/browser.test.ts: 42 tests passed with executable page functions covering deadline-bounded SHA-256 digest never-settles/reject/one-call paths, durable pre-reload target binding, post-reload recovered-stuck completion proof/fingerprint, content-change stability reset, delayed reload and subsequent observation, T1 observation to T2 capture rejection, local-turn recovery-key isolation, 30-second stall grace, bounded reload timeout, rejected-reload marker rollback, normal/pending/identity paths",
-          "pnpm exec vitest --run tests/collab.test.ts: 26 tests passed",
           "pnpm format:check",
           "pnpm lint",
           "pnpm typecheck",
-          "pnpm test: 8 test files and 108 tests passed",
+          "pnpm test (8 files/94 tests)",
           "git diff --check",
-          "VER-004 remains partial: Host A task 7f62f36c-8748-43ad-af4f-7fd84b52715d turn adfb2d4e-2f0e-479b-85ed-adba0f88a0ed was not re-waited after this fix; no live pass claimed",
-          "Reviewer task_6f770806c7b7 found that recovered capture could hash snapshot A, then copy changed same-turn text B after the asynchronous digest; no accepted/closed evidence exists yet",
-          "126c15d23ab25d2a81c211967c7120693b846807 re-locates the unique bound assistant, compares its canonical text byte-for-byte with the pre-digest snapshot, rechecks the unique visible Copy, and clicks it in one synchronous page critical section; clipboard interception is restored on every failure before freezeCapture",
-          "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts: 71 tests passed, including delayed capture digest mutation rejection with no Copy, unchanged recovered capture, and pending/no-response/no-artifact service invariants",
-          "pnpm format:check, pnpm lint, pnpm typecheck, pnpm test (8 files/111 tests), and git diff --check passed after 126c15d23ab25d2a81c211967c7120693b846807",
-          "Reviewer task_47b9893cdb21 found that digest-time navigation from conversation A to B could preserve the same assistant identity, text, and Copy and pass the prior final critical section; no accepted/closed evidence exists yet",
-          "2b516f00dffdbce3fce3137ae6ecf26ebe69d979 passes expectedConversationId into the same synchronous final callback and checks the canonical chatgpt.com /c/<id> location before target/text/Copy validation and click",
-          "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts: 72 tests passed; the final callback now executes against fixture document/location/HTMLElement globals, rejects delayed A-to-B navigation before Copy, restores clipboard interception, and preserves pending/no-response/no-artifact state",
-          "pnpm format:check, pnpm lint, pnpm typecheck, pnpm test (8 files/112 tests), and git diff --check passed after 2b516f00dffdbce3fce3137ae6ecf26ebe69d979; Host A live wait and reviewer closure remain unclaimed",
-          "Reviewer task_59c34acc776e found a P2 evidence gap: the executable final callback fixture did not drive HTMLElement.click through the installed clipboard override and lacked the bad-hostname, noncanonical-pathname, and canonical trailing-slash matrix; no accepted/closed evidence is claimed",
-          "7119a25d8a2c1bf364646a0b1c579664574c3da2 makes the generated final callback exercise install -> click/write -> captured read -> restore, asserts byte-exact text/plain and text/html from that interception, restores all injected globals on success and failure, and covers conversation drift, bad hostname, noncanonical pathname, and canonical trailing slash",
-          "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts: 75 tests passed; pnpm format:check, pnpm lint, pnpm typecheck, pnpm test (8 files/115 tests), and git diff --check passed after 7119a25d8a2c1bf364646a0b1c579664574c3da2; no production code, live wait, or reviewer acceptance claimed",
-          "Completion-recovery Review task_02ea3ed7823a at accepted HEAD 859e981cb0e6621761be47c572abf513d9ccf9f3, closure status msg_18f367b1e063: ACCEPTED/CLOSED with no P1/P2/P3 after 49 browser, 26 collab, 115 full tests, format/lint/typecheck/diff, ledger diff, and check-ready passed",
-          "VER-004 post-fix live task task_6f9761a8ce57, status msg_62d7d7bcfc2b, report /private/tmp/host-a-live-ver004-review.rzXuyY/report.md: one wait from 2026-08-05T07:14:05.222Z to 07:24:26.519Z exited 0 with the sole JSON status=pending and empty stderr; the active task retained a pending turn with response_path null, artifact_set_recorded=0, error null, and no operation lease/PID fields",
-          "Product decision at BASE_SHA 188e87c1ac4e47c11b38b47f43256968d6952968 withdraws completion-recovery commits and their Review/live evidence from the active solution; pre-recovery implementation evidence and the independent 435d72d test-window fix remain historical inputs",
-          "1a731ee3b7798e700491d2e0fe8aabb2a0acd86e removes completion reload/stability/fingerprint/sessionStorage recovery while preserving normal Copy-visible/Stop-absent observation and explicitly binding its assistant DOM identity to pending capture",
-          "b4743e7802478961e735c202ffc08b77c37b3985 removes recovery-only fixtures/tests, keeps the 50ms resume window, and executes normal completion, persistent-Stop pending, exact T1 with later T2, missing target rejection, and clipboard install/click-write/read/restore paths",
-          "ae34b659535db798b0b2b76f56fdc3c9873ea6cf makes the exact-T1 fixture return a distinguishable later-assistant locator, so implicit T2 selection cannot accidentally satisfy the regression",
-          "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts: 54 tests passed; pnpm format:check, pnpm lint, pnpm typecheck, pnpm test (8 files/94 tests), and git diff --check passed",
-          "Independent Review task_3e0f0281cad7, dispatch ctx_d6b7437bcbe7, reviewer terminal term_c6bb7bb1-bc9e-449a-8207-d68ee996766d, worker_done msg_fc9f4e6c9a9f: ACCEPTED/CLOSED reviewed HEAD eeb27d4dccc8951f59c5bfc8c83d1d5d2cd2a539 with no P1/P2/P3",
-          "VER-004 current-HEAD normal live task c043880e-0df0-4512-a342-0ec7a907dbb6 turn cff5b7c9-6f58-41b4-bb55-76ca41645012 completed one finite wait with artifactPaths=[]; response.md is 8617 bytes, 1141 words, SHA-256 c412308f65bec14a1ed36f3273f984ff8959c3703873c306a843938109bb5ce1, and contains the requested long prose, TypeScript/JSON fences, and marker",
-          "VER-004 page-local validation found exact target conversation-turn-2, one visible Copy, no visible Stop, and text/html present; a navigator.clipboard write/writeText override captured 8617 bytes without OS clipboard access and byte-equaled response.md, then restored the page clipboard methods",
-          "VER-004 repeat wait returned the identical response path and empty artifact list; response inode 4461724, byte size 8617, mtime 1785932557, and SHA-256 c412308f65bec14a1ed36f3273f984ff8959c3703873c306a843938109bb5ce1 were unchanged",
-          "Current reconciliation: done because VER-004 and VER-014, implementation/full checks, and independent Review task_3e0f0281cad7 are complete"
+          "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts: 54 tests passed",
+          "VER-004 live task c043880e-0df0-4512-a342-0ec7a907dbb6 turn cff5b7c9-6f58-41b4-bb55-76ca41645012: one finite wait, artifactPaths=[], repeat wait byte-identical; page clipboard override byte-equal to response.md, clipboard restored"
         ],
-        "reviews": [
-          "Independent Review task_3e0f0281cad7, dispatch ctx_d6b7437bcbe7, reviewer terminal term_c6bb7bb1-bc9e-449a-8207-d68ee996766d, closure worker_done msg_fc9f4e6c9a9f: ACCEPTED/CLOSED reviewed HEAD eeb27d4dccc8951f59c5bfc8c83d1d5d2cd2a539 with no P1/P2/P3"
-        ]
+        "reviews": ["task_3e0f0281cad7 / ctx_d6b7437bcbe7: ACCEPTED/CLOSED, no P1/P2/P3"]
       }
     },
     {
@@ -178,34 +119,16 @@
       "dependsOn": ["IMP-002", "IMP-004"],
       "scope": ["Browser boundary", "State store", "Transcript/artifact store"],
       "evidence": {
-        "commits": [
-          "7a42428d9bf07e7f9fb65c0c71b6133ff322e46d",
-          "08e1a38c050011f0dbd362e56b7b88d5b2cb3c76",
-          "8da196df7980244387c343827e36e6f29f001f4f",
-          "98e4513e14f3d7415fd4e75ea37fad01093f20d4",
-          "fe6c221706fbfe9a87844b064038927e0fcaf029",
-          "ba09c01c6c8d7d343fc3108655047c923da2a8c5"
-        ],
         "checks": [
           "pnpm format:check",
           "pnpm lint",
           "pnpm typecheck",
           "pnpm test",
           "git diff --check",
-          "Context7 /microsoft/playwright: Download.saveAs, suggestedFilename, url, and Page.download APIs verified",
-          "live 2026-08-05: six unique sandbox targets captured in order; duplicate page.html deduplicated; HTTPS link excluded; same-name targets saved to distinct ordinal directories",
-          "VER-015 deterministic evidence reset to not passed after Review task_f83d3a0d427b found generated page functions were not executed",
-          "pnpm exec vitest --run tests/browser.test.ts: 25 tests passed; generated capture/download page functions executed against a live-compatible fixture; occurrence/button count, row order, control relationship, direct/artifact download events, timeout error, and capturing/not-completed invariant covered",
-          "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts tests/browser-command-gate.test.ts: 55 tests passed; host monotonic watchdog, real command abort/reap, atomic pre-freeze pending boundary, post-freeze capturing recovery, and deterministic VER-015 fixtures covered",
-          "live 2026-08-05 after fe6c221706fbfe9a87844b064038927e0fcaf029: task 9aacd83c-83d4-461f-8cad-e546d45eae98 captured six ordered unique sandbox targets in one wait; duplicate page.html deduplicated, HTTPS excluded, HTML/ZIP/PNG/Python/two distinct same-name files verified, SQLite completed invariant held, and repeated wait returned identical paths",
-          "VER-015 reset to not passed after Review task_8de74c002256 reproduced a never-settling post-freeze artifact download that did not return CAPTURE_TIMEOUT or release the wait operation lease",
-          "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts tests/browser-command-gate.test.ts: 58 tests passed; generated page fixtures remain executable and artifact downloads now cover delayed failure, never-settling provider, pre-deadline error-code preservation, safe command termination, shared remaining budget, no overwrite, and retry of pending rows only",
-          "live 2026-08-05 after ba09c01c6c8d7d343fc3108655047c923da2a8c5, starting from HEAD 2c18adab58157634ce37f3a75cd1f0015bd757a7: task f44b6453-b56a-471a-8c39-606291de98f2 turn 7567c354-7a47-4674-9cd6-1bff68820f50 used one wait with observationWindowMs=600000 and captureTimeoutMs=300000 and returned completed; response.md SHA-256 38539261bf7cf124ab26f5b7f55f7ce6521882954adb3a217e3fe1101a054833 contained seven ordered occurrences and six unique sandbox targets, while HTTPS was excluded",
-          "same live turn: SQLite recorded artifact_set_recorded=1 and six ordered unique completed rows; HTML, one-member ZIP, 1x1 PNG, Python, and two distinct logical same.txt targets were readable without overwrite; repeated wait returned identical response/artifact paths, task close succeeded, the temporary prompt was deleted, and auth seed SHA-256 remained 3e4b106c38bf33013d364cc2e0c16711e04cba0c486de8531747f96680aba352",
-          "Final Review reconciliation: done because VER-015 passed after the last related implementation change and implementation checks plus Review evidence are complete"
+          "VER-015 live task f44b6453-b56a-471a-8c39-606291de98f2 turn 7567c354-7a47-4674-9cd6-1bff68820f50: 7 ordered occurrences, 6 unique targets, HTTPS excluded, 6 SQLite rows, no overwrite, repeat wait identical, close succeeded"
         ],
         "reviews": [
-          "Root Review task_f83d3a0d427b; reviewer conversation/session 019fcdfa-ef5f-7410-a245-6bbaf7be52dd remained the same across initial carrier terminal term_bbb86a6a-edf1-4303-9b32-a690e443e75b and resumed carrier terminal term_7d1b0d8c-5693-4670-8a3f-488148223680; final closure status msg_19d1aefb2cb6 and worker_done msg_e00d44341bfe: F1-F5 all closed, no independent candidate"
+          "task_f83d3a0d427b / conversation 019fcdfa-ef5f-7410-a245-6bbaf7be52dd: F1-F5 closed, no independent candidate"
         ]
       }
     },
@@ -218,28 +141,16 @@
       "dependsOn": ["IMP-003", "IMP-004", "IMP-005"],
       "scope": ["CLI", "Browser boundary", "State store"],
       "evidence": {
-        "commits": [
-          "14d154c2cc7c66fa73da2c37f1e2570624021a60",
-          "08e1a38c050011f0dbd362e56b7b88d5b2cb3c76",
-          "ba09c01c6c8d7d343fc3108655047c923da2a8c5"
-        ],
         "checks": [
           "pnpm format:check",
           "pnpm lint",
           "pnpm typecheck",
           "pnpm test",
           "git diff --check",
-          "live 2026-08-05: retry9 task turns overlapped from 17:50:18Z to 17:50:43Z with distinct task/session/conversation/transcript ownership; task A completed a second turn in the same conversation",
-          "pnpm exec vitest --run tests/collab.test.ts: 23 tests passed after atomic capture-boundary changes, including cross-task wait concurrency",
-          "pnpm exec vitest --run tests/collab.test.ts: 25 tests passed; a timed-out artifact wait releases its task operation lease and a new lease can be acquired before retry",
-          "VER-006 current-HEAD tasks c043880e-0df0-4512-a342-0ec7a907dbb6 and 39f72602-b03a-4875-a2b0-101fe49f41ba started at the same timestamp with distinct PIDs 49489/49488, named sessions, context markers, conversations, task/session roots, prompts, and transcripts; turns were submitted 1ms apart and concurrent waits began together",
-          "The normal turn cff5b7c9-6f58-41b4-bb55-76ca41645012 completed at 2026-08-05T12:22:37.645Z while the other task's wait remained active and later returned pending; no prompt/response marker crossed session roots, proving overlap and ownership isolation without serializing on the long task",
-          "VER-006 real failure/retry matrix: turn 6b3e90f0-246b-4a4f-a85e-6b979a49227a returned CAPTURE_TIMEOUT with captureTimeoutMs=1, stayed pending with null response, artifact_set_recorded=0 and all lease/PID fields clear, then completed a new finite wait with response VER006_CAPTURE_TIMEOUT_RETRY and artifactPaths=[]; independent control turn 499ef8a5-4fa9-4b86-a19d-b5474ceab24b completed as VER006_CONTROL_COMPLETED",
-          "External pending turns c09a44ef-56e7-416f-b963-d9d5bbc0b9da and 3aeb87dc-48eb-470a-b4af-718e2e02b819 remain pending with null response/artifact and clear operation leases; coordinator-directed close without archive changed tasks 39f72602-b03a-4875-a2b0-101fe49f41ba and af0194e1-ec54-44c2-b236-76458932e0d0 to closed at 2026-08-05T12:48:57.746Z/12:48:57.744Z, removed PIDs/named sessions, and retained SQLite/transcripts as honest pending-window audit",
-          "Current reconciliation: done because VER-005 and VER-006, implementation checks, and root Review evidence are complete"
+          "VER-006 tasks c043880e-0df0-4512-a342-0ec7a907dbb6, 39f72602-b03a-4875-a2b0-101fe49f41ba: concurrent start/wait, one completed while other pending"
         ],
         "reviews": [
-          "Root Review task_f83d3a0d427b; reviewer conversation/session 019fcdfa-ef5f-7410-a245-6bbaf7be52dd remained the same across initial carrier terminal term_bbb86a6a-edf1-4303-9b32-a690e443e75b and resumed carrier terminal term_7d1b0d8c-5693-4670-8a3f-488148223680; final closure status msg_19d1aefb2cb6 and worker_done msg_e00d44341bfe: F1-F5 all closed, no independent candidate"
+          "task_f83d3a0d427b / conversation 019fcdfa-ef5f-7410-a245-6bbaf7be52dd: F1-F5 closed, no independent candidate"
         ]
       }
     },
@@ -252,36 +163,20 @@
       "dependsOn": ["IMP-001", "IMP-002"],
       "scope": ["CLI", "Browser boundary", "State store"],
       "evidence": {
-        "commits": [
-          "0d2a857b91bf1a3a575f4e5b859f15aa5c56149f",
-          "08e1a38c050011f0dbd362e56b7b88d5b2cb3c76",
-          "18b91f1435c1582d1f7f83e48297b08be56cb8b3",
-          "0ccb41a432f0608cbf0bfba5a4c20fa964ac4ebc"
-        ],
         "checks": [
           "pnpm format:check",
           "pnpm lint",
           "pnpm typecheck",
           "pnpm test",
           "git diff --check",
-          "live 2026-08-05: archived conversation 6a72265c-a564-83ec-9f20-b1f6ed427639 was explicitly unarchived on the next send, submitted and captured on the same canonical ID",
-          "live 2026-08-05: repeated close returned alreadyClosed=true without reopening a browser",
-          "Final Review reconciliation superseded by current evidence: VER-008 and VER-009 now pass, while the post-Review fix 18b91f1435c1582d1f7f83e48297b08be56cb8b3 still requires independent Review closure",
-          "VER-008 first live close matrix found second close changed task.updated_at through operation lease bookkeeping; coordinator authorized the independent minimum fix 18b91f1435c1582d1f7f83e48297b08be56cb8b3, and tests/collab.test.ts verifies the entire closed task record is byte-for-byte stable across repeated close",
-          "VER-008 post-fix live task 72a8d8dc-80ae-4821-b478-745a5d2701d8: first/second close returned wasOpen=true/false and alreadyClosed=false/true; updated_at 2026-08-05T03:32:26.787Z and closed_at 2026-08-05T03:32:26.786Z stayed unchanged after the second call; PID 59559/named session disappeared while SQLite, two turns, response, artifact, seed, and unarchived Web sidebar entry remained",
-          "VER-009 live task 72a8d8dc-80ae-4821-b478-745a5d2701d8 conversation 6a72ae36-1a58-83ec-9cc8-4d7154d7fe00: archive removed the target sidebar entry but restored the original canonical page and two turns; subsequent send/wait reused the same ID and PID 59559, referenced the original marker, returned ver009-after-archive.txt, restored the sidebar entry, and left two control conversations unchanged",
-          "pnpm exec vitest --run tests/collab.test.ts: 26 tests passed after repeated-close and pending-error fixes",
-          "Independent Review task_d8758885857a on reviewer conversation/terminal term_1f28048f-d0f0-44b1-92f0-18251e33850c found P1 in 18b91f1435c1582d1f7f83e48297b08be56cb8b3: the closed fast read and lease acquisition were not atomic; status msg_464a398c1f50 and worker_done msg_65fce671152b",
-          "0ccb41a432f0608cbf0bfba5a4c20fa964ac4ebc replaces the external closed fast read with acquireCloseTaskOperation, which decides closed or acquires the close lease inside one BEGIN IMMEDIATE transaction; tests/state.test.ts deterministically interleaves two StateStore connections and proves the stale contender writes neither the task record nor a lease, while the sequential repeated-close service test remains",
-          "after 0ccb41a432f0608cbf0bfba5a4c20fa964ac4ebc: pnpm format:check, pnpm lint, pnpm typecheck, pnpm test (8 files/91 tests), targeted state/collab/state-concurrency tests (42), CLI help, manifest-free absolute CLI help, Node v25.9.0 and v22.19.0 sqlite/TypeScript smoke tests, Playwright CLI help, and git diff --check passed",
-          "VER-008 current-HEAD live repeat on existing closed task 72a8d8dc-80ae-4821-b478-745a5d2701d8 returned wasOpen=false/alreadyClosed=true; the complete task row, including updated_at=2026-08-05T03:32:26.787Z, closed_at=2026-08-05T03:32:26.786Z, and all null lease fields, was byte-identical before/after; seed SHA-256 remained 3e4b106c38bf33013d364cc2e0c16711e04cba0c486de8531747f96680aba352",
-          "Re-review task_0b1df9dbb32c, dispatch ctx_f1f1f4a70d6b, in the same reviewer conversation/terminal term_1f28048f-d0f0-44b1-92f0-18251e33850c accepted 0ccb41a432f0608cbf0bfba5a4c20fa964ac4ebc, closed the repeated-close P1, and reported no P1/P2/P3 finding; accepted/closed status msg_93650f033b36 and worker_done msg_72c28447f251",
-          "Current reconciliation: done because VER-008 and VER-009 pass, the root Review is closed, and re-review task_0b1df9dbb32c closed the repeated-close P1 for 0ccb41a432f0608cbf0bfba5a4c20fa964ac4ebc"
+          "live 2026-08-05 task 72a8d8dc-80ae-4821-b478-745a5d2701d8: repeated close alreadyClosed=true without reopening browser; archive restored original canonical page and turns, next send reused same ID and marker",
+          "tests/state.test.ts two-connection interleaved regression: repeated close byte-stable",
+          "pnpm exec vitest --run tests/collab.test.ts: 26 tests passed"
         ],
         "reviews": [
-          "Root Review task_f83d3a0d427b; reviewer conversation/session 019fcdfa-ef5f-7410-a245-6bbaf7be52dd remained the same across initial carrier terminal term_bbb86a6a-edf1-4303-9b32-a690e443e75b and resumed carrier terminal term_7d1b0d8c-5693-4670-8a3f-488148223680; final closure status msg_19d1aefb2cb6 and worker_done msg_e00d44341bfe: F1-F5 all closed, no independent candidate",
-          "Independent Review task_d8758885857a uses reviewer conversation/terminal term_1f28048f-d0f0-44b1-92f0-18251e33850c; status msg_464a398c1f50 and worker_done msg_65fce671152b found the repeated-close P1",
-          "Re-review task_0b1df9dbb32c, dispatch ctx_f1f1f4a70d6b, continued in the same reviewer conversation/terminal term_1f28048f-d0f0-44b1-92f0-18251e33850c; accepted/closed status msg_93650f033b36 and worker_done msg_72c28447f251 record acceptance of 0ccb41a432f0608cbf0bfba5a4c20fa964ac4ebc, closure of the P1, and no P1/P2/P3 finding"
+          "task_f83d3a0d427b / conversation 019fcdfa-ef5f-7410-a245-6bbaf7be52dd: F1-F5 closed, no independent candidate",
+          "task_d8758885857a / term_1f28048f-d0f0-44b1-92f0-18251e33850c: P1 repeated-close atomicity",
+          "task_0b1df9dbb32c / ctx_f1f1f4a70d6b: P1 closed, no P1/P2/P3"
         ]
       }
     },
@@ -294,44 +189,16 @@
       "dependsOn": ["IMP-001", "IMP-002", "IMP-003", "IMP-004", "IMP-005", "IMP-006", "IMP-007"],
       "scope": ["CLI", "State store", "Transcript/artifact store", "Test suite"],
       "evidence": {
-        "commits": [
-          "0070235444624d30daeb38f232fe47c08707c04b",
-          "56d21d9ed42694659bce992b7bf88ed33ad37014",
-          "ff87186162b8558e40af013aac4d81826c345ca7",
-          "fe6c221706fbfe9a87844b064038927e0fcaf029",
-          "ba09c01c6c8d7d343fc3108655047c923da2a8c5",
-          "7255f52a0f39a96f332a12f8ece34ed1890217e8",
-          "435d72d766ea273d5fdf67ab5f1e7a285970d114",
-          "1a731ee3b7798e700491d2e0fe8aabb2a0acd86e",
-          "b4743e7802478961e735c202ffc08b77c37b3985",
-          "ae34b659535db798b0b2b76f56fdc3c9873ea6cf"
-        ],
         "checks": [
           "pnpm format:check",
           "pnpm lint",
           "pnpm typecheck",
-          "pnpm test: 8 test files and 108 tests passed",
-          "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts: 68 tests passed",
-          "node .agents/skills/plan-spec-implementation/scripts/spec-tasks.ts diff after digest reconciliation: specChanged=false, contextChanged=false, no impacted tasks",
-          "VER-011 was not rerun because this fix changes only browser completion observation/capture identity and reload recovery, not SQLite schema, state transitions, or recovery subprocess code",
-          "VER-004 live recovery and independent Review remain outstanding; no review evidence copied; this fix has no live wait evidence",
-          "Reviewer task_6f770806c7b7 reopened the same completion-recovery thread because asynchronous recovered-capture digest allowed same-turn text to change before Copy; 126c15d23ab25d2a81c211967c7120693b846807 adds the synchronous final text/identity/Copy critical section",
-          "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts: 71 tests passed; pnpm format:check, pnpm lint, pnpm typecheck, pnpm test (8 files/111 tests), and git diff --check passed; no live or review closure claimed",
-          "Reviewer task_47b9893cdb21 reopened the same recovery thread for digest-time canonical conversation drift; 2b516f00dffdbce3fce3137ae6ecf26ebe69d979 adds the no-await final location/target/text/Copy/click boundary and replaces the prior source-string result simulation with execution of the generated callback",
-          "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts: 72 tests passed; pnpm format:check, pnpm lint, pnpm typecheck, pnpm test (8 files/112 tests), and git diff --check passed; no live or review closure claimed",
-          "Reviewer task_59c34acc776e identified the remaining P2 fixture evidence gap for the real clipboard interception chain and canonical URL edge matrix; 7119a25d8a2c1bf364646a0b1c579664574c3da2 closes the deterministic test gap without product or Spec changes",
-          "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts: 75 tests passed with actual clipboard install/write/read/restore and URL success/failure paths; pnpm format:check, pnpm lint, pnpm typecheck, pnpm test (8 files/115 tests), and git diff --check passed; no live or reviewer acceptance claimed",
-          "Completion-recovery Review task_02ea3ed7823a at accepted HEAD 859e981cb0e6621761be47c572abf513d9ccf9f3, closure status msg_18f367b1e063: ACCEPTED/CLOSED with no P1/P2/P3 after 49 browser, 26 collab, 115 full tests, format/lint/typecheck/diff, ledger diff, and check-ready passed",
-          "Product decision at BASE_SHA 188e87c1ac4e47c11b38b47f43256968d6952968 withdraws completion-recovery commits and their Review evidence from the active solution; pre-recovery interrupt/state evidence and the independent 435d72d test-window fix remain historical inputs",
-          "1a731ee3b7798e700491d2e0fe8aabb2a0acd86e and b4743e7802478961e735c202ffc08b77c37b3985 restore the normal completion baseline without changing SQLite, capture deadline, artifact deadline, or interrupt recovery mechanisms",
-          "ae34b659535db798b0b2b76f56fdc3c9873ea6cf strengthens the T1/T2 fixture without changing production behavior",
-          "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts: 54 tests passed; pnpm format:check, pnpm lint, pnpm typecheck, pnpm test (8 files/94 tests, including 10 state-concurrency subprocess tests), and git diff --check passed",
-          "Independent Review task_3e0f0281cad7, dispatch ctx_d6b7437bcbe7, reviewer terminal term_c6bb7bb1-bc9e-449a-8207-d68ee996766d, worker_done msg_fc9f4e6c9a9f: ACCEPTED/CLOSED reviewed HEAD eeb27d4dccc8951f59c5bfc8c83d1d5d2cd2a539 with no P1/P2/P3",
-          "Current reconciliation: done because mapped VER-007/010/011/012, implementation/full checks, and the new independent Review are complete; VER-004 remains owned by IMP-004 and does not replace these mapped gates"
+          "pnpm test (8 files/94 tests)",
+          "git diff --check",
+          "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts: 54 tests passed",
+          "spec-tasks diff: specChanged=false, contextChanged=false, no impacted tasks"
         ],
-        "reviews": [
-          "Independent Review task_3e0f0281cad7, dispatch ctx_d6b7437bcbe7, reviewer terminal term_c6bb7bb1-bc9e-449a-8207-d68ee996766d, closure worker_done msg_fc9f4e6c9a9f: ACCEPTED/CLOSED reviewed HEAD eeb27d4dccc8951f59c5bfc8c83d1d5d2cd2a539 with no P1/P2/P3"
-        ]
+        "reviews": ["task_3e0f0281cad7 / ctx_d6b7437bcbe7: ACCEPTED/CLOSED, no P1/P2/P3"]
       }
     }
   ]

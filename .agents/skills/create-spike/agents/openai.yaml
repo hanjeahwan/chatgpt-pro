@@ -1,0 +1,7 @@
+interface:
+  display_name: 'Create Spike'
+  short_description: '决策 Spike：有界实验与 GO/NO-GO 结论'
+  default_prompt: 'Use $create-spike to create or execute a Spike answering one bounded decision question.'
+
+policy:
+  allow_implicit_invocation: false

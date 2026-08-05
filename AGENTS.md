@@ -5,8 +5,9 @@
 ## 权威文档
 
 - 面向用户的用途、用法和边界：`README.md`
-- 产品行为、权限、技术合同和验收：`docs/specs/**/md`；创建 Spec 时遵守 `define-product-spec` Skill
+- 产品行为、权限、技术合同和验收：`docs/specs/*.md`；创建 Spec 时遵守 `define-product-spec` Skill
 - 跨规格或长期有效的架构决策：`docs/adr/adr-*.md`；创建 ADR 时遵守 `create-architectural-decision-record` Skill
+- 决策问题 Spike：`docs/spikes/*.md`；创建或执行时遵守 `create-spike` Skill
 - 代码规范：`CODE_STANDARD.md`
 - 规格实现、验证、提交和验收的稳定合同：`WORKFLOW.md`；执行时遵守 `execute-spec-workflow` Skill
 
@@ -16,7 +17,17 @@
 - 仅影响一份 Spec 的选择保留在该 Spec 的“决策记录”；跨规格或长期有效的架构决策记录为 ADR。
 - Spec 依赖 ADR 时引用它，不重复其完整理由、替代方案和后果。
 - 文档引用 Skill 时，只说明适用场景和本仓库的额外约束；不得重复 Skill 已覆盖的命令、步骤或通用指令。
-- 规格执行的角色、稳定标识、Gate 或完成合同改变时更新 `WORKFLOW.md`；任务拆分、依赖、状态或证据规则改变时更新 `plan-spec-implementation` Skill 的对应权威文件；阶段路由或执行步骤改变时更新 `execute-spec-workflow` Skill 的对应权威文件。
+
+执行流程的权威职责如下：
+
+| 内容                             | 权威位置                                         |
+| -------------------------------- | ------------------------------------------------ |
+| 规格执行的角色、协作身份和 Gate  | `WORKFLOW.md`                                    |
+| 当前状态检测和阶段路由           | `execute-spec-workflow` Skill                    |
+| 各阶段动作、失败分支和完成条件   | `execute-spec-workflow/references/*.md`          |
+| IMP 拆分、依赖、状态和证据语义   | `plan-spec-implementation` Skill                 |
+| 任务账本机器 schema 与 Gate 校验 | `plan-spec-implementation/scripts/spec-tasks.ts` |
+| Spike 创建、执行与模板           | `create-spike` Skill                             |
 
 ## Agent 任务协作路由
 

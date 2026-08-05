@@ -7,8 +7,6 @@ import {
   type TaskLedger,
 } from '../.agents/skills/plan-spec-implementation/scripts/spec-tasks.ts';
 
-const BASE_SHA = '0123456789abcdef0123456789abcdef01234567';
-
 function spec(behaviorBody = 'Result A', verificationBody = 'Check A'): string {
   return `# Example
 
@@ -40,10 +38,8 @@ function ledgerFor(content: string): TaskLedger {
   const snapshot = parseSpec(content);
   return {
     spec: 'docs/specs/example.md',
-    specDigest: snapshot.specDigest,
     contextDigest: snapshot.contextDigest,
     sourceDigests: snapshot.sourceDigests,
-    baseSha: BASE_SHA,
     tasks: [
       {
         id: 'IMP-001',
@@ -53,7 +49,7 @@ function ledgerFor(content: string): TaskLedger {
         verifies: ['VER-001'],
         dependsOn: [],
         scope: ['First component'],
-        evidence: { commits: [], checks: [], reviews: [] },
+        evidence: { checks: [], reviews: [] },
       },
       {
         id: 'IMP-002',
@@ -63,7 +59,7 @@ function ledgerFor(content: string): TaskLedger {
         verifies: ['VER-002'],
         dependsOn: ['IMP-001'],
         scope: ['Second component'],
-        evidence: { commits: [], checks: [], reviews: [] },
+        evidence: { checks: [], reviews: [] },
       },
     ],
   };
@@ -78,10 +74,10 @@ describe('parseSpec', () => {
 
   it('keeps item digests stable when unrelated context changes', () => {
     const original = parseSpec(spec());
-    const moved = parseSpec(`${spec()}\n## Extra context\n\nMoved section.\n`);
+    const changedContext = parseSpec(`${spec()}\n## Extra context\n\nMoved section.\n`);
 
-    expect(moved.sourceDigests).toEqual(original.sourceDigests);
-    expect(moved.specDigest).not.toBe(original.specDigest);
+    expect(changedContext.sourceDigests).toEqual(original.sourceDigests);
+    expect(changedContext.contextDigest).not.toBe(original.contextDigest);
   });
 
   it('rejects duplicate definitions', () => {
@@ -92,6 +88,23 @@ describe('parseSpec', () => {
 });
 
 describe('compareSpec', () => {
+  it('ignores pure reordering of stable numbered items', () => {
+    const original = spec();
+    const firstBehavior =
+      '### BEH-001 First behavior\n\nResult A\n\nThe text may mention BEH-002 without defining it.\n\n';
+    const secondBehavior = '### BEH-002 Second behavior\n\nResult B\n\n';
+    const reordered = original.replace(`${firstBehavior}${secondBehavior}`, `${secondBehavior}${firstBehavior}`);
+
+    expect(compareSpec(parseSpec(reordered), ledgerFor(original))).toEqual({
+      specChanged: false,
+      contextChanged: false,
+      added: [],
+      changed: [],
+      removed: [],
+      impactedTasks: [],
+    });
+  });
+
   it('reports added, changed, and removed stable items', () => {
     const original = spec();
     const oldLedger = ledgerFor(original);
@@ -134,7 +147,7 @@ describe('validateLedger', () => {
     const content = spec();
     const ledger = ledgerFor(content);
     const tasks = ledger.tasks;
-    ledger.specDigest = 'sha256:stale';
+    ledger.sourceDigests['BEH-001'] = 'sha256:stale';
     tasks[0].verifies = [];
     tasks[0].dependsOn = ['IMP-002'];
 
@@ -143,7 +156,7 @@ describe('validateLedger', () => {
       readiness: 'ready',
     });
 
-    expect(errors).toContain('ledger.specDigest is stale; run diff and reconcile the ledger');
+    expect(errors).toContain('sourceDigests.BEH-001 is stale');
     expect(errors).toContain('VER-001 has no active evidence owner');
     expect(errors).toContain('task dependency cycle: IMP-001 -> IMP-002 -> IMP-001');
   });
@@ -165,7 +178,6 @@ describe('validateLedger', () => {
     const content = spec();
     const ledger = ledgerFor(content);
     ledger.tasks[0].status = 'implemented';
-    ledger.tasks[0].evidence.commits = ['commit-a'];
     ledger.tasks[0].evidence.checks = ['check-a'];
     ledger.tasks[1].status = 'in_progress';
 
@@ -190,10 +202,9 @@ describe('validateLedger', () => {
       }),
     ).toEqual(
       expect.arrayContaining([
-        'IMP-001 is done but evidence.commits is empty',
         'IMP-001 is done but evidence.checks is empty',
         'IMP-001 is done but evidence.reviews is empty',
-        'IMP-002 must be done or cancelled for final delivery',
+        'IMP-002 must be done or cancelled for final ledger closure',
       ]),
     );
   });

@@ -426,4 +426,4 @@ VER-001–VER-015 均为完成本规格的必需验证。涉及真实 ChatGPT We
 | REF-001 | Playwright CLI README             | https://github.com/microsoft/playwright-cli/blob/v0.1.17/README.md    | v0.1.17            |
 | REF-002 | Node.js SQLite API                | https://nodejs.org/download/release/v22.19.0/docs/api/sqlite.html     | Node.js v22.19.0   |
 | REF-003 | Node.js TypeScript type stripping | https://nodejs.org/download/release/v22.19.0/docs/api/typescript.html | Node.js v22.19.0   |
-| REF-004 | ChatGPT Web 返回文件页面 Spike    | `docs/evidence/2026-08-05-chatgpt-web-return-files.md`                | 2026-08-05 live UI |
+| REF-004 | ChatGPT Web 返回文件页面 Spike    | `docs/spikes/2026-08-05-chatgpt-web-return-files.md`                  | 2026-08-05 live UI |

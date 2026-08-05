@@ -1,15 +1,17 @@
 # 实现与验证
 
-本阶段由原 implementation terminal 按任务账本完成实现、相关提交、必需验证和证据回写。
+本阶段由原 implementation terminal 在一个连续 dispatch 内按任务账本完成实现、相关提交、必需验证和证据回写，直到到达 decision boundary。
 
 ## 1. 实现与提交
 
-- 按账本中的 `dependsOn` 选择可执行的 `IMP-*`。运行时计划只镜像当前任务，任务身份、状态和依赖以账本为准。
+- 按账本中的 `dependsOn` 连续选择可执行的 `IMP-*`。运行时计划只镜像当前任务，任务身份、状态和依赖以账本为准。
 - 每个提交依次执行：实现、相关验证、自查 diff、修复、复验、commit。
-- 提交后立即在对应 IMP 中记录 commit 和已取得的验证证据。
-- 实现提交与相关检查完成后标记 `implemented`，允许下游 IMP 开始。全量验证或 Review 尚未齐全时不得标记 `done`。
+- 提交后立即在对应 IMP 中记录已取得的验证证据，不记录 Git revision。
+- 一个 dispatch 连续处理所有可执行 IMP，直到遇到产品决策、Spec 变化、需宿主执行的外部验证、阻塞 finding 或其他明确 decision boundary；禁止为每个 IMP 单独派发或提前结束。
+- 实现已提交到 implementation branch 且相关检查完成后标记 `implemented`，允许下游 IMP 开始。全量验证或 Review 尚未齐全时不得标记 `done`。
 - Spec 在执行中发生变化时停止受影响任务并报告宿主。返回准备阶段重新对账并通过 `check --ready` 后才能继续。
-- 完成当前 dispatch 后发送一次 `worker_done`。宿主处理结果后，通过原 implementation terminal 派发下一阶段。
+- 遇到无法从当前 Spec 或已确认页面合同判定的事项时，只向宿主报告未知项及影响面；不自行创建或执行 Spike，也不修改 Spec 或 ADR。
+- 到达停止条件或完成条件后发送一次 `worker_done`。宿主处理结果后，通过原 implementation terminal 派发下一阶段。
 - 禁止跳过有效测试。
 
 ## 2. 验证场景预检
@@ -58,4 +60,5 @@
 - 所有通过结论都有实际执行证据；
 - 委派证据已回写并提交；
 - 验证资源已归类；
-- 受影响 IMP 已达到与现有证据一致的状态。
+- 受影响 IMP 已达到与现有证据一致的状态；
+- 未知项已报告宿主并明确路由（继续 / Spike / 产品决策），没有未经授权的 Spike、Spec 或 ADR 修改。
