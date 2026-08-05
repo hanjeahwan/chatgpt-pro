@@ -229,52 +229,28 @@ export class StateStore {
   acquireTaskOperation(taskId: string, operation: string, token: string, ownerPid: number = process.pid): void {
     this.#transaction(() => {
       this.requireTask(taskId);
-      const value = this.#database
-        .prepare(
-          `SELECT browser_operation_token, browser_operation_pid, browser_operation_name,
-                  browser_operation_child_pid, browser_operation_command_pid
-           FROM task WHERE id = ?`,
-        )
-        .get(taskId);
-      const row = record(value);
-      const existingToken = nullableText(row.browser_operation_token, 'task.browser_operation_token');
-      const existingPid = nullableInteger(row.browser_operation_pid, 'task.browser_operation_pid');
-      const existingOperation = nullableText(row.browser_operation_name, 'task.browser_operation_name');
-      const existingChildPid = nullableInteger(row.browser_operation_child_pid, 'task.browser_operation_child_pid');
-      const existingCommandPid = nullableInteger(
-        row.browser_operation_command_pid,
-        'task.browser_operation_command_pid',
-      );
-      if (
-        existingToken !== null &&
-        ((existingPid !== null && isProcessAlive(existingPid)) ||
-          (existingChildPid !== null && isProcessAlive(existingChildPid)) ||
-          (existingCommandPid !== null && isProcessAlive(existingCommandPid)))
-      ) {
-        throw new StateError(
-          'TASK_OPERATION_IN_PROGRESS',
-          `task browser is busy with ${existingOperation ?? 'another operation'}: ${taskId}`,
-        );
+      this.#acquireTaskOperation(taskId, operation, token, ownerPid);
+    });
+  }
+
+  /**
+   * Atomically skips an already-closed task or acquires its close-operation lease.
+   *
+   * @param taskId Task whose named browser session will be closed.
+   * @param token Collision-resistant owner token for release authorization.
+   * @param ownerPid Process holding the lease; defaults to the current CLI process.
+   * @returns `true` after acquiring the lease, or `false` without any write when the task is already closed.
+   * @throws {StateError} If the task is unknown or another live process owns its browser.
+   * @throws {Error} If SQLite cannot commit the state gate.
+   */
+  acquireCloseTaskOperation(taskId: string, token: string, ownerPid: number = process.pid): boolean {
+    return this.#transaction(() => {
+      const task = this.requireTask(taskId);
+      if (task.status === 'closed') {
+        return false;
       }
-      const now = new Date().toISOString();
-      const orphanedSending = this.#database
-        .prepare(
-          `UPDATE turn
-           SET status = 'failed', error = ?, updated_at = ?
-           WHERE task_id = ? AND status = 'sending'`,
-        )
-        .run('send owner exited before recording a browser submission attempt', now, taskId);
-      if (orphanedSending.changes > 0) {
-        this.#database.prepare("UPDATE task SET status = 'failed', updated_at = ? WHERE id = ?").run(now, taskId);
-      }
-      this.#database
-        .prepare(
-          `UPDATE task
-           SET browser_operation_token = ?, browser_operation_pid = ?, browser_operation_name = ?,
-               browser_operation_child_pid = NULL, browser_operation_command_pid = NULL, updated_at = ?
-           WHERE id = ?`,
-        )
-        .run(token, ownerPid, operation, now, taskId);
+      this.#acquireTaskOperation(taskId, 'close', token, ownerPid);
+      return true;
     });
   }
 
@@ -932,6 +908,63 @@ export class StateStore {
         .run(now, now, taskId);
       return this.requireTask(taskId);
     });
+  }
+
+  /**
+   * Acquires a browser-operation lease inside the caller's immediate transaction.
+   *
+   * @param taskId Existing task whose browser will be operated.
+   * @param operation Human-readable operation name retained for conflict diagnostics.
+   * @param token Collision-resistant owner token for release authorization.
+   * @param ownerPid Process holding the lease.
+   * @returns Nothing after the lease and any orphan recovery are written.
+   * @throws {StateError} If another live process owns the task browser.
+   * @throws {Error} If SQLite cannot read process state or write the lease.
+   */
+  #acquireTaskOperation(taskId: string, operation: string, token: string, ownerPid: number): void {
+    const value = this.#database
+      .prepare(
+        `SELECT browser_operation_token, browser_operation_pid, browser_operation_name,
+                browser_operation_child_pid, browser_operation_command_pid
+         FROM task WHERE id = ?`,
+      )
+      .get(taskId);
+    const row = record(value);
+    const existingToken = nullableText(row.browser_operation_token, 'task.browser_operation_token');
+    const existingPid = nullableInteger(row.browser_operation_pid, 'task.browser_operation_pid');
+    const existingOperation = nullableText(row.browser_operation_name, 'task.browser_operation_name');
+    const existingChildPid = nullableInteger(row.browser_operation_child_pid, 'task.browser_operation_child_pid');
+    const existingCommandPid = nullableInteger(row.browser_operation_command_pid, 'task.browser_operation_command_pid');
+    if (
+      existingToken !== null &&
+      ((existingPid !== null && isProcessAlive(existingPid)) ||
+        (existingChildPid !== null && isProcessAlive(existingChildPid)) ||
+        (existingCommandPid !== null && isProcessAlive(existingCommandPid)))
+    ) {
+      throw new StateError(
+        'TASK_OPERATION_IN_PROGRESS',
+        `task browser is busy with ${existingOperation ?? 'another operation'}: ${taskId}`,
+      );
+    }
+    const now = new Date().toISOString();
+    const orphanedSending = this.#database
+      .prepare(
+        `UPDATE turn
+         SET status = 'failed', error = ?, updated_at = ?
+         WHERE task_id = ? AND status = 'sending'`,
+      )
+      .run('send owner exited before recording a browser submission attempt', now, taskId);
+    if (orphanedSending.changes > 0) {
+      this.#database.prepare("UPDATE task SET status = 'failed', updated_at = ? WHERE id = ?").run(now, taskId);
+    }
+    this.#database
+      .prepare(
+        `UPDATE task
+         SET browser_operation_token = ?, browser_operation_pid = ?, browser_operation_name = ?,
+             browser_operation_child_pid = NULL, browser_operation_command_pid = NULL, updated_at = ?
+         WHERE id = ?`,
+      )
+      .run(token, ownerPid, operation, now, taskId);
   }
 
   /**

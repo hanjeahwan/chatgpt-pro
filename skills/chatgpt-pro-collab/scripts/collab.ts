@@ -491,16 +491,14 @@ export class CollabService {
     taskId: string,
   ): Promise<{ readonly taskId: string; readonly wasOpen: boolean; readonly alreadyClosed: boolean }> {
     return this.#withStore(async (store) => {
-      if (store.requireTask(taskId).status === 'closed') {
-        return { taskId, wasOpen: false, alreadyClosed: true };
-      }
       while (true) {
+        const token = randomUUID();
         try {
-          return await this.#withTaskOperation(store, taskId, 'close', async (observer) => {
+          if (!store.acquireCloseTaskOperation(taskId, token)) {
+            return { taskId, wasOpen: false, alreadyClosed: true };
+          }
+          return await this.#withAcquiredTaskOperation(store, taskId, token, async (observer) => {
             const task = store.requireTask(taskId);
-            if (task.status === 'closed') {
-              return { taskId, wasOpen: false, alreadyClosed: true };
-            }
             const result = await this.#browser.closeTask(taskId, task.playwrightSession, observer);
             store.closeTask(taskId);
             return { taskId, wasOpen: result.wasOpen, alreadyClosed: false };
@@ -559,6 +557,25 @@ export class CollabService {
   ): Promise<T> {
     const token = randomUUID();
     store.acquireTaskOperation(taskId, operation, token);
+    return this.#withAcquiredTaskOperation(store, taskId, token, action);
+  }
+
+  /**
+   * Runs one browser action under a lease already acquired by the caller's state gate.
+   *
+   * @param store Current process-local state connection.
+   * @param taskId Task whose named browser session will be used.
+   * @param token Current lease token used for observer updates and release.
+   * @param action Side effect and state transition performed while the lease is held.
+   * @returns The action result after the lease is released.
+   * @throws {Error} If the action, observer state update, or lease release fails.
+   */
+  async #withAcquiredTaskOperation<T>(
+    store: StateStore,
+    taskId: string,
+    token: string,
+    action: (observer: BrowserOperationObserver) => Promise<T>,
+  ): Promise<T> {
     const observer: BrowserOperationObserver = {
       childSpawned(pid) {
         store.attachTaskOperationChild(taskId, token, pid);

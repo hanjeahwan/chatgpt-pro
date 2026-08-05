@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 
 import { StateError, StateStore } from '../skills/chatgpt-pro-collab/scripts/state.ts';
 
-describe('BEH-002, BEH-005, and BEH-007 state gates', () => {
+describe('BEH-002, BEH-005, BEH-007, and BEH-008 state gates', () => {
   it('binds one conversation and permits only one unfinished turn', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collab-state-'));
     const store = new StateStore(join(root, 'state.sqlite'));
@@ -103,6 +103,28 @@ describe('BEH-002, BEH-005, and BEH-007 state gates', () => {
       },
     ]);
     reopened.close();
+  });
+
+  it('keeps a stale cross-connection close attempt read-only after another connection closes', async () => {
+    const databasePath = join(tmpdir(), `collab-close-race-${crypto.randomUUID()}.sqlite`);
+    const winner = new StateStore(databasePath);
+    const contender = new StateStore(databasePath);
+    winner.createTask('task-a', 'session-a');
+
+    expect(contender.requireTask('task-a').status).toBe('active');
+    expect(winner.acquireCloseTaskOperation('task-a', 'winner')).toBe(true);
+    winner.closeTask('task-a');
+    winner.releaseTaskOperation('task-a', 'winner');
+    const closedBeforeStaleAttempt = contender.requireTask('task-a');
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 5);
+    });
+
+    expect(contender.acquireCloseTaskOperation('task-a', 'stale-contender')).toBe(false);
+    expect(contender.requireTask('task-a')).toEqual(closedBeforeStaleAttempt);
+    expect(contender.getTaskOperation('task-a')).toBeNull();
+    winner.close();
+    contender.close();
   });
 
   it('serializes same-task browser operations and reclaims a dead process lease', () => {
