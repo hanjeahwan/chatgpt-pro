@@ -24,7 +24,7 @@ flowchart TD
 - 原 implementation terminal 负责实现、修复、验证、提交和任务账本证据回写。
 - 首次 Review 使用新的只读 reviewer terminal；同一 finding 及其修复影响由原 reviewer terminal 跟踪至关闭。只有独立新问题才建立新的 Review 上下文。
 - 当前 Spec 是产品行为和验收的权威来源；对应 `docs/execution/*.tasks.json` 是实施任务身份、依赖、状态和证据的权威来源。
-- `execute-spec-workflow` Skill 负责状态检测和阶段路由，不复制其他 Skill 已覆盖的操作指南。
+- `execute-spec-workflow` Skill 负责状态检测和阶段路由。
 
 ## 2. 稳定协作身份
 

@@ -35,10 +35,11 @@ Spec 在执行中变化时，返回准备阶段增量对账。Review finding 需
 
 ## 3. 协作边界
 
-- 角色职责、稳定协作身份和 Gate 以 `WORKFLOW.md` 为准。本 Skill 不建立第二套定义。
-- 使用 `plan-spec-implementation` Skill 创建或增量对账任务账本；本 Skill 不复制其任务拆分、状态或脚本规则。
-- Spike 的创建、执行与模板使用 `create-spike` Skill；本 Skill 只路由“宿主决定是否进入 Spike”的边界。
-- 使用 `orchestration` Skill 协调 Task、Dispatch、消息和等待；使用 `orca-cli` Skill 操作 Orca worktree 与 terminal。本 Skill 只规定本仓库的阶段路由和执行协议。
+- 角色职责、稳定协作身份和 Gate 以 `WORKFLOW.md` 为准。
+- 默认角色映射：implementation terminal 使用 Orca agent `opencode`；reviewer terminal 使用 Orca agent `codex`。
+- 使用 `plan-spec-implementation` Skill 创建或增量对账任务账本。
+- Spike 的创建、执行与模板使用 `create-spike` Skill。
+- 使用 `orchestration` Skill 协调 Task、Dispatch、消息和等待；使用 `orca-cli` Skill 操作 Orca worktree 与 terminal。
 - 每个 dispatch 完成后，以仓库、账本和 Orca 的当前状态重新判断下一阶段，不以旧对话摘要替代当前证据。
 
 ## 4. 停止与完成
