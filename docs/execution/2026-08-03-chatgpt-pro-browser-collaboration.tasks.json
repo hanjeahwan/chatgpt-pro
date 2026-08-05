@@ -110,17 +110,30 @@
     {
       "id": "IMP-004",
       "title": "实现单次 wait 的内部观察与原始文字捕获",
-      "status": "in_progress",
+      "status": "implemented",
       "covers": ["BEH-004", "BEH-011"],
       "verifies": ["VER-004", "VER-014"],
       "dependsOn": ["IMP-001", "IMP-002", "IMP-003"],
       "scope": ["CLI", "Browser boundary", "Transcript/artifact store"],
-      "evidence": { "commits": [], "checks": [], "reviews": [] }
+      "evidence": {
+        "commits": ["2444b1a36a323b5f7af3b9970085d2083785ccc1"],
+        "checks": [
+          "pnpm exec vitest --run tests/browser.test.ts: 31 tests passed; executable page fixtures cover unchanged normal completion, changing-content no-reload, stable stuck Stop reload-and-complete, persistent Stop pending with one reload across observations, and conversation/target-turn identity drift",
+          "pnpm format:check",
+          "pnpm lint",
+          "pnpm typecheck",
+          "pnpm test: 8 test files and 97 tests passed after 2444b1a36a323b5f7af3b9970085d2083785ccc1",
+          "git diff --check",
+          "Host A pre-fix wait owner PID 96195 exited; the existing StateStore orphan-recovery path cleared the dead lease without a browser command, while task 7f62f36c-8748-43ad-af4f-7fd84b52715d remained active, turn adfb2d4e-2f0e-479b-85ed-adba0f88a0ed remained status=pending with no frozen response/artifact set, and browser daemon PID 88612 remained running",
+          "VER-004 remains partial: the new reload-once live scenario has not been rerun after the fix on the preserved Host A task/turn, so the implementation cannot be marked done"
+        ],
+        "reviews": []
+      }
     },
     {
       "id": "IMP-005",
       "title": "捕获返回文件并支持可恢复发布",
-      "status": "pending",
+      "status": "done",
       "covers": ["BEH-012"],
       "verifies": ["VER-015"],
       "dependsOn": ["IMP-002", "IMP-004"],
@@ -160,7 +173,7 @@
     {
       "id": "IMP-006",
       "title": "完成同会话多轮与跨任务真实并发",
-      "status": "pending",
+      "status": "implemented",
       "covers": ["BEH-005", "BEH-006"],
       "verifies": ["VER-005", "VER-006"],
       "dependsOn": ["IMP-003", "IMP-004", "IMP-005"],
@@ -232,12 +245,28 @@
     {
       "id": "IMP-008",
       "title": "完成中断恢复矩阵与全量运行基线验证",
-      "status": "pending",
+      "status": "implemented",
       "covers": ["BEH-002", "BEH-004", "BEH-006", "BEH-007", "BEH-012"],
       "verifies": ["VER-007", "VER-010", "VER-011", "VER-012"],
       "dependsOn": ["IMP-001", "IMP-002", "IMP-003", "IMP-004", "IMP-005", "IMP-006", "IMP-007"],
       "scope": ["CLI", "State store", "Transcript/artifact store", "Test suite"],
-      "evidence": { "commits": [], "checks": [], "reviews": [] }
+      "evidence": {
+        "commits": ["2444b1a36a323b5f7af3b9970085d2083785ccc1"],
+        "checks": [
+          "pnpm format:check",
+          "pnpm lint",
+          "pnpm typecheck",
+          "pnpm test: 8 test files and 97 tests passed after 2444b1a36a323b5f7af3b9970085d2083785ccc1",
+          "pnpm collab -- help and absolute collab.ts help from a temporary host directory without package.json both exited 0 and retained independent observationWindowMs/captureTimeoutMs parameters",
+          "Node v25.9.0 and Node v22.19.0: node:sqlite in-memory smoke tests and TypeScript collab.ts help exited 0",
+          "npx -y @playwright/cli@0.1.17 --help exited 0",
+          "git diff --check",
+          "node .agents/skills/plan-spec-implementation/scripts/spec-tasks.ts diff --spec docs/specs/2026-08-03-chatgpt-pro-browser-collaboration.md --ledger docs/execution/2026-08-03-chatgpt-pro-browser-collaboration.tasks.json: specChanged=false, contextChanged=false, no impacted tasks",
+          "node .agents/skills/plan-spec-implementation/scripts/spec-tasks.ts check --ready --spec docs/specs/2026-08-03-chatgpt-pro-browser-collaboration.md --ledger docs/execution/2026-08-03-chatgpt-pro-browser-collaboration.tasks.json: ok=true for 12 BEH, 15 VER, and 8 IMP",
+          "VER-011 was not rerun because 2444b1a changes only the browser completion boundary, generated page fixture, Spec, and evidence; it does not change SQLite schema, state transitions, or recovery code"
+        ],
+        "reviews": []
+      }
     }
   ]
 }
