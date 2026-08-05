@@ -1,12 +1,12 @@
 {
   "spec": "docs/specs/2026-08-03-chatgpt-pro-browser-collaboration.md",
-  "specDigest": "sha256:f4d32e1b56791a2724a90c9e8d2c742e8d3dff9d094c0b9247269a2a28be11f5",
-  "contextDigest": "sha256:5f1c657f1cf9c1a2062dd6d83fac99aed1980192677aa90e682a0ea23fb9daad",
+  "specDigest": "sha256:e86ac210253aa62949a9f5c5ce696dc575ac73a110cecd1e6465d7321af41cd4",
+  "contextDigest": "sha256:8d74542643efdaf044c23fa407161eb45ff12bc283e0193d679fb135e3d99120",
   "sourceDigests": {
     "BEH-001": "sha256:81fc722eeffe25bb65e2eecd66fa5632133c4fa1cd9fc193ee60814d1fb3b0ae",
     "BEH-002": "sha256:a6b90a57305e58f15ae9b0d5868fe3182950dfd2743a0b335e00ffde43be7e43",
     "BEH-003": "sha256:3a33a5375fe8d0f24241e22a298ddce5dca588b827a649be9743ffb1edf10fd0",
-    "BEH-004": "sha256:face7fe8cb1930b897da630d9bb13caf2eb4875cae9f08566a544a9a085f4ecf",
+    "BEH-004": "sha256:b4d87cae9699f483e2c65e3d39f2c2dcd1aa83f93719e858d78d2c1e8b950063",
     "BEH-005": "sha256:3a92560c8d7f89bef76669ba25c88c31182da0ea2a22052184252c32414d1bc3",
     "BEH-006": "sha256:42e460ac18db205b5071bba3fa4757244153e186168bd0038cda5cd332b16648",
     "BEH-007": "sha256:06557b88fb956877901122ac16e98134aba1cbe59c709a3e919dbbe494e132fe",
@@ -18,7 +18,7 @@
     "VER-001": "sha256:c05d8ecd99ba7277afc64f21d661ae5ca77f4542a50ba50b8534789b0817db63",
     "VER-002": "sha256:55e0c5659c76a100be65c593db9c78352f69bfe112966e638c15e54df6d82489",
     "VER-003": "sha256:7707532a8944369bb139c708146758ef058c9da5d03ecf55befb871eb31ef7ed",
-    "VER-004": "sha256:4d2ce1692ba67c881c442b4f88009e1952e1c15642ae750ad4c7c6c63e6965a1",
+    "VER-004": "sha256:b9d8f2aeed95a0e40ee304334f6395e41c6c595af7632c9d6920aff798f1d8e9",
     "VER-005": "sha256:5b723ada9786cd3d392edffec5f5fa356489ad9f61d0379b925bcc889c8d6368",
     "VER-006": "sha256:fa0e9fcceb838cd692b2feac9ed537e654047668832243f3f589ac1cb9c1eaca",
     "VER-007": "sha256:8d53c9eb45049b4cb12c69d304a12b925da0c1e09a029e66b54e5a80d6305073",
@@ -116,16 +116,16 @@
       "dependsOn": ["IMP-001", "IMP-002", "IMP-003"],
       "scope": ["CLI", "Browser boundary", "Transcript/artifact store"],
       "evidence": {
-        "commits": ["2444b1a36a323b5f7af3b9970085d2083785ccc1"],
+        "commits": ["8957de64082a53596eb4988d683dbcd2cf09ecfa"],
         "checks": [
-          "pnpm exec vitest --run tests/browser.test.ts: 31 tests passed; executable page fixtures cover unchanged normal completion, changing-content no-reload, stable stuck Stop reload-and-complete, persistent Stop pending with one reload across observations, and conversation/target-turn identity drift",
+          "pnpm exec vitest --run tests/browser.test.ts: 35 tests passed with executable page functions covering T1 observation to T2 capture rejection, local-turn recovery-key isolation, 30-second stall grace, bounded reload timeout, rejected-reload marker rollback, normal/pending/identity paths",
+          "pnpm exec vitest --run tests/collab.test.ts: 26 tests passed",
           "pnpm format:check",
           "pnpm lint",
           "pnpm typecheck",
-          "pnpm test: 8 test files and 97 tests passed after 2444b1a36a323b5f7af3b9970085d2083785ccc1",
+          "pnpm test: 8 test files and 101 tests passed",
           "git diff --check",
-          "Host A pre-fix wait owner PID 96195 exited; the existing StateStore orphan-recovery path cleared the dead lease without a browser command, while task 7f62f36c-8748-43ad-af4f-7fd84b52715d remained active, turn adfb2d4e-2f0e-479b-85ed-adba0f88a0ed remained status=pending with no frozen response/artifact set, and browser daemon PID 88612 remained running",
-          "VER-004 remains partial: the new reload-once live scenario has not been rerun after the fix on the preserved Host A task/turn, so the implementation cannot be marked done"
+          "VER-004 remains partial: Host A task 7f62f36c-8748-43ad-af4f-7fd84b52715d turn adfb2d4e-2f0e-479b-85ed-adba0f88a0ed was not re-waited after this fix; no live pass claimed"
         ],
         "reviews": []
       }
@@ -251,19 +251,16 @@
       "dependsOn": ["IMP-001", "IMP-002", "IMP-003", "IMP-004", "IMP-005", "IMP-006", "IMP-007"],
       "scope": ["CLI", "State store", "Transcript/artifact store", "Test suite"],
       "evidence": {
-        "commits": ["2444b1a36a323b5f7af3b9970085d2083785ccc1"],
+        "commits": ["8957de64082a53596eb4988d683dbcd2cf09ecfa"],
         "checks": [
           "pnpm format:check",
           "pnpm lint",
           "pnpm typecheck",
-          "pnpm test: 8 test files and 97 tests passed after 2444b1a36a323b5f7af3b9970085d2083785ccc1",
-          "pnpm collab -- help and absolute collab.ts help from a temporary host directory without package.json both exited 0 and retained independent observationWindowMs/captureTimeoutMs parameters",
-          "Node v25.9.0 and Node v22.19.0: node:sqlite in-memory smoke tests and TypeScript collab.ts help exited 0",
-          "npx -y @playwright/cli@0.1.17 --help exited 0",
-          "git diff --check",
-          "node .agents/skills/plan-spec-implementation/scripts/spec-tasks.ts diff --spec docs/specs/2026-08-03-chatgpt-pro-browser-collaboration.md --ledger docs/execution/2026-08-03-chatgpt-pro-browser-collaboration.tasks.json: specChanged=false, contextChanged=false, no impacted tasks",
-          "node .agents/skills/plan-spec-implementation/scripts/spec-tasks.ts check --ready --spec docs/specs/2026-08-03-chatgpt-pro-browser-collaboration.md --ledger docs/execution/2026-08-03-chatgpt-pro-browser-collaboration.tasks.json: ok=true for 12 BEH, 15 VER, and 8 IMP",
-          "VER-011 was not rerun because 2444b1a changes only the browser completion boundary, generated page fixture, Spec, and evidence; it does not change SQLite schema, state transitions, or recovery code"
+          "pnpm test: 8 test files and 101 tests passed",
+          "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts: 61 tests passed",
+          "node .agents/skills/plan-spec-implementation/scripts/spec-tasks.ts diff after digest reconciliation: specChanged=false, contextChanged=false, no impacted tasks",
+          "VER-011 was not rerun because this fix changes only browser completion observation/capture identity and reload recovery, not SQLite schema, state transitions, or recovery subprocess code",
+          "VER-004 live recovery and independent Review remain outstanding; no review evidence copied"
         ],
         "reviews": []
       }
