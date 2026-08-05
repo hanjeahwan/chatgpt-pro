@@ -1,12 +1,12 @@
 {
   "spec": "docs/specs/2026-08-03-chatgpt-pro-browser-collaboration.md",
-  "specDigest": "sha256:9866219c7aa7c871ed4ea0a76f4f126657a62dcf57d1ab161ee06f8eb8db8fbe",
-  "contextDigest": "sha256:c07faced2d0de56f973045c8ee7190ddd370213c8b9f4ddd38eb533841444fd3",
+  "specDigest": "sha256:fced6c6e0c22585f86efe654cf7e709de8be5ef359569c82b89d2850cdb3e826",
+  "contextDigest": "sha256:0316e4802e853cf1befe79bd07978e42455352bc11f981cf1f468c3f71a2dfbc",
   "sourceDigests": {
     "BEH-001": "sha256:81fc722eeffe25bb65e2eecd66fa5632133c4fa1cd9fc193ee60814d1fb3b0ae",
     "BEH-002": "sha256:a6b90a57305e58f15ae9b0d5868fe3182950dfd2743a0b335e00ffde43be7e43",
     "BEH-003": "sha256:3a33a5375fe8d0f24241e22a298ddce5dca588b827a649be9743ffb1edf10fd0",
-    "BEH-004": "sha256:57aa4a1310a76e62da385d391f9b42845383a6609be5dd9fd2615c48723e2d67",
+    "BEH-004": "sha256:050fb9c1f0424b981ca9ff5046ac327e56561ae0ac9c5acab9e121310a128571",
     "BEH-005": "sha256:3a92560c8d7f89bef76669ba25c88c31182da0ea2a22052184252c32414d1bc3",
     "BEH-006": "sha256:42e460ac18db205b5071bba3fa4757244153e186168bd0038cda5cd332b16648",
     "BEH-007": "sha256:06557b88fb956877901122ac16e98134aba1cbe59c709a3e919dbbe494e132fe",
@@ -119,7 +119,8 @@
         "commits": [
           "8957de64082a53596eb4988d683dbcd2cf09ecfa",
           "321928bd20895c3f6a10daef92bedcfcc63f6348",
-          "2c176443222e8cd5adee196bca4d4cef42ae2792"
+          "2c176443222e8cd5adee196bca4d4cef42ae2792",
+          "43b0a193667856aaa695e5fd39fa018732222a39"
         ],
         "checks": [
           "pnpm exec vitest --run tests/browser.test.ts: 39 tests passed with executable page functions covering durable pre-reload target binding, post-reload recovered-stuck completion proof/fingerprint, content-change stability reset, delayed reload and subsequent observation, T1 observation to T2 capture rejection, local-turn recovery-key isolation, 30-second stall grace, bounded reload timeout, rejected-reload marker rollback, normal/pending/identity paths",
@@ -127,7 +128,7 @@
           "pnpm format:check",
           "pnpm lint",
           "pnpm typecheck",
-          "pnpm test: 8 test files and 101 tests passed",
+          "pnpm test: 8 test files and 105 tests passed",
           "git diff --check",
           "VER-004 remains partial: Host A task 7f62f36c-8748-43ad-af4f-7fd84b52715d turn adfb2d4e-2f0e-479b-85ed-adba0f88a0ed was not re-waited after this fix; no live pass claimed"
         ],
@@ -258,13 +259,14 @@
         "commits": [
           "8957de64082a53596eb4988d683dbcd2cf09ecfa",
           "321928bd20895c3f6a10daef92bedcfcc63f6348",
-          "2c176443222e8cd5adee196bca4d4cef42ae2792"
+          "2c176443222e8cd5adee196bca4d4cef42ae2792",
+          "43b0a193667856aaa695e5fd39fa018732222a39"
         ],
         "checks": [
           "pnpm format:check",
           "pnpm lint",
           "pnpm typecheck",
-          "pnpm test: 8 test files and 101 tests passed",
+          "pnpm test: 8 test files and 105 tests passed",
           "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts: 65 tests passed",
           "node .agents/skills/plan-spec-implementation/scripts/spec-tasks.ts diff after digest reconciliation: specChanged=false, contextChanged=false, no impacted tasks",
           "VER-011 was not rerun because this fix changes only browser completion observation/capture identity and reload recovery, not SQLite schema, state transitions, or recovery subprocess code",
