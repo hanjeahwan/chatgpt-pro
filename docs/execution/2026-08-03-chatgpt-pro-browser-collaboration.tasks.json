@@ -1,12 +1,12 @@
 {
   "spec": "docs/specs/2026-08-03-chatgpt-pro-browser-collaboration.md",
-  "specDigest": "sha256:e86ac210253aa62949a9f5c5ce696dc575ac73a110cecd1e6465d7321af41cd4",
-  "contextDigest": "sha256:8d74542643efdaf044c23fa407161eb45ff12bc283e0193d679fb135e3d99120",
+  "specDigest": "sha256:3cc0918efb364f7a72f81fcb3e234318ed3cf7edc79ffd58b287e2da26d9efa8",
+  "contextDigest": "sha256:b4d090d520578eb9d314415521fd93762f34fc40518e64282be94540216ea779",
   "sourceDigests": {
     "BEH-001": "sha256:81fc722eeffe25bb65e2eecd66fa5632133c4fa1cd9fc193ee60814d1fb3b0ae",
     "BEH-002": "sha256:a6b90a57305e58f15ae9b0d5868fe3182950dfd2743a0b335e00ffde43be7e43",
     "BEH-003": "sha256:3a33a5375fe8d0f24241e22a298ddce5dca588b827a649be9743ffb1edf10fd0",
-    "BEH-004": "sha256:b4d87cae9699f483e2c65e3d39f2c2dcd1aa83f93719e858d78d2c1e8b950063",
+    "BEH-004": "sha256:7f7fc8b1d7442563316c286ba459d51c0a93e2a4aaeb300d96fd050063989028",
     "BEH-005": "sha256:3a92560c8d7f89bef76669ba25c88c31182da0ea2a22052184252c32414d1bc3",
     "BEH-006": "sha256:42e460ac18db205b5071bba3fa4757244153e186168bd0038cda5cd332b16648",
     "BEH-007": "sha256:06557b88fb956877901122ac16e98134aba1cbe59c709a3e919dbbe494e132fe",
@@ -116,9 +116,9 @@
       "dependsOn": ["IMP-001", "IMP-002", "IMP-003"],
       "scope": ["CLI", "Browser boundary", "Transcript/artifact store"],
       "evidence": {
-        "commits": ["8957de64082a53596eb4988d683dbcd2cf09ecfa"],
+        "commits": ["8957de64082a53596eb4988d683dbcd2cf09ecfa", "321928bd20895c3f6a10daef92bedcfcc63f6348"],
         "checks": [
-          "pnpm exec vitest --run tests/browser.test.ts: 35 tests passed with executable page functions covering T1 observation to T2 capture rejection, local-turn recovery-key isolation, 30-second stall grace, bounded reload timeout, rejected-reload marker rollback, normal/pending/identity paths",
+          "pnpm exec vitest --run tests/browser.test.ts: 37 tests passed with executable page functions covering durable pre-reload target binding across delayed reload and subsequent observation, T1 observation to T2 capture rejection, local-turn recovery-key isolation, 30-second stall grace, bounded reload timeout, rejected-reload marker rollback, normal/pending/identity paths",
           "pnpm exec vitest --run tests/collab.test.ts: 26 tests passed",
           "pnpm format:check",
           "pnpm lint",
@@ -251,16 +251,16 @@
       "dependsOn": ["IMP-001", "IMP-002", "IMP-003", "IMP-004", "IMP-005", "IMP-006", "IMP-007"],
       "scope": ["CLI", "State store", "Transcript/artifact store", "Test suite"],
       "evidence": {
-        "commits": ["8957de64082a53596eb4988d683dbcd2cf09ecfa"],
+        "commits": ["8957de64082a53596eb4988d683dbcd2cf09ecfa", "321928bd20895c3f6a10daef92bedcfcc63f6348"],
         "checks": [
           "pnpm format:check",
           "pnpm lint",
           "pnpm typecheck",
           "pnpm test: 8 test files and 101 tests passed",
-          "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts: 61 tests passed",
+          "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts: 63 tests passed",
           "node .agents/skills/plan-spec-implementation/scripts/spec-tasks.ts diff after digest reconciliation: specChanged=false, contextChanged=false, no impacted tasks",
           "VER-011 was not rerun because this fix changes only browser completion observation/capture identity and reload recovery, not SQLite schema, state transitions, or recovery subprocess code",
-          "VER-004 live recovery and independent Review remain outstanding; no review evidence copied"
+          "VER-004 live recovery and independent Review remain outstanding; no review evidence copied; this fix has no live wait evidence"
         ],
         "reviews": []
       }
