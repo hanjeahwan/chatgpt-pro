@@ -8,8 +8,8 @@
 - 分支：`hanjeahwan/chatgpt-pro-collab-implementation`
 - Spec 原子捕获边界裁决提交：`9b7c5881b8f4b0ac3a51c67671bdc3dd1b88a5ba`
 - 首次增量账本对账提交：`713772dc377ef53cb27831a2fc05540873d99a45`
-- 最后一个产品实现提交：`ba09c01c6c8d7d343fc3108655047c923da2a8c5`
-- 范围：依照 `dependsOn` 完成 IMP-001 至 IMP-008；首次 Review Task `task_f83d3a0d427b` 已提出五项 finding，当前记录修复与证据状态，关闭结论仍由原 reviewer terminal 复审。
+- 最后一个产品实现提交：`7255f52a0f39a96f332a12f8ece34ed1890217e8`
+- 范围：依照 `dependsOn` 完成 IMP-001 至 IMP-008。根 Review Task `task_f83d3a0d427b` 的 F1–F5 已由同一 reviewer conversation `019fcdfa-ef5f-7410-a245-6bbaf7be52dd` 全部关闭；本轮 live 另发现 repeated close 改写 `task.updated_at` 和 confirmed pending 保留陈旧 `error` 两个独立问题，已取得协调员授权最小修复，等待各自新的独立 Review。
 
 ## 2. IMP、行为、验证与提交
 
@@ -18,11 +18,11 @@
 | IMP-001 | BEH-001、BEH-002                            | VER-001、VER-002                   | `c7f25abec5d02053a251f2befd395dc0ebdd734a`                                                                                                                                                                                                                             |
 | IMP-002 | BEH-007                                     | —                                  | `2d81754353357ab76124654c452cfc6da914e034`                                                                                                                                                                                                                             |
 | IMP-003 | BEH-003、BEH-010                            | VER-003、VER-013                   | `7dfe15aa2afec0a1fa11c218fcdb48ed56e3b052`、`08e1a38c050011f0dbd362e56b7b88d5b2cb3c76`                                                                                                                                                                                 |
-| IMP-004 | BEH-004、BEH-011                            | VER-004、VER-014                   | `8f10d2c8aca3bd123594071bd7a945ae9972c948`、`fe6c221706fbfe9a87844b064038927e0fcaf029`、`ba09c01c6c8d7d343fc3108655047c923da2a8c5`                                                                                                                                     |
+| IMP-004 | BEH-004、BEH-011                            | VER-004、VER-014                   | `8f10d2c8aca3bd123594071bd7a945ae9972c948`、`fe6c221706fbfe9a87844b064038927e0fcaf029`、`ba09c01c6c8d7d343fc3108655047c923da2a8c5`、`7255f52a0f39a96f332a12f8ece34ed1890217e8`                                                                                         |
 | IMP-005 | BEH-012                                     | VER-015                            | `7a42428d9bf07e7f9fb65c0c71b6133ff322e46d`、`08e1a38c050011f0dbd362e56b7b88d5b2cb3c76`、`8da196df7980244387c343827e36e6f29f001f4f`、`98e4513e14f3d7415fd4e75ea37fad01093f20d4`、`fe6c221706fbfe9a87844b064038927e0fcaf029`、`ba09c01c6c8d7d343fc3108655047c923da2a8c5` |
 | IMP-006 | BEH-005、BEH-006                            | VER-005、VER-006                   | `14d154c2cc7c66fa73da2c37f1e2570624021a60`、`08e1a38c050011f0dbd362e56b7b88d5b2cb3c76`、`ba09c01c6c8d7d343fc3108655047c923da2a8c5`                                                                                                                                     |
-| IMP-007 | BEH-008、BEH-009                            | VER-008、VER-009                   | `0d2a857b91bf1a3a575f4e5b859f15aa5c56149f`、`08e1a38c050011f0dbd362e56b7b88d5b2cb3c76`                                                                                                                                                                                 |
-| IMP-008 | BEH-002、BEH-004、BEH-006、BEH-007、BEH-012 | VER-007、VER-010、VER-011、VER-012 | `0070235444624d30daeb38f232fe47c08707c04b`、`ff87186162b8558e40af013aac4d81826c345ca7`、`fe6c221706fbfe9a87844b064038927e0fcaf029`、`ba09c01c6c8d7d343fc3108655047c923da2a8c5`                                                                                         |
+| IMP-007 | BEH-008、BEH-009                            | VER-008、VER-009                   | `0d2a857b91bf1a3a575f4e5b859f15aa5c56149f`、`08e1a38c050011f0dbd362e56b7b88d5b2cb3c76`、`18b91f1435c1582d1f7f83e48297b08be56cb8b3`                                                                                                                                     |
+| IMP-008 | BEH-002、BEH-004、BEH-006、BEH-007、BEH-012 | VER-007、VER-010、VER-011、VER-012 | `0070235444624d30daeb38f232fe47c08707c04b`、`ff87186162b8558e40af013aac4d81826c345ca7`、`fe6c221706fbfe9a87844b064038927e0fcaf029`、`ba09c01c6c8d7d343fc3108655047c923da2a8c5`、`7255f52a0f39a96f332a12f8ece34ed1890217e8`                                             |
 
 `08e1a38c050011f0dbd362e56b7b88d5b2cb3c76` 是 live forward test 后的最小修复：等待附件菜单水合、归档 conversation 在下一次发送前显式恢复、按稳定 DOM 标记映射返回文件，并校验浏览器建议文件名与逻辑 sandbox 目标一致。
 
@@ -31,6 +31,8 @@
 `fe6c221706fbfe9a87844b064038927e0fcaf029` 修复 F1 及 F2 的 response capture 路径：删除观察完成后的过早 `beginCapture`，以单个 `BEGIN IMMEDIATE` 事务冻结 `pending → capturing`、`response_path` 与全部 artifact 行；宿主单调 watchdog 通过 AbortSignal 安全终止 response capture 的 page command 及 gate。复审随后证明 post-freeze `downloadArtifact` 尚未进入同一 watchdog，F2 与 VER-015 因此重新打开。
 
 `ba09c01c6c8d7d343fc3108655047c923da2a8c5` 完成 F2 剩余实现：`captureResponse` 与每个 `downloadArtifact` 复用同一绝对单调 deadline；AbortSignal 从服务穿透 Playwright page command、gate 与实际子进程。deadline 前下载错误保留原码；deadline 后即使 provider 忽略取消或永不 settle，服务也在有限清理宽限后返回 `CAPTURE_TIMEOUT`、保持 `capturing` 并释放 operation lease，重试只处理剩余 artifact。
+
+`18b91f1435c1582d1f7f83e48297b08be56cb8b3` 修复 VER-008 live 发现的 repeated-close 副作用：已关闭 task 在取得 operation lease 前直接返回，因此第二次 `close` 不再改写 `task.updated_at`。`7255f52a0f39a96f332a12f8ece34ed1890217e8` 修复 VER-013 pending 证据发现的陈旧诊断：confirmed submission 进入 `pending` 时在同一事务清空 `unknown-submission` 阶段的 `error`；两个修复均有状态或 CLI 确定性测试和修复后 live-compatible 证据，但尚未取得新独立 Review 结论。
 
 ## 3. Live 取证事实
 
@@ -54,6 +56,12 @@
 - 两个逻辑 source URL 的 basename 与 response label 均为 `same.txt`，本地位于不同 ordinal 目录、inode 与 SHA-256 均不同，没有覆盖。幂等核对命令 `wait f44b6453-b56a-471a-8c39-606291de98f2 7567c354-7a47-4674-9cd6-1bff68820f50 1 1` 返回完全相同的 `responsePath` 和六个 `artifactPaths`；随后 `close` 返回 `wasOpen=true`，task 变为 `closed` 且 operation 字段为空。临时宿主 prompt 已删除，task transcript 内的 `prompt.md` 保留；认证 seed SHA-256 仍为 `3e4b106c38bf33013d364cc2e0c16711e04cba0c486de8531747f96680aba352`。
 - 已归档 conversation `6a72265c-a564-83ec-9f20-b1f6ed427639` 在后续浏览器发送时被显式 Unarchive，发送、等待与捕获继续使用相同 canonical conversation ID。该证明来自专用恢复会话，不是一次从创建、归档到恢复均由同一本地 task 完成的完整 VER-009 流程。
 - `close` 对活动浏览器会话返回 `wasOpen=true`，第二次调用返回 `wasOpen=false`、`alreadyClosed=true`，没有重新打开浏览器。
+- VER-004 使用 task `a07ea1df-5f57-43b8-961a-5acaebb65c70`、turn `9fe0a34a-4f4e-48fa-8c1e-0396a59ae446` 和一次 `wait 600000 300000` 取得 completed。生成的 `capture-response-a08c67b6-5002-47ac-88c7-0b76fdc1f705.js` 在目标 assistant 内确认 Stop 不可见、Copy 唯一可见，并用页面内 `navigator.clipboard.write/writeText` 拦截取得 Copy response；未读取 OS clipboard。Copy 的 4,121 字节与 `response.md` 逐字节相同，SHA-256 为 `62494e1f396c1de8c4477a467663a53921d33e1b06981e22cc9b316ddbd8a54a`，正文含长文本、TypeScript 围栏和三个唯一 marker，artifact 表与 `artifactPaths` 均为空；重复 `wait 1 1` 返回同一路径，inode、mtime、字节与哈希均未变化。
+- VER-007 使用 task `fc4bad58-0475-4725-9e03-662255b55adb` 的 turns `0af0b2c4-88ec-43ae-8a26-bf6322330720`、`1daef080-027a-473c-be60-f19edbe4958a`。两次 send 使用同一宿主 `/private/tmp/ver007/prompt.md`、同一附件路径和同名返回文件 `same-result.txt`；turn 内 prompt 副本哈希分别为 `b88ce324...`、`e938f49d...`，两个 artifact 位于各自 turn/ordinal 目录。宿主随后改写 prompt 与附件；关闭后新的 CLI 进程仍复读相同 response/artifact 路径、inode、mtime 和哈希，session 内对附件原正文 marker 的全文件扫描为 0 命中。
+- VER-008 的首次 live task 暴露第二次 `close` 会经 operation lease 改写 `task.updated_at`；协调员授权后由 `18b91f1` 修复。修复后 task `72a8d8dc-80ae-4821-b478-745a5d2701d8` 两次 close 分别返回 `wasOpen=true/alreadyClosed=false` 与 `wasOpen=false/alreadyClosed=true`；第二次前后 `updated_at=2026-08-05T03:32:26.787Z`、`closed_at=2026-08-05T03:32:26.786Z` 完全不变。browser PID `59559` 和 named session 消失，SQLite、两个 turn、response、artifact `ver009-after-archive.txt` 及 seed 的 inode/mtime/哈希保留；新 inspector task 在关闭后仍在侧栏看到该 conversation，证明 close 未归档 Web。
+- VER-009 使用同一 task `72a8d8dc-80ae-4821-b478-745a5d2701d8`、conversation `6a72ae36-1a58-83ec-9cc8-4d7154d7fe00` 和 PID `59559`。原 turn `3bdd920c-5a46-4709-9199-02f2ac483c3c` 完成后，`archive` 返回原 ID；随后页面恢复原 canonical URL、原两个 turn 可定位，目标侧栏计数从 1 变为 0，两个对照 conversation 仍各为 1。后续 turn `9476aa64-4061-4464-a282-9a745d7f83b5` 在同一 task send/wait，显式引用原 marker、返回可读 artifact，目标侧栏恢复为 1；conversation、PID、原 response 哈希和 transcript 均保持。
+- VER-013 的两个独立宿主 Agent 都完成了格式自主选择和本地归档边界。Agent A `task_c4fbc6efab2a` 未收到格式提示，选择 `.tar.gz`，用 `COPYFILE_DISABLE=1 tar --no-xattrs --no-recursion` 归档 100 个明确 regular `.ts` 文件；Agent B `task_823bbdaa4c97` 只收到“接收端不能假定有 tar”的跨平台约束，自主选择 `zip -X`。两者都证明 100/100 marker、源端 100/100 xattr、归档无 xattr/AppleDouble/额外文件、本地解压逐文件一致、send 只传一个归档且 Web 只有一个上传项；但唯一有限 wait 分别在 live tasks `e5f2f859-9d85-4259-95fc-cf3cf83c0bc5`、`4088b600-e555-41f2-87ba-173ef2ad0608` 返回 pending，因此没有 Pro 侧解压数量、marker 与摘要，VER-013 仍未通过且未擅自重跑。
+- VER-014 独立宿主 Agent `task_8c09b3657e50` 通过真实 Skill+CLI 可控 fixture 完成四场景：completed、pending、`CAPTURE_TIMEOUT`、`BROWSER_COMMAND_FAILED` 的宿主 wait 均为 1、另行浏览器轮询为 0，页面检查数分别为 8、3、6、0；每场景终态前 stdout/stderr 为 0 字节，结束只有一个终态 JSON，真实 CLI/gate/guarded-command PID 均在退出后消失。完整证据为 status `msg_e39e894f1103` 和 `/private/tmp/ver014-agent-c/report.md`。后续 `7255f52` 只改变 confirmed-pending 的诊断清理，不影响四种终态；当前 HEAD 的定向 fixture task `be5fa062-8eea-4f74-a9f4-75986e4852ca` 再次执行唯一 `wait 1100 2000`，三次页面检查后返回 pending，SQLite `error=NULL` 且 operation lease 全部清空。
 
 ## 4. VER-001 至 VER-015 判定
 
@@ -62,17 +70,17 @@
 | VER-001 | ❌ 未取得 | 协调员决定不重复交互式登录；既有 seed 的复用和哈希不变不能替代“干净认证目录 → setup 登录 → state-save → 关闭 setup”的 fresh setup 证据。                                                                                                               |
 | VER-002 | ⚠️ 部分   | 两个任务的 named session、taskId、session 路径和 conversation 均不同且完成首次发送，但 VER-001 前置未通过，且本轮没有形成可持久复核的不同浏览器 PID 与内存 browser context 证据，因此不能判定通过。                                                    |
 | VER-003 | ✅ 通过   | 自动化文件访问边界与 live Web 上传共同证明只读取和上传显式 prompt/附件，允许工作区外显式普通文件，未上传未选择项，并返回 turnId。                                                                                                                      |
-| VER-004 | ⚠️ 部分   | live `response.md` 保留标题、代码块和原始文字，返回文件为空；自动化覆盖 Copy response、重复 wait 和不覆盖旧文件，但本轮 live 记录不足以逐项重放“逐字节比较 + 重复 wait”，故不判定完整 live 通过。                                                      |
+| VER-004 | ✅ 通过   | task `a07ea1df-5f57-43b8-961a-5acaebb65c70` 的唯一主 wait 完成；目标 assistant、Stop/Copy、页面内 clipboard 拦截、Copy 与 response.md 的 4,121 字节相等、空 artifact、重复 wait 路径/文件不变均直接核对。                                              |
 | VER-005 | ✅ 通过   | 同一 Task A 的第二轮保持 conversation ID，正确引用首轮 marker，两个 turn 目录独立。                                                                                                                                                                    |
 | VER-006 | ⚠️ 部分   | 两个生成区间有 25 秒重叠，task/session/conversation/transcript 隔离；另一次单边远端长时间 pending 时另一任务仍完成，但 VER-002 前置未通过，不能判定完整通过。                                                                                          |
-| VER-007 | ⚠️ 部分   | SQLite、turn 目录、同名 artifact ordinal、关闭后复读和恢复矩阵有自动化覆盖；未取得严格要求的完整 live 流程，包括修改已发送 prompt 后用新 CLI 进程复读全部证据。                                                                                        |
-| VER-008 | ⚠️ 部分   | live 两次 close 证明幂等且未重新打开浏览器；本轮没有把“Web 未归档、浏览器 PID 消失、全部本地证据与 seed 保留”汇成同一可复核检查集，故不判定完整通过。                                                                                                  |
-| VER-009 | ⚠️ 部分   | live archive 成功；最终实现也在专用会话中对同一 canonical ID 完成显式 Unarchive、send 与 wait。专用全链路复验受 ChatGPT 远端生成持续 pending 阻塞，未取得同一本地 task 从 archive 到恢复再到后续 turn 的完整证据。                                     |
+| VER-007 | ✅ 通过   | 两个 completed turn 使用同一宿主 prompt/附件路径和同名返回文件；宿主改写后，关闭任务并由新 CLI/SQLite 进程复读，turn prompt 副本、response、artifact 顺序/路径/字节保持，附件正文 marker 在 session 中 0 命中。                                        |
+| VER-008 | ✅ 通过   | live 先发现并修复 repeated close 的 `updated_at` 副作用；修复后同一 task 的 browser PID/named session 消失，SQLite、transcript、artifact、seed 和 Web conversation 均保留，第二次 close 的持久 task 记录逐字段不变。                                   |
+| VER-009 | ✅ 通过   | 同一 task 完成建立 conversation、archive、侧栏消失、原 canonical 页面/turn 恢复、后续 send/wait 与 artifact 捕获；conversation ID、PID、旧 transcript 保持，两个对照 conversation 的侧栏计数始终不变。                                                 |
 | VER-010 | ✅ 通过   | `ba09c01c6c8d7d343fc3108655047c923da2a8c5` 后重跑格式、lint、类型、89 项全量测试、CLI help、无宿主 `package.json` 的绝对路径 help；入口和两个 wait 时长参数均检查通过。                                                                                |
 | VER-011 | ✅ 通过   | `ba09c01c6c8d7d343fc3108655047c923da2a8c5` 后重跑 10 个真实子进程恢复与并发测试；原子 capturing 事务回滚、事务提交后、response 发布后、artifact 发布未更新状态、部分 artifact 完成及并发 close 矩阵仍通过。                                            |
 | VER-012 | ✅ 通过   | 最低 Node v22.19.0 与当前 Node 的版本、`node:sqlite`、最小 TypeScript 入口 smoke test，以及固定 Playwright CLI help 均退出 0。                                                                                                                         |
-| VER-013 | ❌ 未取得 | live 仅验证了两个已选文件的 `.tar.gz` 解压内容；没有运行两个宿主 Agent、至少 100 个代码文件、xattr 核对以及跨平台提示触发 `.zip` 的完整 forward test。                                                                                                 |
-| VER-014 | ❌ 未取得 | 自动化测试覆盖终态与内部多次页面检查，但没有取得宿主 Agent 对四种场景各只调用一次 Skill/CLI wait 的进程、页面检查和 stdout/stderr 证据。规格明确禁止用文案或单元测试替代。                                                                             |
+| VER-013 | ⚠️ 部分   | 两个独立宿主 Agent 已分别自主选择 `.tar.gz` 与 `.zip`，完成 100 个带 marker/xattr 的 regular code files、归档参数/成员/元数据、本地解压、send 参数和 Web 唯一上传项核对；两次唯一有限 wait 均返回 pending，缺 Pro 侧 100 文件、全部 marker 与摘要。    |
+| VER-014 | ✅ 通过   | 独立宿主 Agent 的真实 Skill+CLI fixture 对四场景分别只调用一次 wait，记录 CLI/gate/command PID、页面检查、静默输出和唯一终态；当前相关修改后的定向 pending fixture 继续证明三次页面检查、唯一 pending 终态、`error=NULL` 与 lease 清空。               |
 | VER-015 | ✅ 通过   | `ba09c01` 后的新 live task 用一次有限主 `wait` 捕获七次 occurrence、六个有序唯一目标与六个可读文件，SQLite completed 不变量、重复去重、HTTPS 排除、同名不覆盖及重复 wait 路径一致均实查；58 项确定性测试继续覆盖页面函数、超时、终止、错误保码与恢复。 |
 
 ## 5. 最终确定性检查
@@ -82,7 +90,7 @@
 | `pnpm format:check`                                                         | ✅ 49 个文件格式通过                                      |
 | `pnpm lint`                                                                 | ✅ 退出码 0                                               |
 | `pnpm typecheck`                                                            | ✅ 退出码 0                                               |
-| `pnpm test`                                                                 | ✅ 8 个 test file、89 个测试通过                          |
+| `pnpm test`                                                                 | ✅ 8 个 test file、90 个测试通过                          |
 | `pnpm exec vitest --run tests/state-concurrency.test.ts`                    | ✅ 10 个真实子进程恢复与并发测试通过                      |
 | `pnpm exec vitest --run tests/browser.test.ts`                              | ✅ 25 个浏览器边界与可执行页面 fixture 测试通过           |
 | `pnpm exec vitest --run tests/collab.test.ts`                               | ✅ 25 个服务边界、deadline、状态与重试测试通过            |
@@ -93,32 +101,36 @@
 | `npx -y @playwright/cli@0.1.17 --help`                                      | ✅ 退出码 0                                               |
 | `git diff --check`                                                          | ✅ 退出码 0                                               |
 | 任务账本 `spec-tasks diff`                                                  | ✅ Spec/context 无漂移                                    |
-| 任务账本 `spec-tasks check --ready`                                         | ✅ 所有实现任务均为 `implemented`，实施依赖与覆盖检查通过 |
-| 任务账本 `spec-tasks check --final`                                         | ⚠️ 按预期退出 1；全部 IMP 等待 Review，尚不能标为 `done`  |
+| 任务账本 `spec-tasks check --ready`                                         | ✅ `ok=true`；12 BEH、15 VER、8 IMP 均 ready              |
+| 任务账本 `spec-tasks check --final`                                         | ⚠️ 退出 1；准确列出仍为 implemented 的六个 IMP            |
 
-`implemented` 只证明实现提交与相关检查已取得，可满足后续实施依赖；它不代表全量 VER 或 Review 已通过，`check --final` 仍应拒绝交付。
+`spec-tasks diff` 返回 `specChanged=false`、`contextChanged=false`、无 impacted task；`check --final` 的六项错误依次为 IMP-001、IMP-003、IMP-004、IMP-006、IMP-007、IMP-008 必须为 `done` 或 `cancelled`。`implemented` 只证明实现提交与相关检查已取得，可满足下游实施依赖；它不代表全量 VER 或 Review 已通过。IMP-002 与 IMP-005 的原实现、验证和根 Review 已收口为 `done`；其余任务保留真实 VER 或新独立 Review 缺口。
 
 ## 6. 失败尝试与边界
 
 - 一次并发 live 复验中 Task A 的远端生成超过 300 秒仍为 pending；Task B 仍完成六文件捕获。停止该 runner 并显式关闭两个会话，未把远端未完成写成产品实现失败或验证通过。
 - 专用 archive 全链路复验的第一条简单回复超过 120 秒仍未完成，因此没有进入 archive 阶段。继续重试不会引入新假设或证据来源，依照 Spec 停止重复尝试。
+- 本轮第一次 VER-004 task `15ae8431-f02a-4b8a-8daf-2ad3f1ba6398` 的 600 秒观察窗口返回 pending；该 task 随后关闭。待并发远端任务结束后，使用更短但仍满足“长文本+代码块”的新 prompt 和新 task 取得了完整 VER-004 证据；未把前一次 pending 冒充通过。
+- VER-013 两个独立宿主任务的远端唯一有限 wait 均返回 pending。协调员明确禁止未经授权重跑，因此只把归档选择与本地/Web 上传事实记为部分证据，未取得的 Pro 解压、marker 和摘要保持缺口。
+- VER-013 pending 行同时暴露 confirmed submission 仍保留 `unknown-submission` 陈旧 `error`；`7255f52` 已最小修复并在当前 HEAD 的 live-compatible pending fixture 复验 `error=NULL`。该问题与 repeated close 均独立于根 Review F1–F5，等待协调员创建新的独立 reviewer thread。
+- VER-013 两名独立 Agent 的报告、归档成员清单、VER-014 报告、Collab task session 与 SQLite 审计证据继续保留；本轮源夹具、解压目录、归档包、临时 prompt 与页面检查辅助脚本已移入系统废纸篓的独立目录，可恢复。认证 seed 未删除或改写。
 - 用户已裁决 F1/F2 冲突：`pending` 是原子捕获边界前的本地状态，完整 Copy/artifact 描述取得后才进入 `capturing`。Spec、实现、恢复矩阵、VER-011 与 VER-015 已按这一选择统一，不新增状态、兼容或 migration gate。
 - 首次 live 重跑创建的 task `3a577a54-bd5f-4a04-a610-84c511810fbf` 因既有开发数据库缺少 `artifact_set_recorded` 而在创建 turn 与 Web 提交前失败；task 随后成功关闭。协调员确认旧开发数据无需保留并授权精确删除；当时只有 `/Users/codeartz/.local/chatgpt-pro-collab/state.sqlite` 存在，`state.sqlite-wal` 与 `state.sqlite-shm` 不存在，认证 seed 未删除。当前实现随后创建全新数据库并完成 live VER-015；旧数据库未备份、不可恢复。
 - 先前 live 临时根已按旧记录移入系统废纸篓；本次通过证据保留在 Collab 的 task session 与当前 SQLite 中，临时 `.ver015-live-prompt.md` 已删除。
 - `ba09c01` 后的 VER-015 live 证据保留在 task `f44b6453-b56a-471a-8c39-606291de98f2` 的 session 与当前 SQLite 中；临时 `.ver015-post-ba09-live-prompt.md` 已删除，认证 seed 未删除或改写。
-- 任务账本保持 `implemented` 且 `evidence.reviews` 为空。原因是本 worker 不执行 Code Review，且 VER-001、VER-013、VER-014 以及若干严格 live 证据仍未取得；不得伪造 `done` 或 review 证据。
+- 根 Review Task `task_f83d3a0d427b` 的稳定证据已写入每个 IMP：reviewer conversation/session 始终为 `019fcdfa-ef5f-7410-a245-6bbaf7be52dd`，最终 closure status `msg_19d1aefb2cb6`、worker_done `msg_e00d44341bfe`，F1–F5 全部关闭。terminal 承载变化不视为新 reviewer；本轮两个独立修复尚无新 Review 关闭证据。
 
 ## 7. 交付前检查
 
 - [x] IMP-001 至 IMP-008 按 `dependsOn` 顺序形成目的单一提交。
 - [x] Live 发现的归档恢复和返回文件 DOM 映射问题已最小修复并复验相关路径。
 - [x] F1 已关闭；F2 的 post-freeze artifact download watchdog、终止、lease 释放、剩余行重试及修改后的 VER-015 live 主路径已复验。
-- [x] 账本写入真实 commit、check 和 live 证据，未填入 review 结果。
+- [x] 账本保留根 Review 的真实关闭证据；本轮独立问题未填入 reviewer 关闭结果。
 - [x] 明确区分完整通过、部分证据和未取得证据。
-- [ ] VER-001 fresh setup、VER-013 双宿主归档 forward test、VER-014 单次等待宿主调用证据尚未取得。
-- [ ] VER-002、VER-004、VER-006、VER-007、VER-008、VER-009 的严格通过条件需要在前置满足后补齐或重跑。
-- [ ] 原 reviewer terminal 复审尚未完成。
+- [ ] VER-001 fresh setup 仍按用户决定不重跑；因此 VER-002、VER-006 的必需前置仍缺。
+- [ ] VER-013 双宿主已完成归档选择与上传边界，但两次 live wait 均 pending，仍缺 Pro 解压 100 文件、全部 marker 与摘要。
+- [ ] `18b91f1` 与 `7255f52` 是根 Review 后发现的独立问题修复，等待各自新的 reviewer thread；不得用 F1–F5 的 closure 替代。
 
 ## 8. 最终判断
 
-F1、F3、F4、F5 已由原 reviewer 关闭；F2 的剩余实现、确定性复验与最后相关修改后的 VER-015 live 主路径均已完成，仍等待同一 reviewer conversation 关闭 finding。IMP-004、IMP-005、IMP-006 与 IMP-008 保持 `implemented`；完整规格仍缺 VER-001、VER-013、VER-014 及报告列明的其他严格 live 证据，所有 IMP 的 review 证据仍为空，因此不能标记 `done` 或宣称最终验收完成。
+根 Review F1–F5 已全部关闭；VER-004、VER-007、VER-008、VER-009 与 VER-014 的严格证据已补齐，VER-013 取得双独立宿主的部分证据但仍缺 Pro 终态。IMP-002、IMP-005 保持 `done`；其他 IMP 保持 `implemented`，原因分别是 VER-001/002、VER-013、VER-005 前置下的 VER-006，或根 Review 后两个独立修复尚待新 Review。完整规格仍不能最终验收，`check --final` 必须如实反映这些缺口。
