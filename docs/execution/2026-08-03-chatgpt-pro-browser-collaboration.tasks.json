@@ -218,7 +218,7 @@
     {
       "id": "IMP-007",
       "title": "分离本地关闭与 Web conversation 归档",
-      "status": "implemented",
+      "status": "done",
       "covers": ["BEH-008", "BEH-009"],
       "verifies": ["VER-008", "VER-009"],
       "dependsOn": ["IMP-001", "IMP-002"],
@@ -247,11 +247,13 @@
           "0ccb41a432f0608cbf0bfba5a4c20fa964ac4ebc replaces the external closed fast read with acquireCloseTaskOperation, which decides closed or acquires the close lease inside one BEGIN IMMEDIATE transaction; tests/state.test.ts deterministically interleaves two StateStore connections and proves the stale contender writes neither the task record nor a lease, while the sequential repeated-close service test remains",
           "after 0ccb41a432f0608cbf0bfba5a4c20fa964ac4ebc: pnpm format:check, pnpm lint, pnpm typecheck, pnpm test (8 files/91 tests), targeted state/collab/state-concurrency tests (42), CLI help, manifest-free absolute CLI help, Node v25.9.0 and v22.19.0 sqlite/TypeScript smoke tests, Playwright CLI help, and git diff --check passed",
           "VER-008 current-HEAD live repeat on existing closed task 72a8d8dc-80ae-4821-b478-745a5d2701d8 returned wasOpen=false/alreadyClosed=true; the complete task row, including updated_at=2026-08-05T03:32:26.787Z, closed_at=2026-08-05T03:32:26.786Z, and all null lease fields, was byte-identical before/after; seed SHA-256 remained 3e4b106c38bf33013d364cc2e0c16711e04cba0c486de8531747f96680aba352",
-          "Current reconciliation: VER-008 and VER-009 pass, but IMP-007 remains implemented until the same reviewer conversation term_1f28048f-d0f0-44b1-92f0-18251e33850c re-reviews and closes P1 for 0ccb41a432f0608cbf0bfba5a4c20fa964ac4ebc"
+          "Re-review task_0b1df9dbb32c, dispatch ctx_f1f1f4a70d6b, in the same reviewer conversation/terminal term_1f28048f-d0f0-44b1-92f0-18251e33850c accepted 0ccb41a432f0608cbf0bfba5a4c20fa964ac4ebc, closed the repeated-close P1, and reported no P1/P2/P3 finding; worker_done msg_72c28447f251",
+          "Current reconciliation: done because VER-008 and VER-009 pass, the root Review is closed, and re-review task_0b1df9dbb32c closed the repeated-close P1 for 0ccb41a432f0608cbf0bfba5a4c20fa964ac4ebc"
         ],
         "reviews": [
           "Root Review task_f83d3a0d427b; reviewer conversation/session 019fcdfa-ef5f-7410-a245-6bbaf7be52dd remained the same across initial carrier terminal term_bbb86a6a-edf1-4303-9b32-a690e443e75b and resumed carrier terminal term_7d1b0d8c-5693-4670-8a3f-488148223680; final closure status msg_19d1aefb2cb6 and worker_done msg_e00d44341bfe: F1-F5 all closed, no independent candidate",
-          "Independent Review task_d8758885857a uses reviewer conversation/terminal term_1f28048f-d0f0-44b1-92f0-18251e33850c; status msg_464a398c1f50 and worker_done msg_65fce671152b found the repeated-close P1; fix 0ccb41a432f0608cbf0bfba5a4c20fa964ac4ebc awaits re-review in that same conversation and has no closure evidence yet"
+          "Independent Review task_d8758885857a uses reviewer conversation/terminal term_1f28048f-d0f0-44b1-92f0-18251e33850c; status msg_464a398c1f50 and worker_done msg_65fce671152b found the repeated-close P1",
+          "Re-review task_0b1df9dbb32c, dispatch ctx_f1f1f4a70d6b, continued in the same reviewer conversation/terminal term_1f28048f-d0f0-44b1-92f0-18251e33850c; worker_done msg_72c28447f251 accepted 0ccb41a432f0608cbf0bfba5a4c20fa964ac4ebc, closed the P1, and reported no P1/P2/P3 finding"
         ]
       }
     },
@@ -302,7 +304,7 @@
           "Independent Review task_1775af5d8e88 accepted 7255f52a0f39a96f332a12f8ece34ed1890217e8 with no P1/P2/P3 finding; status msg_125124b44bcc and worker_done msg_2072e50a65b2 recorded all repository checks passing",
           "after 0ccb41a432f0608cbf0bfba5a4c20fa964ac4ebc, VER-010/VER-011/VER-012 checks passed: pnpm format:check, lint, typecheck, test (8 files/91 tests), state-concurrency (10 subprocess tests), CLI and manifest-free help, Node v25.9.0/v22.19.0 sqlite and TypeScript entry smoke tests, Playwright CLI help, and git diff --check",
           "Current reconciliation: done because VER-007, VER-010, VER-011, and VER-012 pass, root Review task_f83d3a0d427b is closed, and independent Review task_1775af5d8e88 accepted the pending-error fix; the close P1 belongs to IMP-007",
-          "final ledger checks after 0ccb41a432f0608cbf0bfba5a4c20fa964ac4ebc: spec-tasks diff reported specChanged=false/contextChanged=false with no impacted tasks; check --ready returned ok=true/readiness=ready for 12 behaviors, 15 verifications, and 8 tasks; check --final exited 1 and named exactly IMP-001, IMP-003, IMP-006, and IMP-007 because each remains implemented rather than done/cancelled"
+          "final ledger checks after repeated-close P1 review closure: spec-tasks diff reported specChanged=false/contextChanged=false with no impacted tasks; check --ready returned ok=true/readiness=ready for 12 behaviors, 15 verifications, and 8 tasks; check --final exited 1 and named exactly IMP-001, IMP-003, and IMP-006 because each remains implemented rather than done/cancelled"
         ],
         "reviews": [
           "Root Review task_f83d3a0d427b; reviewer conversation/session 019fcdfa-ef5f-7410-a245-6bbaf7be52dd remained the same across initial carrier terminal term_bbb86a6a-edf1-4303-9b32-a690e443e75b and resumed carrier terminal term_7d1b0d8c-5693-4670-8a3f-488148223680; final closure status msg_19d1aefb2cb6 and worker_done msg_e00d44341bfe: F1-F5 all closed, no independent candidate",
