@@ -1,9 +1,9 @@
 {
   "spec": "docs/specs/2026-08-03-chatgpt-pro-browser-collaboration.md",
-  "contextDigest": "sha256:cb7ffd79390a6991f4a696ab27ec6d7a9a0307d23cfaa84c861da00b75c988dc",
+  "contextDigest": "sha256:0fcc09fad366a4d1c2b27133a2aa87ab42748c9f9486d811d5ca3a267ff9f698",
   "sourceDigests": {
     "BEH-001": "sha256:81fc722eeffe25bb65e2eecd66fa5632133c4fa1cd9fc193ee60814d1fb3b0ae",
-    "BEH-002": "sha256:a6b90a57305e58f15ae9b0d5868fe3182950dfd2743a0b335e00ffde43be7e43",
+    "BEH-002": "sha256:6e1937f525268d96d5a3c1627ac65fa37a738f932b9150f4b6d86759d36580ca",
     "BEH-003": "sha256:3a33a5375fe8d0f24241e22a298ddce5dca588b827a649be9743ffb1edf10fd0",
     "BEH-004": "sha256:18fafefb438774cc049981837b5ee00514aea2b07d5d9e93dd4fcea68094035b",
     "BEH-005": "sha256:3a92560c8d7f89bef76669ba25c88c31182da0ea2a22052184252c32414d1bc3",
@@ -14,8 +14,8 @@
     "BEH-010": "sha256:32cf4519501f2b855a9682642c5b365d1962b45609dfb9fbbea272507c441b3f",
     "BEH-011": "sha256:9b827d79f99e9906f62de1cd2fbf69b25a97036c7ccb142c6122c85a025b4634",
     "BEH-012": "sha256:a1c71b8859dd105ca3fd76483afff0b5e4725059e1cc9294ee16d32bb4ca3357",
-    "VER-001": "sha256:c05d8ecd99ba7277afc64f21d661ae5ca77f4542a50ba50b8534789b0817db63",
-    "VER-002": "sha256:55e0c5659c76a100be65c593db9c78352f69bfe112966e638c15e54df6d82489",
+    "VER-001": "sha256:0ae22d0562343db6fa8fa45b2421d950b5e5420bfbd61731d969dc1ff0236a85",
+    "VER-002": "sha256:46b2816c70a581d1416b155dfcf9df1ba95e8e85b75d4bbf34bb330a42afd484",
     "VER-003": "sha256:7707532a8944369bb139c708146758ef058c9da5d03ecf55befb871eb31ef7ed",
     "VER-004": "sha256:6eb9c62502684cefe3fcd68204592c07d8d306c0b3c00766fd96ad0cc09cba71",
     "VER-005": "sha256:5b723ada9786cd3d392edffec5f5fa356489ad9f61d0379b925bcc889c8d6368",
@@ -33,10 +33,10 @@
   "tasks": [
     {
       "id": "IMP-001",
-      "title": "固化共享认证源与独立任务启动",
+      "title": "固化共享认证源",
       "status": "done",
-      "covers": ["BEH-001", "BEH-002"],
-      "verifies": ["VER-001", "VER-002"],
+      "covers": ["BEH-001"],
+      "verifies": [],
       "dependsOn": [],
       "scope": ["Skill entry", "CLI", "Browser boundary", "State store"],
       "evidence": {
@@ -183,23 +183,22 @@
     {
       "id": "IMP-008",
       "title": "完成中断恢复矩阵与全量运行基线验证",
-      "status": "done",
-      "covers": ["BEH-002", "BEH-004", "BEH-006", "BEH-007", "BEH-012"],
+      "status": "pending",
+      "covers": ["BEH-004", "BEH-006", "BEH-007", "BEH-012"],
       "verifies": ["VER-007", "VER-010", "VER-011", "VER-012"],
-      "dependsOn": ["IMP-001", "IMP-002", "IMP-003", "IMP-004", "IMP-005", "IMP-006", "IMP-007"],
+      "dependsOn": ["IMP-001", "IMP-002", "IMP-003", "IMP-004", "IMP-005", "IMP-006", "IMP-007", "IMP-009"],
       "scope": ["CLI", "State store", "Transcript/artifact store", "Test suite"],
-      "evidence": {
-        "checks": [
-          "pnpm format:check",
-          "pnpm lint",
-          "pnpm typecheck",
-          "pnpm test (8 files/94 tests)",
-          "git diff --check",
-          "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts: 54 tests passed",
-          "spec-tasks diff: specChanged=false, contextChanged=false, no impacted tasks"
-        ],
-        "reviews": ["task_3e0f0281cad7 / ctx_d6b7437bcbe7: ACCEPTED/CLOSED, no P1/P2/P3"]
-      }
+      "evidence": { "checks": [], "reviews": [] }
+    },
+    {
+      "id": "IMP-009",
+      "title": "建立固定 Project 与 GPT-5.6 Sol Pro 启动上下文",
+      "status": "pending",
+      "covers": ["BEH-002"],
+      "verifies": ["VER-001", "VER-002"],
+      "dependsOn": ["IMP-001"],
+      "scope": ["CLI", "Browser boundary", "Test suite"],
+      "evidence": { "checks": [], "reviews": [] }
     }
   ]
 }

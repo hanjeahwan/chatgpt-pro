@@ -1,6 +1,6 @@
 # ChatGPT Pro 浏览器协作
 
-- status: review
+- status: approved
 - version: 0.1
 
 ## 背景与目标
@@ -23,8 +23,8 @@
 ### BEH-002 启动独立任务
 
 - **触发与前置条件**：宿主执行 `start`，且 BEH-001 的认证源可用。
-- **可观察行为**：Collab 返回唯一 `taskId`，为该任务创建独立浏览器进程、独立 browser context、独立会话目录和一张新的 ChatGPT 对话页面。首次成功发送时，任务固定绑定该页面建立的 conversation；任务只读加载 BEH-001 的认证源，不创建 task 认证状态副本。
-- **验收条件**：任意两个活动任务具有不同的 `taskId`、浏览器进程、browser context 和会话目录，首次发送后具有不同 conversation；启动新任务不因同一项目或其他未关闭任务而拒绝。
+- **可观察行为**：Collab 为该任务创建独立浏览器进程、独立 browser context 和独立会话目录；只读加载 BEH-001 的认证源后，在现有 Project 中精确定位唯一名为 `chatgpt-pro-collab` 的 Project，进入该 Project 的空白新 conversation composer，并把模型固定选择为 `GPT-5.6 Sol`、模式固定选择为 `Pro`。Collab 只有在重新读取页面并确认 Project、模型和模式都正确后才返回唯一 `taskId`；首次成功发送时，任务固定绑定由该 Project composer 建立的新 conversation。Collab 不自动创建或修改 Project，也不创建 task 认证状态副本。
+- **验收条件**：成功返回时，页面位于唯一 `chatgpt-pro-collab` Project 的新 conversation composer，`GPT-5.6 Sol` 与 `Pro` 都处于已选择状态；任意两个活动任务具有不同的 `taskId`、浏览器进程、browser context 和会话目录，首次发送后在同一 Project 中建立不同 conversation；启动新任务不因其他未关闭任务而拒绝。Project 缺失或不唯一时，错误建议用户检查登录账号以及手动创建或整理 `chatgpt-pro-collab` Project；固定模型或模式不可用、选择失败或结果无法回读时，错误指出无法确认的固定目标。所有失败都不返回成功 `taskId`，关闭已打开的 task 浏览器，且不得调用 Project 创建或修改操作。
 - **状态**：已确认。
 
 ### BEH-003 发送明确输入
@@ -114,6 +114,7 @@
 - 当前 manifest 没有浏览器自动化或数据库 npm dependency；`browser.ts` 固定调用 `@playwright/cli@0.1.17`，并已实现 named session、storage state 保存与加载、显式附件上传、有界页面检查、页面内文字捕获和归档后恢复绑定 conversation。固定 CLI 的命令能力由版本化官方资料承载（REF-001）。
 - 当前 `state.ts` 使用 Node.js 标准库同步 `DatabaseSync` 保存 task/turn 状态和 browser-operation lease；schema 尚无 `capturing` 状态与 artifact 表（REF-002）。
 - 当前 `send` 已能按顺序上传宿主明确指定的可读普通文件；当前 Skill 禁止打包，尚未实现 BEH-010 的宿主准备流程。当前 `wait` 在 CLI 进程内无限循环调用有界页面检查，完成后只返回 `responsePath`，尚未实现观察窗口、`pending` 终态、捕获时长或返回文件下载。
+- 当前 `start` 只打开 ChatGPT 首页并验证登录状态，尚未进入 `chatgpt-pro-collab` Project，也未选择和回读 `GPT-5.6 Sol + Pro`。
 
 ## 技术设计
 
@@ -150,7 +151,9 @@
 
 - `browser.ts` 使用固定命令前缀 `npx -y @playwright/cli@0.1.17 -s=<sessionName> --raw`；不同 task 不共享 session name、browser context 或输出目录，只共享只读认证源路径。
 - `setup` 使用独立的非持久 setup session，通过 `open https://chatgpt.com/ --browser=chrome --headed` 完成人工登录。确认已登录后执行 `state-save <seedStatePath>`，成功保存 `auth/seed.json` 后关闭 setup session；不得保留完整 Chrome profile（REF-001）。
-- `start` 以该 task 的 named session 执行 `open about:blank --browser=chrome --headed`、`state-load <seedStatePath>` 和 `goto https://chatgpt.com/`。只有观察到已登录页面后才返回 `taskId`；不同任务读取同一 seed 文件，之后产生的 cookie 或 Web Storage 变化只留在各自内存 browser context，不回写 seed。
+- `start` 以该 task 的 named session 执行 `open about:blank --browser=chrome --headed`、`state-load <seedStatePath>` 和 `goto https://chatgpt.com/projects`。登录确认后，启动脚本在 Project `role=row` 范围内精确匹配文本 `chatgpt-pro-collab` 并要求结果严格等于一项；进入该行后，联合核对 `/g/g-p-<id>/project` 路径、主区域内的精确 Project 标题和唯一可见空白 composer，不能把首页或既有 `/c/...` conversation 当作启动成功（REF-005）。
+- Project 身份确认后，`start` 在 composer 的模型与模式选择器中分别精确选择无障碍名称为 `GPT-5.6 Sol` 和 `Pro` 的 `menuitemradio`，并要求两者各自唯一且 `aria-checked=true`；即使当前页面已显示目标值也必须回读确认。通用控件定位使用角色、层级、URL 和状态，不依赖 `Projects`、`New chat in...`、`Open project options...` 等会随页面语言变化的文案，也不改变用户或浏览器语言。Project 名、模型名和模式名是 BEH-002 固定的目标值，不属于可本地化的通用控件文案（REF-005）。
+- `start` 的 Project 定位、导航或模型/模式确认任一步失败时，browser boundary 关闭已打开的 named session，服务层保留 `failed` task 记录但不返回成功 `taskId`。错误区分 Project 缺失或不唯一、固定模型或模式不可用、选择无法确认和页面合同漂移；任何分支都不得调用 Project 创建或修改控件。不同任务读取同一 seed 文件，之后产生的 cookie 或 Web Storage 变化只留在各自内存 browser context，不回写 seed。
 - 启动、页面动作、上传、等待和关闭分别使用 `open`、`run-code --filename`、`upload`、`run-code --filename` 和 `close`。多个附件按 `attachmentPaths` 顺序逐个上传；BEH-010 生成的归档沿用同一单文件 upload，不增加特殊传输协议。
 - Playwright 子进程设置 `PLAYWRIGHT_MCP_ALLOW_UNRESTRICTED_FILE_ACCESS=true`，允许访问宿主传入的任意绝对附件路径；这个能力只扩大 CLI 文件读取边界，不改变产品边界中由宿主负责选择文件的合同（REF-001）。
 - ChatGPT 专属 selector、conversation identity、完成检测、回复 Copy、返回文件发现与下载和 Archive 全部封装在 `browser.ts`。当前实现以 composer `#prompt-textarea`、send `[data-testid="send-button"]`、turn `[data-testid^="conversation-turn-"][data-turn]`、Copy `[data-testid="copy-turn-action-button"]`、conversation options `[data-testid="conversation-options-button"]` 和 `/c/<conversationId>` canonical identity 为基线；selector 找不到或不唯一时返回页面合同漂移，不猜测相邻元素。易变页面合同只能由对应 live VER 证明，不能因当前代码存在而视为通过。
@@ -164,14 +167,14 @@
 
 ### 命令与结果合同
 
-| 命令      | 必要输入                                                                            | 成功结果                                                                                | 主要失败                                                                 |
-| --------- | ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `setup`   | 无                                                                                  | 认证源已建立，设置浏览器已关闭                                                          | 用户未完成登录；认证源无法生成                                           |
-| `start`   | 无                                                                                  | `taskId`                                                                                | 未 setup；认证源读取或浏览器启动失败                                     |
-| `send`    | `taskId`、`promptPath`、零或多个 `attachmentPath`                                   | 消息已提交并返回 `turnId`                                                               | task 非活动；本 task 已有未完成 turn；输入不可读；上传或提交失败         |
-| `wait`    | `taskId`、`turnId`、有限正整数 `observationWindowMs`、有限正整数 `captureTimeoutMs` | `status: pending`；或 `status: completed`、`responsePath`、按顺序排列的 `artifactPaths` | 标识不存在；浏览器已退出；Web 状态无法判断；捕获超时；文字或文件捕获失败 |
-| `close`   | `taskId`                                                                            | 本地任务已关闭                                                                          | 清理未完成时返回具体残留，不声称完整成功                                 |
-| `archive` | 活动 `taskId`                                                                       | 指定 Web conversation 已归档，task 页面已恢复原绑定                                     | task 非活动；conversation 尚未建立；Web 操作失败                         |
+| 命令      | 必要输入                                                                            | 成功结果                                                                                | 主要失败                                                                             |
+| --------- | ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `setup`   | 无                                                                                  | 认证源已建立，设置浏览器已关闭                                                          | 用户未完成登录；认证源无法生成                                                       |
+| `start`   | 无                                                                                  | 已确认目标 Project、`GPT-5.6 Sol + Pro` 和新 conversation composer 后返回 `taskId`      | 未 setup；认证源或浏览器失败；Project 缺失或不唯一；固定模型、模式或页面合同无法确认 |
+| `send`    | `taskId`、`promptPath`、零或多个 `attachmentPath`                                   | 消息已提交并返回 `turnId`                                                               | task 非活动；本 task 已有未完成 turn；输入不可读；上传或提交失败                     |
+| `wait`    | `taskId`、`turnId`、有限正整数 `observationWindowMs`、有限正整数 `captureTimeoutMs` | `status: pending`；或 `status: completed`、`responsePath`、按顺序排列的 `artifactPaths` | 标识不存在；浏览器已退出；Web 状态无法判断；捕获超时；文字或文件捕获失败             |
+| `close`   | `taskId`                                                                            | 本地任务已关闭                                                                          | 清理未完成时返回具体残留，不声称完整成功                                             |
+| `archive` | 活动 `taskId`                                                                       | 指定 Web conversation 已归档，task 页面已恢复原绑定                                     | task 非活动；conversation 尚未建立；Web 操作失败                                     |
 
 `wait` 的命令形式为 `wait <taskId> <turnId> <observationWindowMs> <captureTimeoutMs>`。`pending` 是本次有限观察正常到期的成功结果，不是 turn 失败；捕获超时使用错误码 `CAPTURE_TIMEOUT`。完成结果和 pending 结果都包含 `taskId` 与 `turnId`。CLI 在一次调用中不得输出进度 JSON，错误只通过现有非零退出码与单条错误 JSON 返回。
 
@@ -255,7 +258,7 @@ prompt 文件成功落盘后，turn 才能从 `sending` 进入 `pending`。观�
 ### VER-001 共享认证源
 
 - **覆盖对象**：BEH-001。
-- **前置条件**：可交互登录的 Pro 账号与干净认证目录。
+- **前置条件**：可交互登录的 Pro 账号、干净认证目录，以及满足 BEH-002 启动前提的现有 Project 和模型能力。
 - **执行或检查**：使用固定 Playwright CLI 登录并 `state-save`；关闭 setup session，从同一 seed state 同时执行两次 `start`。
 - **通过证据**：setup session 已关闭；两个非持久 task session 均已登录且未再次请求登录；seed 文件未被 task 改写。
 - **证明边界**：不证明认证长期不过期。
@@ -264,10 +267,10 @@ prompt 文件成功落盘后，turn 才能从 `sending` 进入 `pending`。观�
 ### VER-002 独立任务启动
 
 - **覆盖对象**：BEH-002。
-- **前置条件**：VER-001 通过。
-- **执行或检查**：同时启动两个任务，检查 Playwright session、浏览器进程、browser context 和 session 目录，并分别完成首次发送。
-- **通过证据**：两个任务具有不同 named session、浏览器 PID、内存 browser context、taskId、session 路径和 conversation。
-- **证明边界**：不证明消息并发或回复隔离。
+- **前置条件**：VER-001 通过；账号中恰有一个现有 Project 精确命名为 `chatgpt-pro-collab`，并可使用 `GPT-5.6 Sol` 模型与 `Pro` 模式。
+- **执行或检查**：同时启动两个任务；对每个任务检查 Project URL、主区域 Project 标题、空白 composer、模型与模式 radio 状态、Playwright session、浏览器进程、browser context 和 session 目录，再分别完成首次发送。确定性页面夹具另从非目标模型与模式开始，并分别覆盖 Project 缺失、同名 Project 不唯一、固定模型或模式缺失、点击后无法回读选择以及页面合同漂移。
+- **通过证据**：两个任务都只在唯一 `chatgpt-pro-collab` Project 的空白 composer 中返回成功，且 `GPT-5.6 Sol` 和 `Pro` 各自唯一并满足 `aria-checked=true`；两个任务具有不同 named session、浏览器 PID、内存 browser context、taskId、session 路径和 Project 内 conversation。各失败夹具返回对应错误，不产生成功 `taskId`，已打开 session 被关闭，`failed` task 记录保留，且没有调用 Project 创建或修改操作。
+- **证明边界**：不证明消息并发、回复隔离、其他账号权限或未来 ChatGPT Web 页面结构。
 - **必需性**：必需。
 
 ### VER-003 显式输入边界
@@ -427,3 +430,4 @@ VER-001–VER-015 均为完成本规格的必需验证。涉及真实 ChatGPT We
 | REF-002 | Node.js SQLite API                | https://nodejs.org/download/release/v22.19.0/docs/api/sqlite.html     | Node.js v22.19.0   |
 | REF-003 | Node.js TypeScript type stripping | https://nodejs.org/download/release/v22.19.0/docs/api/typescript.html | Node.js v22.19.0   |
 | REF-004 | ChatGPT Web 返回文件页面 Spike    | `docs/spikes/2026-08-05-chatgpt-web-return-files.md`                  | 2026-08-05 live UI |
+| REF-005 | ChatGPT Web Start 上下文 Spike    | `docs/spikes/2026-08-06-chatgpt-web-start-context.md`                 | 2026-08-06 live UI |
