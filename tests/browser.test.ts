@@ -168,7 +168,6 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
       output('### Error\nError: second chooser failed'),
       pageResult({ protocol, kind: 'draft-cleared' }),
     ]);
-
     await expect(
       fixture.browser.send('task-a', 'session-a', 'conversation-a', 'exact prompt', ['/tmp/a', '/tmp/b']),
     ).resolves.toEqual({ status: 'not-submitted', error: expect.stringContaining('second chooser failed') });
@@ -409,6 +408,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
         downloadUrl: 'https://chatgpt.com/backend-api/estuary/content/1',
       }),
     ]);
+    const firstController = new AbortController();
 
     await expect(
       fixture.browser.downloadArtifact(
@@ -419,8 +419,10 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
         sourceUrl,
         '/tmp/task-a-download',
         5000,
+        firstController.signal,
       ),
     ).resolves.toMatchObject({ sourceUrl, suggestedFilename: 'bundle.zip' });
+    expect(fixture.invocations[0]?.signal).toBe(firstController.signal);
     const source = await lastScript(fixture.invocations);
     await fixture.browser.downloadArtifact(
       'task-a',
@@ -430,6 +432,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
       sourceUrl,
       '/tmp/task-a-download-resume',
       5000,
+      new AbortController().signal,
     );
     const resumedSource = await lastScript(fixture.invocations);
     expect(source).toContain('const refreshControls = true');
@@ -512,6 +515,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
         sourceUrl,
         temporaryPath,
         5000,
+        new AbortController().signal,
       ),
     ).resolves.toMatchObject({ sourceUrl, suggestedFilename: 'bundle.zip' });
     expect(fixture.events).toContain(expectedEvent);
@@ -557,6 +561,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
           targetSourceUrl,
           join(fixture.root, 'must-not-exist'),
           5000,
+          new AbortController().signal,
         ),
       ).rejects.toMatchObject({ code: 'PLAYWRIGHT_CONTRACT_DRIFT' });
       expect(
@@ -585,6 +590,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
         sourceUrl,
         join(fixture.root, 'must-not-exist'),
         5,
+        new AbortController().signal,
       ),
     ).rejects.toMatchObject({ code: 'BROWSER_COMMAND_FAILED' });
   });
@@ -680,6 +686,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
         sourceUrl,
         '/tmp/task-a-download',
         5000,
+        new AbortController().signal,
       ),
     ).rejects.toMatchObject({ code: 'PLAYWRIGHT_CONTRACT_DRIFT' });
   });

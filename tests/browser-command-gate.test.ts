@@ -5,7 +5,16 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { BrowserCommandAbortedError, runBrowserCommand } from '../skills/chatgpt-pro-collab/scripts/browser.ts';
+import {
+  BrowserCommandAbortedError,
+  PlaywrightBrowser,
+  runBrowserCommand,
+} from '../skills/chatgpt-pro-collab/scripts/browser.ts';
+import {
+  collabPaths,
+  ensureCollabDirectories,
+  ensureTaskDirectories,
+} from '../skills/chatgpt-pro-collab/scripts/session.ts';
 
 describe('browser command side-effect gate', () => {
   it('does not launch the guarded command until the parent releases it', async () => {
@@ -111,6 +120,53 @@ describe('browser command side-effect gate', () => {
 
     if (gatePid === undefined || commandPid === undefined) {
       throw new Error('abort test did not observe both process identifiers');
+    }
+    await Promise.all([waitForPidExit(gatePid), waitForPidExit(commandPid)]);
+  });
+
+  it('threads artifact download cancellation through PlaywrightBrowser and reaps both processes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-artifact-command-abort-'));
+    const paths = collabPaths(root);
+    await ensureCollabDirectories(paths);
+    await ensureTaskDirectories(paths, 'task-a');
+    const controller = new AbortController();
+    let gatePid: number | undefined;
+    let commandPid: number | undefined;
+    const browser = new PlaywrightBrowser(paths, root, (invocation) => {
+      return runBrowserCommand({
+        ...invocation,
+        executable: process.execPath,
+        arguments: ['-e', 'setInterval(() => {}, 1000)'],
+        onChildSpawned(pid) {
+          gatePid = pid;
+          invocation.onChildSpawned?.(pid);
+        },
+        onChildExited(pid) {
+          invocation.onChildExited?.(pid);
+        },
+        onCommandSpawned(pid) {
+          commandPid = pid;
+          invocation.onCommandSpawned?.(pid);
+          controller.abort();
+        },
+      });
+    });
+
+    await expect(
+      browser.downloadArtifact(
+        'task-a',
+        'session-a',
+        'conversation-a',
+        ['sandbox:/mnt/data/result.txt'],
+        'sandbox:/mnt/data/result.txt',
+        join(root, 'artifact.tmp'),
+        5000,
+        controller.signal,
+      ),
+    ).rejects.toMatchObject({ code: 'BROWSER_COMMAND_FAILED' });
+
+    if (gatePid === undefined || commandPid === undefined) {
+      throw new Error('artifact abort test did not observe both process identifiers');
     }
     await Promise.all([waitForPidExit(gatePid), waitForPidExit(commandPid)]);
   });

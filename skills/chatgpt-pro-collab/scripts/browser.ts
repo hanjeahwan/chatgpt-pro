@@ -591,6 +591,7 @@ export class PlaywrightBrowser {
    * @param sourceUrl Exact recorded `sandbox:` logical target.
    * @param temporaryPath Fresh task-owned browser save path.
    * @param captureTimeoutMs Remaining finite capture budget.
+   * @param signal Host cancellation used to terminate the command at the monotonic deadline.
    * @param observer Task-lease child-process observer.
    * @returns Download event metadata after bytes are saved at `temporaryPath`.
    * @throws {BrowserError} If the target mapping, event, or browser save fails.
@@ -604,6 +605,7 @@ export class PlaywrightBrowser {
     sourceUrl: string,
     temporaryPath: string,
     captureTimeoutMs: number,
+    signal: AbortSignal,
     observer?: BrowserOperationObserver,
   ): Promise<BrowserArtifactDownload> {
     const refreshControls = !this.#artifactControlsRefreshed.has(taskId);
@@ -622,6 +624,7 @@ export class PlaywrightBrowser {
       `download artifact ${sourceUrl}`,
       'artifact-download',
       observer,
+      signal,
     );
     if (result.sourceUrl !== sourceUrl || result.suggestedFilename === undefined || result.downloadUrl === undefined) {
       throw new BrowserError('BROWSER_PROTOCOL_ERROR', `download artifact ${sourceUrl}`, 'result omitted fields');

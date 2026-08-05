@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 
 import { BrowserError, type BrowserOperationObserver } from '../skills/chatgpt-pro-collab/scripts/browser.ts';
 import { CollabService, runCli, type CliIo, type CollabBrowser } from '../skills/chatgpt-pro-collab/scripts/collab.ts';
-import { collabPaths, ensureCollabDirectories } from '../skills/chatgpt-pro-collab/scripts/session.ts';
+import { artifactPath, collabPaths, ensureCollabDirectories } from '../skills/chatgpt-pro-collab/scripts/session.ts';
 import { StateStore } from '../skills/chatgpt-pro-collab/scripts/state.ts';
 
 describe('BEH-001 through BEH-009 CLI orchestration', () => {
@@ -327,7 +327,7 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     expect(fixture.browser.downloadedArtifacts).toHaveLength(2);
   });
 
-  it('reuses successful artifacts after a later download fails and resumes only pending rows', async () => {
+  it('preserves a pre-deadline download error and resumes only pending rows', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
     const task = await fixture.service.start();
@@ -342,9 +342,9 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     fixture.browser.nextDownloadFailureSourceUrl = secondSource;
     const turn = await fixture.service.send(task.taskId, promptPath, []);
 
-    await expect(fixture.service.wait(task.taskId, turn.turnId, 20_000, 20_000)).rejects.toThrow(
-      /injected download failure/,
-    );
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 20_000, 20_000)).rejects.toMatchObject({
+      code: 'INJECTED_DOWNLOAD_FAILURE',
+    });
     const interruptedStore = new StateStore(fixture.paths.database);
     expect(interruptedStore.listArtifacts(task.taskId, turn.turnId)).toMatchObject([
       { sourceUrl: firstSource, status: 'completed' },
@@ -352,6 +352,73 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     ]);
     interruptedStore.close();
 
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 1, 20_000)).resolves.toMatchObject({
+      status: 'completed',
+      artifactPaths: [expect.any(String), expect.any(String)],
+    });
+    expect(fixture.browser.downloadedArtifacts).toEqual([firstSource, secondSource, secondSource]);
+  });
+
+  it('maps a delayed artifact failure after the shared deadline to CAPTURE_TIMEOUT', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.service.start();
+    const promptPath = join(fixture.root, 'prompt.md');
+    await writeFile(promptPath, 'delayed artifact failure');
+    const sourceUrl = 'sandbox:/mnt/data/result.txt';
+    fixture.browser.responseArtifacts.push({ sourceUrl, label: 'result.txt' });
+    fixture.browser.nextDownloadFailureSourceUrl = sourceUrl;
+    fixture.browser.downloadFailureDelayMs = 150;
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 20_000, 50)).rejects.toMatchObject({
+      code: 'CAPTURE_TIMEOUT',
+    });
+    const store = new StateStore(fixture.paths.database);
+    expect(store.requireTurn(task.taskId, turn.turnId).status).toBe('capturing');
+    expect(store.requireArtifact(task.taskId, turn.turnId, 1)).toMatchObject({
+      status: 'pending',
+      error: expect.stringContaining('artifact capture timed out'),
+    });
+    expect(store.getTaskOperation(task.taskId)).toBeNull();
+    store.close();
+    expect(fixture.browser.downloadAbortCount).toBe(1);
+  });
+
+  it('bounds a never-settling artifact provider, releases its lease, and retries only the remainder', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.service.start();
+    const promptPath = join(fixture.root, 'prompt.md');
+    await writeFile(promptPath, 'never-settling artifact');
+    const firstSource = 'sandbox:/mnt/data/first.txt';
+    const secondSource = 'sandbox:/mnt/data/second.txt';
+    fixture.browser.responseArtifacts.push(
+      { sourceUrl: firstSource, label: 'first.txt' },
+      { sourceUrl: secondSource, label: 'second.txt' },
+    );
+    fixture.browser.downloadDelayMs = 20;
+    fixture.browser.downloadNeverSettlesSourceUrl = secondSource;
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 20_000, 100)).rejects.toMatchObject({
+      code: 'CAPTURE_TIMEOUT',
+    });
+    const interruptedStore = new StateStore(fixture.paths.database);
+    expect(interruptedStore.requireTurn(task.taskId, turn.turnId).status).toBe('capturing');
+    expect(interruptedStore.listArtifacts(task.taskId, turn.turnId)).toMatchObject([
+      { sourceUrl: firstSource, status: 'completed' },
+      { sourceUrl: secondSource, status: 'pending', error: expect.stringContaining('artifact capture timed out') },
+    ]);
+    expect(interruptedStore.getTaskOperation(task.taskId)).toBeNull();
+    interruptedStore.acquireTaskOperation(task.taskId, 'retry-probe', 'retry-probe-token');
+    interruptedStore.releaseTaskOperation(task.taskId, 'retry-probe-token');
+    interruptedStore.close();
+    expect(fixture.browser.downloadAbortCount).toBe(1);
+    expect(fixture.browser.downloadCaptureBudgets[1]).toBeLessThan(fixture.browser.downloadCaptureBudgets[0] ?? 0);
+
+    fixture.browser.downloadDelayMs = 0;
+    fixture.browser.downloadNeverSettlesSourceUrl = null;
     await expect(fixture.service.wait(task.taskId, turn.turnId, 1, 20_000)).resolves.toMatchObject({
       status: 'completed',
       artifactPaths: [expect.any(String), expect.any(String)],
@@ -387,7 +454,7 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     store.close();
 
     fixture.browser.captureDelayMs = 0;
-    await expect(fixture.service.wait(firstTask.taskId, firstTurn.turnId, 1, 20_000)).resolves.toMatchObject({
+    await expect(fixture.service.wait(firstTask.taskId, firstTurn.turnId, 20_000, 20_000)).resolves.toMatchObject({
       status: 'completed',
     });
   });
@@ -432,7 +499,7 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     await expect(fixture.service.archive(task.taskId)).rejects.toMatchObject({ code: 'TASK_NOT_ACTIVE' });
   });
 
-  it('verifies and reuses an already-published file left pending at capture timeout', async () => {
+  it('aborts a delayed artifact download at the shared deadline and retries it', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
     const task = await fixture.service.start();
@@ -449,16 +516,18 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     const interruptedStore = new StateStore(fixture.paths.database);
     expect(interruptedStore.requireTurn(task.taskId, turn.turnId).status).toBe('capturing');
     const interruptedArtifact = interruptedStore.requireArtifact(task.taskId, turn.turnId, 1);
-    expect(interruptedArtifact).toMatchObject({ status: 'pending', localPath: expect.any(String) });
+    expect(interruptedArtifact).toMatchObject({
+      status: 'pending',
+      localPath: null,
+      error: expect.stringContaining('artifact capture timed out'),
+    });
+    expect(interruptedStore.getTaskOperation(task.taskId)).toBeNull();
     interruptedStore.close();
-    if (interruptedArtifact.localPath === null) {
-      throw new Error('fixture artifact destination was not recorded');
-    }
-    expect(await readFile(interruptedArtifact.localPath, 'utf8')).toBe(`artifact for ${sourceUrl}`);
+    expect(fixture.browser.downloadAbortCount).toBe(1);
 
     fixture.browser.downloadDelayMs = 0;
     const completed = await fixture.service.wait(task.taskId, turn.turnId, 1, 20_000);
-    expect(completed).toMatchObject({ status: 'completed', artifactPaths: [interruptedArtifact.localPath] });
+    expect(completed).toMatchObject({ status: 'completed', artifactPaths: [expect.any(String)] });
     expect(fixture.browser.downloadedArtifacts).toEqual([sourceUrl, sourceUrl]);
   });
 
@@ -521,19 +590,16 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     await writeFile(promptPath, 'artifact byte consistency');
     const sourceUrl = 'sandbox:/mnt/data/result.txt';
     fixture.browser.responseArtifacts.push({ sourceUrl, label: 'result.txt' });
-    fixture.browser.downloadDelayMs = 300;
+    fixture.browser.nextDownloadFailureSourceUrl = sourceUrl;
     const turn = await fixture.service.send(task.taskId, promptPath, []);
-    await expect(fixture.service.wait(task.taskId, turn.turnId, 20_000, 200)).rejects.toMatchObject({
-      code: 'CAPTURE_TIMEOUT',
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 20_000, 20_000)).rejects.toMatchObject({
+      code: 'INJECTED_DOWNLOAD_FAILURE',
     });
     const pendingStore = new StateStore(fixture.paths.database);
-    const pendingPath = pendingStore.requireArtifact(task.taskId, turn.turnId, 1).localPath;
+    const pendingPath = artifactPath(fixture.paths, task.taskId, turn.turnId, 1, 'result.txt');
+    pendingStore.setArtifactDestination(task.taskId, turn.turnId, 1, 'result.txt', pendingPath);
     pendingStore.close();
-    if (pendingPath === null) {
-      throw new Error('fixture artifact destination was not recorded');
-    }
     await writeFile(pendingPath, 'changed bytes');
-    fixture.browser.downloadDelayMs = 0;
     await expect(fixture.service.wait(task.taskId, turn.turnId, 1, 20_000)).rejects.toMatchObject({
       code: 'ARTIFACT_INCONSISTENT',
     });
@@ -650,6 +716,10 @@ class FakeBrowser implements CollabBrowser {
   captureAbortCount = 0;
   observeResponseCalls = 0;
   downloadDelayMs = 0;
+  downloadFailureDelayMs = 0;
+  downloadNeverSettlesSourceUrl: string | null = null;
+  downloadAbortCount = 0;
+  readonly downloadCaptureBudgets: number[] = [];
   activeCaptures = 0;
   maxConcurrentCaptures = 0;
   nextCaptureFailureTaskId: string | null = null;
@@ -836,7 +906,8 @@ class FakeBrowser implements CollabBrowser {
    * @param _expectedSourceUrls Unused complete recorded artifact set.
    * @param sourceUrl Exact logical artifact target.
    * @param temporaryPath Fresh browser save path.
-   * @param _captureTimeoutMs Unused finite capture budget.
+   * @param captureTimeoutMs Remaining finite budget from the shared capture deadline.
+   * @param signal Host cancellation used by download timeout tests.
    * @param observer Task-lease child-process observer.
    * @returns Fake download metadata after writing the bytes.
    * @throws {Error} If the fake artifact cannot be written.
@@ -848,18 +919,39 @@ class FakeBrowser implements CollabBrowser {
     _expectedSourceUrls: readonly string[],
     sourceUrl: string,
     temporaryPath: string,
-    _captureTimeoutMs: number,
+    captureTimeoutMs: number,
+    signal: AbortSignal,
     observer?: BrowserOperationObserver,
   ) {
     this.observe(observer);
     this.downloadedArtifacts.push(sourceUrl);
+    this.downloadCaptureBudgets.push(captureTimeoutMs);
+    if (this.downloadNeverSettlesSourceUrl === sourceUrl) {
+      signal.addEventListener(
+        'abort',
+        () => {
+          this.downloadAbortCount += 1;
+        },
+        { once: true },
+      );
+      await new Promise<void>(() => {});
+    }
+    if (this.downloadFailureDelayMs > 0) {
+      await delayedFailureWait(this.downloadFailureDelayMs, signal, () => {
+        this.downloadAbortCount += 1;
+      });
+    }
     if (this.nextDownloadFailureSourceUrl === sourceUrl) {
       this.nextDownloadFailureSourceUrl = null;
-      throw new Error(`injected download failure for ${sourceUrl}`);
+      throw new BrowserError(
+        'INJECTED_DOWNLOAD_FAILURE',
+        'download artifact',
+        `injected download failure for ${sourceUrl}`,
+      );
     }
     if (this.downloadDelayMs > 0) {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, this.downloadDelayMs);
+      await abortableCaptureDelay(this.downloadDelayMs, signal, () => {
+        this.downloadAbortCount += 1;
       });
     }
     await writeFile(temporaryPath, `artifact for ${sourceUrl}`);
@@ -975,6 +1067,34 @@ function abortableCaptureDelay(
       return;
     }
     signal?.addEventListener('abort', abort, { once: true });
+  });
+}
+
+/**
+ * Delays an injected provider failure while intentionally ignoring cancellation for settlement.
+ *
+ * @param milliseconds Finite deterministic delay.
+ * @param signal Host cancellation signal observed but not honored by the provider fixture.
+ * @param onAbort Test audit invoked exactly once on cancellation.
+ * @returns Nothing after the delayed provider boundary settles.
+ * @throws {Error} Timers and AbortSignal listeners do not ordinarily throw.
+ */
+function delayedFailureWait(milliseconds: number, signal: AbortSignal, onAbort: () => void): Promise<void> {
+  return new Promise((resolve) => {
+    const abort = (): void => {
+      onAbort();
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', abort);
+      resolve();
+    }, milliseconds);
+    if (signal.aborted) {
+      clearTimeout(timer);
+      abort();
+      resolve();
+      return;
+    }
+    signal.addEventListener('abort', abort, { once: true });
   });
 }
 
