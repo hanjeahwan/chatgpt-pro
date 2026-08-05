@@ -1,76 +1,62 @@
 # WORKFLOW
 
-> 用户明确要求按 `docs/specs/<规格文件>.md` 实现并提交代码时，宿主 Agent 作为协调员执行本流程；实现与修复由 Orca 新 child worktree 中的 implementation terminal 完成。
+> 用户明确要求按 `docs/specs/<规格文件>.md` 实现并提交代码时，宿主 Agent 使用 `execute-spec-workflow` Skill 协调本流程。本文件只定义仓库稳定合同；阶段执行细节由该 Skill 及其 references 承载。
 
 ```mermaid
 flowchart TD
-    A["按 Spec 实现并提交"] --> B["协调员准备并记录 BASE_SHA"]
-    B --> C["创建或对账 tasks.json"]
-    C --> D["创建 child worktree 与 implementation terminal"]
-    D --> E["worker 按 IMP 实现、验证并提交"]
-    E --> F["全量验证"]
-    F --> G{"Review 上下文"}
-    G -- "首次 Review 或独立新问题" --> H["新 reviewer terminal"]
-    G -- "原 finding 修复" --> I["原 reviewer terminal 复审"]
-    H --> J{"存在阻塞 finding？"}
-    I --> J
-    J -- "是" --> K["原 implementation terminal 修复、重验并提交"]
-    K --> F
-    J -- "否" --> L["收口任务账本并集成"]
-    L --> M["交付前检查"]
-    M --> N["最终报告"]
+    A["准备实施输入"] --> B["Ready Gate"]
+    B --> C["创建并放行 child"]
+    C --> D["Implementation Gate"]
+    D --> E["Verification Gate"]
+    E --> F["Review Gate"]
+    F --> G["Integration Gate"]
+    D -- "Spec 变化" --> A
+    E -- "实现或证据缺口" --> D
+    F -- "阻塞 finding" --> D
 ```
 
-## 1. 准备
+## 1. 角色与权威
 
-- 宿主 Agent 只负责准备、编排、等待、Review 协调和最终集成，不直接实现或修复代码。
-- 读取完整 Spec、相关代码、测试和当前工作区改动。
-- 记录实现前的 `BASE_SHA`。
-- 使用 `plan-spec-implementation` Skill 创建或增量对账 `docs/execution/<spec basename>.tasks.json`，并把 `BASE_SHA` 写入账本。已有账本不得整体重建、重排或复用 `IMP-*`。
-- 从仓库根目录运行任务脚本的 `check --ready`；账本与当前 Spec 摘要不一致、BEH/VER 覆盖不完整、依赖有环，或仍有 `blocked`、`invalidated` 任务时不得开始实现。
-- 新 child worktree 不继承未提交改动；worker 需要的 Spec、任务账本和其他输入必须先提交。存在重叠改动时停止并报告。
-- 规格冲突、产品决定缺失或无法验证时，停止并报告；不得猜测或擅自修改产品行为。
+- 宿主 Agent 负责准备、编排、等待、Review 协调和最终集成，不直接实现或修复代码。
+- 原 implementation terminal 负责实现、修复、验证、提交和任务账本证据回写。
+- 首次 Review 使用新的只读 reviewer terminal；同一 finding 及其修复影响由原 reviewer terminal 跟踪至关闭。只有独立新问题才建立新的 Review 上下文。
+- 当前 Spec 是产品行为和验收的权威来源；对应 `docs/execution/*.tasks.json` 是实施任务身份、依赖、状态和证据的权威来源。
+- `execute-spec-workflow` Skill 负责状态检测和阶段路由，不复制其他 Skill 已覆盖的操作指南。
 
-## 2. 编排、任务执行与提交
+## 2. 稳定标识
 
-- 宿主使用 `orchestration` Skill 编排协作，并使用 `orca-cli` Skill 创建新的 child worktree 和 implementation terminal。
-- Implementation worker 按账本中的 `dependsOn` 选择可执行的 `IMP-*`。运行时计划只镜像当前任务，任务身份、状态和依赖以账本为准。
-- 每个 `IMP-*` 是可独立实现、验证、提交和返工的最小行为切片；不要求 BEH、IMP 与 commit 一一对应。
-- 每个提交执行：实现 → 相关验证 → 自查 diff → 修复 → 复验 → commit。
-- 提交后在对应 IMP 中记录 commit 和已取得的验证证据。实现提交与相关检查完成后标记 `implemented`，允许下游 IMP 开始；全量验证或 Review 尚未齐全时不得标记 `done`。
-- Spec 在执行中发生变化时，worker 停止受影响任务并报告宿主；重新对账并通过 `check --ready` 后才能继续。
-- Worker 完成后发送一次 `worker_done`；宿主等待并处理结果，不接管实现。
-- 禁止跳过有效测试。
+| 标识        | 定义                                    | 持久位置                 |
+| ----------- | --------------------------------------- | ------------------------ |
+| `BASE_SHA`  | 本次实施周期开始前的完整 commit SHA     | 任务账本                 |
+| `READY_SHA` | 包含全部实施输入的 child 创建起点       | 本次编排上下文和最终报告 |
+| `HEAD_SHA`  | 当前 implementation branch 的被审查提交 | Git 与 Review 上下文     |
 
-## 3. 全量验证
+`READY_SHA` 不写入产生该 SHA 的提交。首次派发要求 child `HEAD` 等于 `READY_SHA`；恢复已有 child 时要求 `READY_SHA` 是当前 `HEAD` 的祖先。
 
-- Implementation worker 完成全部实现后，运行所有必需 `VER-*` 和 `AGENTS.md` 规定的适用检查。
-- 验证失败时，由原 implementation terminal 修复、重验并 commit；同步更新受影响 IMP 的状态与证据。
-- 未运行的验证不得报告为通过。
+## 3. Gate 合同
 
-## 4. Code Review
+| Gate           | 进入条件                    | 放行条件                                                 |
+| -------------- | --------------------------- | -------------------------------------------------------- |
+| Ready          | Spec 已成形，实施目标可拆分 | 任务账本与 Spec 一致；实施输入已提交；`READY_SHA` 已记录 |
+| Child          | Ready Gate 通过             | Child 起点正确、worktree clean、`check --ready` 通过     |
+| Implementation | Child Gate 通过             | 当前 IMP 的实现、相关检查、commit 和证据已取得           |
+| Verification   | 全部实现完成                | 必需 VER 与适用检查通过；委派证据已回写；外部资源已归类  |
+| Review         | Verification Gate 通过      | 所有阻塞 finding 已由对应 reviewer 关闭                  |
+| Integration    | Review Gate 通过            | `check --final` 通过；已验收分支已集成；非预期资源已清理 |
 
-- 首次 Review 使用 `orchestration` Skill 在 implementation worktree 建立新的根 Review Task 和只读 reviewer terminal；该 Task 的 `taskId` 标识本次 Review 上下文。Reviewer 使用 `open-code-review-delegate` Skill 审查当前 Spec 和 `BASE_SHA..HEAD_SHA`，禁止宿主 Agent 自审或传入自己的 Review 结论。
-- 存在阻塞 finding 时，宿主把 finding 交回原 implementation terminal 修复、重验并 commit，再通过 `orchestration` Skill 创建根 Review Task 的复审子 Task，复用原 reviewer terminal。宿主不得直接修复 finding，也不得仅因 HEAD、Task、Dispatch 或复审轮次变化而新建 terminal。
-- 原 reviewer terminal 负责跟踪该 finding 及其修复引起的问题或证据缺口，直至明确关闭。只有 reviewer 发现与原 finding 根因无关、也不是其修复影响或证据缺口的独立新问题时，才为该问题建立新的根 Review Task 和 reviewer terminal。
-- Review 完成后，宿主把 Review Task、reviewer terminal 和结论交回原 implementation terminal；worker 只更新任务状态和证据，并运行 `check --final`。宿主随后集成已验收的 worker branch；发生冲突时仍交回原 implementation terminal 处理。
+任一 Gate 未通过时停在当前阶段，或返回表中能够解除缺口的前序阶段。禁止跨过 Gate、跳过有效测试、伪造证据或把未运行验证报告为通过。
 
-## 5. 交付前检查
+## 4. 交付前检查
 
-全部勾选后才能交付：
+- [ ] `BASE_SHA`、`READY_SHA`、implementation worktree、branch、terminal 和 Review 上下文是否可定位？
+- [ ] Ready、Child、Implementation、Verification、Review 和 Integration Gate 是否均有当前证据？
+- [ ] 任务账本是否与当前 Spec 一致，并真实记录 IMP 状态、依赖、commit 和证据？
+- [ ] 所有必需验证是否在最后一次相关修改后通过？
+- [ ] 所有阻塞 finding 是否已由对应 reviewer 明确关闭？
+- [ ] 主工作区和 implementation worktree 是否没有非预期残留？
+- [ ] 任务完成前是否已完成自审？
+- [ ] 未验证项和剩余风险是否已明确记录？
 
-- [ ] 宿主 Agent 是否只承担协调职责，没有直接实现或修复代码？
-- [ ] 是否使用 `orchestration` 和 `orca-cli` Skill 创建新的 child worktree 和 implementation terminal？
-- [ ] 当前 Spec 中的 `BEH-*`、`VER-*` 和产品边界是否均已覆盖？
-- [ ] 任务账本是否与当前 Spec 摘要一致，并真实记录 `BASE_SHA`、IMP 状态、依赖和证据？
-- [ ] 所有必需验证是否在最后一次相关代码修改后通过？
-- [ ] 每个 commit 是否目的单一且没有混入无关改动？
-- [ ] 首次 Review 是否使用新的 reviewer terminal，所有阻塞 finding 是否由原 implementation terminal 修复并由原 reviewer terminal 复审关闭？
-- [ ] 是否仅为独立新问题建立新的 reviewer terminal？
-- [ ] 任务脚本的 `check --final` 是否在账本收口后通过？
-- [ ] 已验收的 worker branch 是否已经集成？
-- [ ] 未验证项和剩余风险是否已经明确记录？
+## 5. 最终报告
 
-## 6. 最终报告
-
-报告 implementation worktree、branch 和 HEAD，列出 `IMP → BEH/VER → commit` 映射、验证结果、Code Review 结论、集成结果、未验证项和剩余风险。
+报告 `BASE_SHA`、`READY_SHA`、implementation worktree、branch 和 `HEAD_SHA`，列出 `IMP → BEH/VER → commit` 映射、各 Gate 证据、Code Review 结论、外部资源收口、集成结果、未验证项和剩余风险。

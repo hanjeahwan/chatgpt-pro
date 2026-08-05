@@ -1,6 +1,6 @@
 ---
 name: plan-spec-implementation
-description: 为已经成形的新 Spec 创建稳定的实施任务账本，或在既有 Spec 增删、移动、改写 BEH/VER 后增量对账任务、依赖、状态和证据。用于用户要求按 Spec 开始实现、拆分可验证任务、跨 Session 跟踪进度，或更新 Spec 后恢复任务跟踪时；不用于创建或修订产品规格，也不替代代码 Review。
+description: 为已经成形的新 Spec 创建稳定的实施任务账本，或在既有 Spec 增删、移动、改写 BEH/VER 后增量对账任务、依赖、状态和证据。用于用户明确要求拆分可验证实施任务、创建或更新 `docs/execution/*.tasks.json`、跨 Session 恢复任务跟踪，或 `execute-spec-workflow` 在 Ready 阶段需要对账时；不用于创建或修订产品规格，也不负责端到端实施编排或代码 Review。
 ---
 
 # 规划 Spec 实施任务
