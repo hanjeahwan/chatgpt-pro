@@ -91,13 +91,17 @@
     {
       "id": "IMP-004",
       "title": "实现单次 wait 的内部观察与原始文字捕获",
-      "status": "pending",
+      "status": "implemented",
       "covers": ["BEH-004", "BEH-011"],
       "verifies": ["VER-004", "VER-014"],
       "dependsOn": ["IMP-001", "IMP-002", "IMP-003"],
       "scope": ["CLI", "Browser boundary", "Transcript/artifact store"],
       "evidence": {
-        "commits": ["8f10d2c8aca3bd123594071bd7a945ae9972c948", "fe6c221706fbfe9a87844b064038927e0fcaf029"],
+        "commits": [
+          "8f10d2c8aca3bd123594071bd7a945ae9972c948",
+          "fe6c221706fbfe9a87844b064038927e0fcaf029",
+          "ba09c01c6c8d7d343fc3108655047c923da2a8c5"
+        ],
         "checks": [
           "pnpm format:check",
           "pnpm lint",
@@ -106,7 +110,8 @@
           "git diff --check",
           "live 2026-08-05: response.md preserved heading, fenced TypeScript, and exact response text; wait returned one terminal result per invocation",
           "pnpm exec vitest --run tests/collab.test.ts: 23 tests passed; pre-freeze pending retry, 1ms delayed failure, never-resolving capture abort, pre-deadline browser error preservation, and post-freeze capturing timeout covered",
-          "Review task_8de74c002256 reset F2 to still-open: the host watchdog covered captureResponse but not post-freeze downloadArtifact, so a never-settling download retained the wait operation lease"
+          "Review task_8de74c002256 reset F2 to still-open: the host watchdog covered captureResponse but not post-freeze downloadArtifact, so a never-settling download retained the wait operation lease",
+          "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts tests/browser-command-gate.test.ts: 58 tests passed; response and every artifact share one monotonic capture deadline, delayed and never-settling downloads return CAPTURE_TIMEOUT, gate/command processes exit, and the operation lease is reacquirable"
         ],
         "reviews": []
       }
@@ -114,7 +119,7 @@
     {
       "id": "IMP-005",
       "title": "捕获返回文件并支持可恢复发布",
-      "status": "pending",
+      "status": "implemented",
       "covers": ["BEH-012"],
       "verifies": ["VER-015"],
       "dependsOn": ["IMP-002", "IMP-004"],
@@ -125,7 +130,8 @@
           "08e1a38c050011f0dbd362e56b7b88d5b2cb3c76",
           "8da196df7980244387c343827e36e6f29f001f4f",
           "98e4513e14f3d7415fd4e75ea37fad01093f20d4",
-          "fe6c221706fbfe9a87844b064038927e0fcaf029"
+          "fe6c221706fbfe9a87844b064038927e0fcaf029",
+          "ba09c01c6c8d7d343fc3108655047c923da2a8c5"
         ],
         "checks": [
           "pnpm format:check",
@@ -139,7 +145,8 @@
           "pnpm exec vitest --run tests/browser.test.ts: 25 tests passed; generated capture/download page functions executed against a live-compatible fixture; occurrence/button count, row order, control relationship, direct/artifact download events, timeout error, and capturing/not-completed invariant covered",
           "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts tests/browser-command-gate.test.ts: 55 tests passed; host monotonic watchdog, real command abort/reap, atomic pre-freeze pending boundary, post-freeze capturing recovery, and deterministic VER-015 fixtures covered",
           "live 2026-08-05 after fe6c221706fbfe9a87844b064038927e0fcaf029: task 9aacd83c-83d4-461f-8cad-e546d45eae98 captured six ordered unique sandbox targets in one wait; duplicate page.html deduplicated, HTTPS excluded, HTML/ZIP/PNG/Python/two distinct same-name files verified, SQLite completed invariant held, and repeated wait returned identical paths",
-          "VER-015 reset to not passed after Review task_8de74c002256 reproduced a never-settling post-freeze artifact download that did not return CAPTURE_TIMEOUT or release the wait operation lease"
+          "VER-015 reset to not passed after Review task_8de74c002256 reproduced a never-settling post-freeze artifact download that did not return CAPTURE_TIMEOUT or release the wait operation lease",
+          "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts tests/browser-command-gate.test.ts: 58 tests passed; generated page fixtures remain executable and artifact downloads now cover delayed failure, never-settling provider, pre-deadline error-code preservation, safe command termination, shared remaining budget, no overwrite, and retry of pending rows only"
         ],
         "reviews": []
       }
@@ -147,13 +154,17 @@
     {
       "id": "IMP-006",
       "title": "完成同会话多轮与跨任务真实并发",
-      "status": "pending",
+      "status": "implemented",
       "covers": ["BEH-005", "BEH-006"],
       "verifies": ["VER-005", "VER-006"],
       "dependsOn": ["IMP-003", "IMP-004", "IMP-005"],
       "scope": ["CLI", "Browser boundary", "State store"],
       "evidence": {
-        "commits": ["14d154c2cc7c66fa73da2c37f1e2570624021a60", "08e1a38c050011f0dbd362e56b7b88d5b2cb3c76"],
+        "commits": [
+          "14d154c2cc7c66fa73da2c37f1e2570624021a60",
+          "08e1a38c050011f0dbd362e56b7b88d5b2cb3c76",
+          "ba09c01c6c8d7d343fc3108655047c923da2a8c5"
+        ],
         "checks": [
           "pnpm format:check",
           "pnpm lint",
@@ -161,7 +172,8 @@
           "pnpm test",
           "git diff --check",
           "live 2026-08-05: retry9 task turns overlapped from 17:50:18Z to 17:50:43Z with distinct task/session/conversation/transcript ownership; task A completed a second turn in the same conversation",
-          "pnpm exec vitest --run tests/collab.test.ts: 23 tests passed after atomic capture-boundary changes, including cross-task wait concurrency"
+          "pnpm exec vitest --run tests/collab.test.ts: 23 tests passed after atomic capture-boundary changes, including cross-task wait concurrency",
+          "pnpm exec vitest --run tests/collab.test.ts: 25 tests passed; a timed-out artifact wait releases its task operation lease and a new lease can be acquired before retry"
         ],
         "reviews": []
       }
@@ -191,7 +203,7 @@
     {
       "id": "IMP-008",
       "title": "完成中断恢复矩阵与全量运行基线验证",
-      "status": "pending",
+      "status": "implemented",
       "covers": ["BEH-002", "BEH-004", "BEH-006", "BEH-007", "BEH-012"],
       "verifies": ["VER-007", "VER-010", "VER-011", "VER-012"],
       "dependsOn": ["IMP-001", "IMP-002", "IMP-003", "IMP-004", "IMP-005", "IMP-006", "IMP-007"],
@@ -201,7 +213,8 @@
           "0070235444624d30daeb38f232fe47c08707c04b",
           "56d21d9ed42694659bce992b7bf88ed33ad37014",
           "ff87186162b8558e40af013aac4d81826c345ca7",
-          "fe6c221706fbfe9a87844b064038927e0fcaf029"
+          "fe6c221706fbfe9a87844b064038927e0fcaf029",
+          "ba09c01c6c8d7d343fc3108655047c923da2a8c5"
         ],
         "checks": [
           "pnpm format:check",
@@ -220,7 +233,11 @@
           "pnpm exec vitest --run tests/spec-tasks.test.ts tests/state-concurrency.test.ts tests/browser.test.ts tests/collab.test.ts: 68 tests passed after F1/F2 without invalidating F3/F4/F5",
           "pnpm test: 8 test files and 86 tests passed on fe6c221706fbfe9a87844b064038927e0fcaf029",
           "node .agents/skills/plan-spec-implementation/scripts/spec-tasks.ts check --final: expected exit 1 because IMP-001 through IMP-008 remain implemented pending Review; no review evidence or done status was fabricated",
-          "Review task_8de74c002256 invalidated the VER-015 overall pass claim until the shared capture deadline also bounds artifact downloads and releases their operation lease"
+          "Review task_8de74c002256 invalidated the VER-015 overall pass claim until the shared capture deadline also bounds artifact downloads and releases their operation lease",
+          "pnpm exec vitest --run tests/state-concurrency.test.ts: 10 tests passed after artifact watchdog propagation; the SQLite transaction and subprocess recovery matrix remains valid",
+          "pnpm test: 8 test files and 89 tests passed on ba09c01c6c8d7d343fc3108655047c923da2a8c5",
+          "pnpm collab -- help and absolute collab.ts help from a temporary directory without package.json both exited 0 and retained independent observationWindowMs/captureTimeoutMs parameters",
+          "node .agents/skills/plan-spec-implementation/scripts/spec-tasks.ts check --final: expected exit 1 on ba09c01c6c8d7d343fc3108655047c923da2a8c5 because all IMP tasks remain implemented pending Review; reviews remain empty"
         ],
         "reviews": []
       }
