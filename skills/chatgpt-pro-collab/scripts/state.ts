@@ -525,7 +525,7 @@ export class StateStore {
         )
         .run(conversationId, conversationUrl, now, taskId);
       this.#database
-        .prepare("UPDATE turn SET status = 'pending', updated_at = ? WHERE task_id = ? AND id = ?")
+        .prepare("UPDATE turn SET status = 'pending', error = NULL, updated_at = ? WHERE task_id = ? AND id = ?")
         .run(now, taskId, turnId);
       return this.requireTurn(taskId, turnId);
     });

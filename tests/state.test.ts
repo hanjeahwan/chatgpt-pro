@@ -19,6 +19,7 @@ describe('BEH-002, BEH-005, and BEH-007 state gates', () => {
 
     store.markSubmissionAttempting('task-a', 'turn-a');
     store.markTurnPending('task-a', 'turn-a', 'conversation-a', 'https://chatgpt.com/c/conversation-a');
+    expect(store.requireTurn('task-a', 'turn-a')).toMatchObject({ status: 'pending', error: null });
     const responsePath = join(root, 'response.md');
     store.freezeCapture('task-a', 'turn-a', responsePath, []);
     await writeFile(responsePath, 'response');

@@ -201,7 +201,7 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
       turnId: turn.turnId,
     });
     const store = new StateStore(fixture.paths.database);
-    expect(store.requireTurn(task.taskId, turn.turnId).status).toBe('pending');
+    expect(store.requireTurn(task.taskId, turn.turnId)).toMatchObject({ status: 'pending', error: null });
     store.close();
     await expect(fixture.service.wait(task.taskId, turn.turnId, 20_000, 20_000)).resolves.toMatchObject({
       status: 'completed',
@@ -667,6 +667,41 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
       ok: false,
       error: { code: 'USAGE', message: expect.stringContaining('observationWindowMs') },
     });
+  });
+
+  it('prints one pending CLI result after clearing the reconciled submission diagnostic', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.service.start();
+    const promptPath = join(fixture.root, 'pending-prompt.md');
+    await writeFile(promptPath, 'long response');
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+    fixture.browser.pendingWaitPolls = 1;
+    fixture.browser.waitPollDelayMs = 10;
+    const output: string[] = [];
+    const errors: string[] = [];
+    const io: CliIo = {
+      writeOutput(value) {
+        output.push(value);
+      },
+      writeError(value) {
+        errors.push(value);
+      },
+    };
+
+    await expect(runCli(['wait', task.taskId, turn.turnId, '1', '20000'], fixture.service, io)).resolves.toBe(0);
+    expect(output).toHaveLength(1);
+    expect(JSON.parse(output[0] ?? '{}')).toMatchObject({
+      ok: true,
+      command: 'wait',
+      status: 'pending',
+      taskId: task.taskId,
+      turnId: turn.turnId,
+    });
+    expect(errors).toEqual([]);
+    const store = new StateStore(fixture.paths.database);
+    expect(store.requireTurn(task.taskId, turn.turnId)).toMatchObject({ status: 'pending', error: null });
+    store.close();
   });
 
   it('runs the Skill entry from a host without a package manifest', async () => {
