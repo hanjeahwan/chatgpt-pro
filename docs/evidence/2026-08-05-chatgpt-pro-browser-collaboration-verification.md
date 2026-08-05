@@ -62,6 +62,7 @@
 - VER-009 使用同一 task `72a8d8dc-80ae-4821-b478-745a5d2701d8`、conversation `6a72ae36-1a58-83ec-9cc8-4d7154d7fe00` 和 PID `59559`。原 turn `3bdd920c-5a46-4709-9199-02f2ac483c3c` 完成后，`archive` 返回原 ID；随后页面恢复原 canonical URL、原两个 turn 可定位，目标侧栏计数从 1 变为 0，两个对照 conversation 仍各为 1。后续 turn `9476aa64-4061-4464-a282-9a745d7f83b5` 在同一 task send/wait，显式引用原 marker、返回可读 artifact，目标侧栏恢复为 1；conversation、PID、原 response 哈希和 transcript 均保持。
 - VER-013 的两个独立宿主 Agent 都完成了格式自主选择和本地归档边界。Agent A `task_c4fbc6efab2a` 未收到格式提示，选择 `.tar.gz`，用 `COPYFILE_DISABLE=1 tar --no-xattrs --no-recursion` 归档 100 个明确 regular `.ts` 文件；Agent B `task_823bbdaa4c97` 只收到“接收端不能假定有 tar”的跨平台约束，自主选择 `zip -X`。两者都证明 100/100 marker、源端 100/100 xattr、归档无 xattr/AppleDouble/额外文件、本地解压逐文件一致、send 只传一个归档且 Web 只有一个上传项；但唯一有限 wait 分别在 live tasks `e5f2f859-9d85-4259-95fc-cf3cf83c0bc5`、`4088b600-e555-41f2-87ba-173ef2ad0608` 返回 pending，因此没有 Pro 侧解压数量、marker 与摘要，VER-013 仍未通过且未擅自重跑。
 - VER-014 独立宿主 Agent `task_8c09b3657e50` 通过真实 Skill+CLI 可控 fixture 完成四场景：completed、pending、`CAPTURE_TIMEOUT`、`BROWSER_COMMAND_FAILED` 的宿主 wait 均为 1、另行浏览器轮询为 0，页面检查数分别为 8、3、6、0；每场景终态前 stdout/stderr 为 0 字节，结束只有一个终态 JSON，真实 CLI/gate/guarded-command PID 均在退出后消失。完整证据为 status `msg_e39e894f1103` 和 `/private/tmp/ver014-agent-c/report.md`。后续 `7255f52` 只改变 confirmed-pending 的诊断清理，不影响四种终态；当前 HEAD 的定向 fixture task `be5fa062-8eea-4f74-a9f4-75986e4852ca` 再次执行唯一 `wait 1100 2000`，三次页面检查后返回 pending，SQLite `error=NULL` 且 operation lease 全部清空。
+- 新 campaign 的 Host A task `7f62f36c-8748-43ad-af4f-7fd84b52715d`、turn `adfb2d4e-2f0e-479b-85ed-adba0f88a0ed`、conversation `6a72bfef-138c-83ec-81ab-5a04aa59ed7f` 暴露完成假阴性：用户直接观察到回复正文已完成，但页面 Stop/加载指示持续可见，旧完成检测因此持续观察而不捕获；本轮修复前没有独立记录该现场的 Copy 可见性与内容稳定轮次。旧 wait owner PID `96195` 退出后留下死 owner lease；经协调员明确授权，只通过现有 `StateStore` 死 owner 回收路径取得并立即释放探针 lease，没有执行浏览器命令，也未 close/archive task。复核结果为 task `active`、turn `pending`、`response_path=NULL`、`artifact_set_recorded=0`、`error=NULL`、全部 operation lease 字段为空，原 browser daemon PID `88612` 仍运行；该现场尚未使用修复后代码重跑，不能作为 live pass。
 
 ## 4. VER-001 至 VER-015 判定
 
@@ -70,7 +71,7 @@
 | VER-001 | ❌ 未取得 | 协调员决定不重复交互式登录；既有 seed 的复用和哈希不变不能替代“干净认证目录 → setup 登录 → state-save → 关闭 setup”的 fresh setup 证据。                                                                                                               |
 | VER-002 | ⚠️ 部分   | 两个任务的 named session、taskId、session 路径和 conversation 均不同且完成首次发送，但 VER-001 前置未通过，且本轮没有形成可持久复核的不同浏览器 PID 与内存 browser context 证据，因此不能判定通过。                                                    |
 | VER-003 | ✅ 通过   | 自动化文件访问边界与 live Web 上传共同证明只读取和上传显式 prompt/附件，允许工作区外显式普通文件，未上传未选择项，并返回 turnId。                                                                                                                      |
-| VER-004 | ✅ 通过   | task `a07ea1df-5f57-43b8-961a-5acaebb65c70` 的唯一主 wait 完成；目标 assistant、Stop/Copy、页面内 clipboard 拦截、Copy 与 response.md 的 4,121 字节相等、空 artifact、重复 wait 路径/文件不变均直接核对。                                              |
+| VER-004 | ⚠️ 部分   | 既有正常路径已证明目标 assistant、Stop/Copy、页面内 clipboard 拦截、Copy 与 response.md 的 4,121 字节相等、空 artifact 及重复 wait 幂等；新合同增加的卡滞指示 reload-once live 场景尚未在修复后复用 Host A 同一 turn 重跑，不能判定完整通过。          |
 | VER-005 | ✅ 通过   | 同一 Task A 的第二轮保持 conversation ID，正确引用首轮 marker，两个 turn 目录独立。                                                                                                                                                                    |
 | VER-006 | ⚠️ 部分   | 两个生成区间有 25 秒重叠，task/session/conversation/transcript 隔离；另一次单边远端长时间 pending 时另一任务仍完成，但 VER-002 前置未通过，不能判定完整通过。                                                                                          |
 | VER-007 | ✅ 通过   | 两个 completed turn 使用同一宿主 prompt/附件路径和同名返回文件；宿主改写后，关闭任务并由新 CLI/SQLite 进程复读，turn prompt 副本、response、artifact 顺序/路径/字节保持，附件正文 marker 在 session 中 0 命中。                                        |
@@ -112,6 +113,7 @@
 - 专用 archive 全链路复验的第一条简单回复超过 120 秒仍未完成，因此没有进入 archive 阶段。继续重试不会引入新假设或证据来源，依照 Spec 停止重复尝试。
 - 本轮第一次 VER-004 task `15ae8431-f02a-4b8a-8daf-2ad3f1ba6398` 的 600 秒观察窗口返回 pending；该 task 随后关闭。待并发远端任务结束后，使用更短但仍满足“长文本+代码块”的新 prompt 和新 task 取得了完整 VER-004 证据；未把前一次 pending 冒充通过。
 - VER-013 两个独立宿主任务的远端唯一有限 wait 均返回 pending。协调员明确禁止未经授权重跑，因此只把归档选择与本地/Web 上传事实记为部分证据，未取得的 Pro 解压、marker 和摘要保持缺口。
+- Host A 新 campaign 的回复正文虽已完成，但旧 browser 完成条件把持续可见的 Stop/加载指示视为硬阻塞，导致唯一 wait 无法捕获。该 wait 已按明确授权终止并回收死 owner lease，task/turn/browser 保留给修复后同一 turn 复验；本轮实现提交前没有重跑，也没有把用户目视完成冒充 VER-004 或 VER-013 通过。
 - VER-013 pending 行同时暴露 confirmed submission 仍保留 `unknown-submission` 陈旧 `error`；`7255f52` 已最小修复并在 live-compatible pending fixture 复验 `error=NULL`。独立 Review `task_1775af5d8e88` 的 status `msg_125124b44bcc` 与 worker_done `msg_2072e50a65b2` 均判定 accepted、无 P1/P2/P3 finding。
 - VER-013 两名独立 Agent 的报告、归档成员清单、VER-014 报告、Collab task session 与 SQLite 审计证据继续保留；本轮源夹具、解压目录、归档包、临时 prompt 与页面检查辅助脚本已移入系统废纸篓的独立目录，可恢复。认证 seed 未删除或改写。
 - 用户已裁决 F1/F2 冲突：`pending` 是原子捕获边界前的本地状态，完整 Copy/artifact 描述取得后才进入 `capturing`。Spec、实现、恢复矩阵、VER-011 与 VER-015 已按这一选择统一，不新增状态、兼容或 migration gate。
@@ -129,8 +131,9 @@
 - [x] 明确区分完整通过、部分证据和未取得证据。
 - [ ] VER-001 fresh setup 仍按用户决定不重跑；因此 VER-002、VER-006 的必需前置仍缺。
 - [ ] VER-013 双宿主已完成归档选择与上传边界，但两次 live wait 均 pending，仍缺 Pro 解压 100 文件、全部 marker 与摘要。
+- [ ] 新完成检测恢复必须在修复后复用 Host A task/turn 只调用一次有限 `wait`，证明只 reload 一次、identity 不变且 reload 后正常 Copy/Stop 条件成立；自动化测试不能替代该 live VER-004 证据。
 - [x] `0ccb41a` 的 repeated-close P1 修复已由 `task_d8758885857a` 的同一 reviewer conversation 通过 re-review task `task_0b1df9dbb32c` 接受，并以 status `msg_93650f033b36` 明确关闭。
 
 ## 8. 最终判断
 
-根 Review F1–F5、pending-error 独立 Review 与 repeated-close P1 同一 reviewer conversation 复审均已关闭；VER-004、VER-007、VER-008、VER-009 与 VER-014 的严格证据已补齐，VER-013 仍缺 Pro 终态。IMP-002、IMP-004、IMP-005、IMP-007、IMP-008 为 `done`；IMP-001 因 VER-001/002、IMP-003 因 VER-013、IMP-006 因 VER-006 而保持 `implemented`。完整规格仍不能最终验收，`check --final` 必须如实反映这些缺口。
+根 Review F1–F5、pending-error 独立 Review 与 repeated-close P1 同一 reviewer conversation 复审均已关闭；新完成检测恢复尚无独立 Review 或修复后 live VER-004，Host A 同一 turn 也尚未取得 Pro 终态。IMP-004 与 IMP-008 因 Spec 变更重新打开，不能沿用旧 Review 或完成结论；IMP-001、IMP-003、IMP-006 的既有缺口不变。完整规格仍不能最终验收，`check --final` 必须如实反映这些缺口。

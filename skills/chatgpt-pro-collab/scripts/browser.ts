@@ -1476,32 +1476,92 @@ function observationScript(expectedConversationId: string, observationWindowMs: 
     const turnSelector = '[data-testid^="conversation-turn-"][data-turn]';
     const copySelector = '[data-testid="copy-turn-action-button"]';
     let assistantIndex = -1;
+    let assistantTurnId = null;
     let stableCompletedPolls = 0;
+    let stuckAssistantTurnId = null;
+    let stuckContent = null;
+    let stableStuckPolls = 0;
+    let reloadedAssistantTurnId = null;
     let polls = 0;
-    while (stableCompletedPolls < 6 && polls < 10 && Date.now() < observationDeadline) {
+    while (stableCompletedPolls < 6 && polls < 24 && Date.now() < observationDeadline) {
       polls += 1;
-      const candidateIndex = await page.locator(turnSelector).evaluateAll((elements) => {
+      const candidate = await page.locator(turnSelector).evaluateAll((elements) => {
         let latestUser = -1;
         for (let index = 0; index < elements.length; index += 1) {
           if (elements[index].getAttribute('data-turn') === 'user') latestUser = index;
         }
-        if (latestUser < 0 || latestUser + 1 >= elements.length) return -1;
+        if (latestUser < 0 || latestUser + 1 >= elements.length) return null;
         const assistant = elements[latestUser + 1];
-        if (assistant.getAttribute('data-turn') !== 'assistant') return -1;
+        if (assistant.getAttribute('data-turn') !== 'assistant') return null;
+        const turnId = assistant.getAttribute('data-testid');
+        if (turnId === null || !turnId.startsWith('conversation-turn-')) return null;
         const copy = assistant.querySelectorAll('[data-testid="copy-turn-action-button"]');
-        return copy.length === 1 && copy[0] instanceof HTMLElement && copy[0].getClientRects().length > 0
-          ? latestUser + 1
-          : -1;
+        const copyVisible =
+          copy.length === 1 && copy[0] instanceof HTMLElement && copy[0].getClientRects().length > 0;
+        return { index: latestUser + 1, turnId, content: assistant.textContent ?? '', copyVisible };
       });
       const stop = page.getByRole('button', { name: 'Stop answering', exact: true });
       const stopVisible = await stop.count() > 0 && await stop.first().isVisible();
-      if (candidateIndex >= 0 && !stopVisible) {
-        if (candidateIndex !== assistantIndex) stableCompletedPolls = 0;
-        assistantIndex = candidateIndex;
+      if (
+        candidate !== null &&
+        reloadedAssistantTurnId !== null &&
+        candidate.turnId !== reloadedAssistantTurnId
+      ) {
+        throw new Error('target assistant turn changed while recovering stuck completion indicator');
+      }
+      if (candidate?.copyVisible === true && !stopVisible) {
+        if (candidate.index !== assistantIndex || candidate.turnId !== assistantTurnId) stableCompletedPolls = 0;
+        assistantIndex = candidate.index;
+        assistantTurnId = candidate.turnId;
         stableCompletedPolls += 1;
       } else {
         assistantIndex = -1;
+        assistantTurnId = null;
         stableCompletedPolls = 0;
+      }
+      if (candidate?.copyVisible === true && stopVisible) {
+        if (candidate.turnId === stuckAssistantTurnId && candidate.content === stuckContent) {
+          stableStuckPolls += 1;
+        } else {
+          stuckAssistantTurnId = candidate.turnId;
+          stuckContent = candidate.content;
+          stableStuckPolls = 1;
+        }
+      } else {
+        stuckAssistantTurnId = null;
+        stuckContent = null;
+        stableStuckPolls = 0;
+      }
+      if (candidate !== null && stableStuckPolls === 6) {
+        const reloadKey =
+          'chatgpt-pro-collab:completion-reload:' + expectedConversationId + ':' + candidate.turnId;
+        const shouldReload = await page.evaluate((key) => {
+          if (sessionStorage.getItem(key) === '1') return false;
+          sessionStorage.setItem(key, '1');
+          return true;
+        }, reloadKey);
+        if (shouldReload) {
+          reloadedAssistantTurnId = candidate.turnId;
+          await page.reload({ waitUntil: 'domcontentloaded' });
+          const reloadedUrl = await page.evaluate(() => {
+            return { hostname: location.hostname, pathname: location.pathname };
+          });
+          const reloadedMatch = /^\\/c\\/([^/?#]+)\\/?$/.exec(reloadedUrl.pathname);
+          if (
+            reloadedUrl.hostname !== 'chatgpt.com' ||
+            reloadedMatch === null ||
+            reloadedMatch[1] !== expectedConversationId
+          ) {
+            throw new Error('conversation identity changed while recovering stuck completion indicator');
+          }
+          assistantIndex = -1;
+          assistantTurnId = null;
+          stableCompletedPolls = 0;
+          stuckAssistantTurnId = null;
+          stuckContent = null;
+          stableStuckPolls = 0;
+          continue;
+        }
       }
       if (stableCompletedPolls < 6 && Date.now() < observationDeadline) {
         await page.waitForTimeout(Math.min(500, Math.max(1, observationDeadline - Date.now())));

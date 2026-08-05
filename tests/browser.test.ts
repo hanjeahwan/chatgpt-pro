@@ -19,6 +19,7 @@ import {
 } from '../skills/chatgpt-pro-collab/scripts/session.ts';
 import { StateStore } from '../skills/chatgpt-pro-collab/scripts/state.ts';
 import { artifactPageFixture, type ArtifactPageOptions } from './support/artifact-page-fixture.ts';
+import { observationPageFixture, type ObservationPageOptions } from './support/observation-page-fixture.ts';
 
 const protocol = 'chatgpt-pro-collab/v1';
 
@@ -372,7 +373,12 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     });
     expect(fixture.invocations[1]?.signal).toBe(controller.signal);
     expect(observationSource).toContain('stableCompletedPolls < 6');
+    expect(observationSource).toContain('stableStuckPolls === 6');
+    expect(observationSource).toContain("sessionStorage.getItem(key) === '1'");
+    expect(observationSource).toContain("page.reload({ waitUntil: 'domcontentloaded' })");
+    expect(observationSource).toContain('target assistant turn changed while recovering stuck completion indicator');
     expect(observationSource).toContain("kind: 'observe', status: 'pending'");
+    expect(observationSource).not.toContain('stop.click');
     expect(captureSource).toContain('[data-testid="copy-turn-action-button"]');
     expect(captureSource).toContain('navigator.clipboard');
     expect(captureSource).toContain("item.types.includes('text/html')");
@@ -388,6 +394,102 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     expect(captureSource).not.toContain('new URL(page.url())');
     expectPageFunctionSyntax(observationSource);
     expectPageFunctionSyntax(captureSource);
+  });
+
+  it('keeps the unchanged normal completion path free of reloads', async () => {
+    const fixture = await executableObservationBrowserFixture({ stopVisibleBeforeReload: false });
+
+    await expect(fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 5000)).resolves.toEqual({
+      status: 'completed',
+      conversationId: 'conversation-a',
+      conversationUrl: 'https://chatgpt.com/c/conversation-a',
+    });
+    expect(fixture.reloadCount()).toBe(0);
+    expect(
+      fixture.events.filter((event) => {
+        return event.startsWith('poll:');
+      }),
+    ).toHaveLength(6);
+  });
+
+  it('reloads one stable target with a stuck Stop indicator and then requires normal completion', async () => {
+    const fixture = await executableObservationBrowserFixture({
+      stopVisibleBeforeReload: true,
+      stopVisibleAfterReload: false,
+    });
+
+    await expect(fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 5000)).resolves.toEqual({
+      status: 'completed',
+      conversationId: 'conversation-a',
+      conversationUrl: 'https://chatgpt.com/c/conversation-a',
+    });
+    expect(fixture.reloadCount()).toBe(1);
+    expect(
+      fixture.events.filter((event) => {
+        return event === 'reload';
+      }),
+    ).toHaveLength(1);
+    expect(
+      fixture.events.filter((event) => {
+        return event.startsWith('storage:');
+      }),
+    ).toHaveLength(1);
+    expect(fixture.events.slice(fixture.events.indexOf('reload') + 1)).toContain('stop:false');
+  });
+
+  it('does not reload while the target assistant content is still changing', async () => {
+    const fixture = await executableObservationBrowserFixture({
+      contentBeforeReloadByPoll: Array.from({ length: 24 }, (_value, index) => {
+        return `streaming-${index}`;
+      }),
+      stopVisibleBeforeReload: true,
+    });
+
+    await expect(fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 5000)).resolves.toEqual({
+      status: 'pending',
+    });
+    expect(fixture.reloadCount()).toBe(0);
+  });
+
+  it('reloads a persistently stuck target at most once across later observations and stays pending', async () => {
+    const fixture = await executableObservationBrowserFixture({
+      stopVisibleBeforeReload: true,
+      stopVisibleAfterReload: true,
+    });
+
+    await expect(fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 5000)).resolves.toEqual({
+      status: 'pending',
+    });
+    await expect(fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 5000)).resolves.toEqual({
+      status: 'pending',
+    });
+    expect(fixture.reloadCount()).toBe(1);
+    expect(
+      fixture.events.filter((event) => {
+        return event.startsWith('storage:');
+      }),
+    ).toHaveLength(1);
+  });
+
+  it.each([
+    {
+      label: 'canonical conversation',
+      options: { stopVisibleBeforeReload: true, conversationIdAfterReload: 'conversation-b' },
+      message: 'conversation identity changed while recovering stuck completion indicator',
+    },
+    {
+      label: 'target assistant turn',
+      options: { stopVisibleBeforeReload: true, assistantTurnIdAfterReload: 'conversation-turn-99' },
+      message: 'target assistant turn changed while recovering stuck completion indicator',
+    },
+  ])('rejects a changed $label after stuck-indicator reload', async ({ options, message }) => {
+    const fixture = await executableObservationBrowserFixture(options);
+
+    await expect(fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 5000)).rejects.toMatchObject({
+      code: 'PLAYWRIGHT_CONTRACT_DRIFT',
+      message: expect.stringContaining(message),
+    });
+    expect(fixture.reloadCount()).toBe(1);
   });
 
   it('maps one recorded sandbox target to an exact download event and task-owned save path', async () => {
@@ -815,6 +917,51 @@ async function executableBrowserFixture(options: ArtifactPageOptions) {
     }
   });
   return { browser, events: pageFixture.events, invocations, paths, root };
+}
+
+/**
+ * Creates a browser runner that executes generated completion observation against a page fixture.
+ *
+ * @param options Target identity, content, Copy, and Stop state before and after reload.
+ * @returns Browser, captured invocations, ordered page events, and reload counter.
+ * @throws {Error} If the fixture directory or generated script cannot be read.
+ */
+async function executableObservationBrowserFixture(options: ObservationPageOptions) {
+  const root = await mkdtemp(join(tmpdir(), 'collab-observation-browser-'));
+  const paths = collabPaths(root);
+  await ensureCollabDirectories(paths);
+  const invocations: BrowserCommandInvocation[] = [];
+  const pageFixture = observationPageFixture(options);
+  let childPid = 9500;
+  const browser = new PlaywrightBrowser(paths, root, async (invocation) => {
+    invocations.push(invocation);
+    const invocationChildPid = childPid;
+    childPid += 1;
+    invocation.onChildSpawned?.(invocationChildPid);
+    try {
+      invocation.beforeCommandRelease?.();
+      invocation.onCommandStarted?.();
+      invocation.onCommandSpawned?.(invocationChildPid + 1000);
+      const source = await scriptForInvocation(invocation);
+      const runPageFunction = new Function(`return (${source})`)() as (page: object) => Promise<string>;
+      try {
+        const result = await runPageFunction(pageFixture.page);
+        return output(`### Ran Playwright code\n${JSON.stringify(result)}\n`);
+      } catch (error) {
+        return output(`### Error\n${error instanceof Error ? error.message : String(error)}\n`);
+      }
+    } finally {
+      invocation.onChildExited?.(invocationChildPid);
+    }
+  });
+  return {
+    browser,
+    events: pageFixture.events,
+    invocations,
+    reloadCount() {
+      return pageFixture.reloadCount();
+    },
+  };
 }
 
 /**

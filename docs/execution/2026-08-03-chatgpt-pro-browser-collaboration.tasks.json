@@ -1,12 +1,12 @@
 {
   "spec": "docs/specs/2026-08-03-chatgpt-pro-browser-collaboration.md",
-  "specDigest": "sha256:66684225f532a8bf39bd4ae4b4d29dbff63f9312b59cca0cacc1bf1718aa2094",
-  "contextDigest": "sha256:cc8c3520a8d289995c545bd85f6209ceefbf4658b7dd96a55fdd99db35eb8251",
+  "specDigest": "sha256:f4d32e1b56791a2724a90c9e8d2c742e8d3dff9d094c0b9247269a2a28be11f5",
+  "contextDigest": "sha256:5f1c657f1cf9c1a2062dd6d83fac99aed1980192677aa90e682a0ea23fb9daad",
   "sourceDigests": {
     "BEH-001": "sha256:81fc722eeffe25bb65e2eecd66fa5632133c4fa1cd9fc193ee60814d1fb3b0ae",
     "BEH-002": "sha256:a6b90a57305e58f15ae9b0d5868fe3182950dfd2743a0b335e00ffde43be7e43",
     "BEH-003": "sha256:3a33a5375fe8d0f24241e22a298ddce5dca588b827a649be9743ffb1edf10fd0",
-    "BEH-004": "sha256:a515286b96fcd1ab3cdd262228d95dc7444771de15891c889634d984c6492532",
+    "BEH-004": "sha256:face7fe8cb1930b897da630d9bb13caf2eb4875cae9f08566a544a9a085f4ecf",
     "BEH-005": "sha256:3a92560c8d7f89bef76669ba25c88c31182da0ea2a22052184252c32414d1bc3",
     "BEH-006": "sha256:42e460ac18db205b5071bba3fa4757244153e186168bd0038cda5cd332b16648",
     "BEH-007": "sha256:06557b88fb956877901122ac16e98134aba1cbe59c709a3e919dbbe494e132fe",
@@ -18,7 +18,7 @@
     "VER-001": "sha256:c05d8ecd99ba7277afc64f21d661ae5ca77f4542a50ba50b8534789b0817db63",
     "VER-002": "sha256:55e0c5659c76a100be65c593db9c78352f69bfe112966e638c15e54df6d82489",
     "VER-003": "sha256:7707532a8944369bb139c708146758ef058c9da5d03ecf55befb871eb31ef7ed",
-    "VER-004": "sha256:2eee5cbb50ffdd3f59eda97e4e6bf92e82f2a995e41c84c0c3e1186c3ce79637",
+    "VER-004": "sha256:4d2ce1692ba67c881c442b4f88009e1952e1c15642ae750ad4c7c6c63e6965a1",
     "VER-005": "sha256:5b723ada9786cd3d392edffec5f5fa356489ad9f61d0379b925bcc889c8d6368",
     "VER-006": "sha256:fa0e9fcceb838cd692b2feac9ed537e654047668832243f3f589ac1cb9c1eaca",
     "VER-007": "sha256:8d53c9eb45049b4cb12c69d304a12b925da0c1e09a029e66b54e5a80d6305073",
@@ -110,45 +110,17 @@
     {
       "id": "IMP-004",
       "title": "实现单次 wait 的内部观察与原始文字捕获",
-      "status": "done",
+      "status": "in_progress",
       "covers": ["BEH-004", "BEH-011"],
       "verifies": ["VER-004", "VER-014"],
       "dependsOn": ["IMP-001", "IMP-002", "IMP-003"],
       "scope": ["CLI", "Browser boundary", "Transcript/artifact store"],
-      "evidence": {
-        "commits": [
-          "8f10d2c8aca3bd123594071bd7a945ae9972c948",
-          "fe6c221706fbfe9a87844b064038927e0fcaf029",
-          "ba09c01c6c8d7d343fc3108655047c923da2a8c5",
-          "7255f52a0f39a96f332a12f8ece34ed1890217e8"
-        ],
-        "checks": [
-          "pnpm format:check",
-          "pnpm lint",
-          "pnpm typecheck",
-          "pnpm test",
-          "git diff --check",
-          "live 2026-08-05: response.md preserved heading, fenced TypeScript, and exact response text; wait returned one terminal result per invocation",
-          "pnpm exec vitest --run tests/collab.test.ts: 23 tests passed; pre-freeze pending retry, 1ms delayed failure, never-resolving capture abort, pre-deadline browser error preservation, and post-freeze capturing timeout covered",
-          "Review task_8de74c002256 reset F2 to still-open: the host watchdog covered captureResponse but not post-freeze downloadArtifact, so a never-settling download retained the wait operation lease",
-          "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts tests/browser-command-gate.test.ts: 58 tests passed; response and every artifact share one monotonic capture deadline, delayed and never-settling downloads return CAPTURE_TIMEOUT, gate/command processes exit, and the operation lease is reacquirable",
-          "Final Review reconciliation superseded by current evidence: VER-004 and VER-014 now pass, while the post-Review fix 7255f52a0f39a96f332a12f8ece34ed1890217e8 still requires independent Review closure",
-          "VER-004 live task a07ea1df-5f57-43b8-961a-5acaebb65c70 turn 9fe0a34a-4f4e-48fa-8c1e-0396a59ae446: one wait 600000/300000 completed; generated page capture confirmed target assistant, Stop absent, unique visible Copy, and page-internal clipboard interception; 4,121 Copy bytes equaled response.md SHA-256 62494e1f396c1de8c4477a467663a53921d33e1b06981e22cc9b316ddbd8a54a; artifactPaths was empty and repeated wait preserved path/inode/mtime/hash",
-          "VER-014 independent host task_8c09b3657e50 status msg_e39e894f1103: completed, pending, CAPTURE_TIMEOUT, and BROWSER_COMMAND_FAILED each used one real Skill/CLI wait with 0 host browser polls, page checks 8/3/6/0, no pre-terminal stdout/stderr, one terminal JSON, and fully exited CLI/gate/guarded command PIDs",
-          "after 7255f52a0f39a96f332a12f8ece34ed1890217e8, targeted VER-014 fixture task be5fa062-8eea-4f74-a9f4-75986e4852ca used one wait 1100/2000, performed three generated page-function checks, returned one pending terminal, retained response_path=NULL/artifact_set_recorded=0/error=NULL, and released every operation lease field",
-          "Independent Review task_1775af5d8e88 accepted 7255f52a0f39a96f332a12f8ece34ed1890217e8 with no P1/P2/P3 finding; status msg_125124b44bcc and worker_done msg_2072e50a65b2 recorded pnpm format:check, lint, typecheck, test (90), and git diff --check passing",
-          "Current reconciliation: done because VER-004 and VER-014 pass, root Review task_f83d3a0d427b is closed, and independent Review task_1775af5d8e88 accepted the post-Review pending-error fix"
-        ],
-        "reviews": [
-          "Root Review task_f83d3a0d427b; reviewer conversation/session 019fcdfa-ef5f-7410-a245-6bbaf7be52dd remained the same across initial carrier terminal term_bbb86a6a-edf1-4303-9b32-a690e443e75b and resumed carrier terminal term_7d1b0d8c-5693-4670-8a3f-488148223680; final closure status msg_19d1aefb2cb6 and worker_done msg_e00d44341bfe: F1-F5 all closed, no independent candidate",
-          "Independent Review task_1775af5d8e88 on reviewer terminal/session term_06b82156-4ca3-40e8-aa18-cd01a4a74ed9; status msg_125124b44bcc and worker_done msg_2072e50a65b2: commit 7255f52 accepted with no P1/P2/P3 finding"
-        ]
-      }
+      "evidence": { "commits": [], "checks": [], "reviews": [] }
     },
     {
       "id": "IMP-005",
       "title": "捕获返回文件并支持可恢复发布",
-      "status": "done",
+      "status": "pending",
       "covers": ["BEH-012"],
       "verifies": ["VER-015"],
       "dependsOn": ["IMP-002", "IMP-004"],
@@ -188,7 +160,7 @@
     {
       "id": "IMP-006",
       "title": "完成同会话多轮与跨任务真实并发",
-      "status": "implemented",
+      "status": "pending",
       "covers": ["BEH-005", "BEH-006"],
       "verifies": ["VER-005", "VER-006"],
       "dependsOn": ["IMP-003", "IMP-004", "IMP-005"],
@@ -260,57 +232,12 @@
     {
       "id": "IMP-008",
       "title": "完成中断恢复矩阵与全量运行基线验证",
-      "status": "done",
+      "status": "pending",
       "covers": ["BEH-002", "BEH-004", "BEH-006", "BEH-007", "BEH-012"],
       "verifies": ["VER-007", "VER-010", "VER-011", "VER-012"],
       "dependsOn": ["IMP-001", "IMP-002", "IMP-003", "IMP-004", "IMP-005", "IMP-006", "IMP-007"],
       "scope": ["CLI", "State store", "Transcript/artifact store", "Test suite"],
-      "evidence": {
-        "commits": [
-          "0070235444624d30daeb38f232fe47c08707c04b",
-          "56d21d9ed42694659bce992b7bf88ed33ad37014",
-          "ff87186162b8558e40af013aac4d81826c345ca7",
-          "fe6c221706fbfe9a87844b064038927e0fcaf029",
-          "ba09c01c6c8d7d343fc3108655047c923da2a8c5",
-          "7255f52a0f39a96f332a12f8ece34ed1890217e8"
-        ],
-        "checks": [
-          "pnpm format:check",
-          "pnpm lint",
-          "pnpm typecheck",
-          "pnpm test",
-          "git diff --check",
-          "node v25.9.0 and npx -y node@22.19.0: node:sqlite smoke test and collab.ts help",
-          "npx -y @playwright/cli@0.1.17 --help",
-          "absolute collab.ts help from a temporary host directory without package.json",
-          "VER-011 reset to not passed after Review task_f83d3a0d427b found no real capture checkpoint subprocess kill/reopen matrix",
-          "pnpm exec vitest --run tests/state-concurrency.test.ts: 9 tests passed, including real child-process SIGKILL/reopen checkpoints after frozen capturing state, response publication, artifact publication before state update, partial artifact completion, and concurrent close",
-          "node .agents/skills/plan-spec-implementation/scripts/spec-tasks.ts diff --spec docs/specs/2026-08-03-chatgpt-pro-browser-collaboration.md --ledger docs/execution/2026-08-03-chatgpt-pro-browser-collaboration.tasks.json",
-          "node .agents/skills/plan-spec-implementation/scripts/spec-tasks.ts check --ready --spec docs/specs/2026-08-03-chatgpt-pro-browser-collaboration.md --ledger docs/execution/2026-08-03-chatgpt-pro-browser-collaboration.tasks.json",
-          "pnpm exec vitest --run tests/state-concurrency.test.ts: 10 tests passed, including SIGKILL after the first artifact insert with SQLite rollback to a complete pending state, the post-freeze recovery matrix, and concurrent close",
-          "pnpm exec vitest --run tests/spec-tasks.test.ts tests/state-concurrency.test.ts tests/browser.test.ts tests/collab.test.ts: 68 tests passed after F1/F2 without invalidating F3/F4/F5",
-          "pnpm test: 8 test files and 86 tests passed on fe6c221706fbfe9a87844b064038927e0fcaf029",
-          "historical fe6c221706fbfe9a87844b064038927e0fcaf029 checkpoint: spec-tasks check --final exited 1 because IMP-001 through IMP-008 were then implemented pending Review; no review evidence or done status was fabricated at that checkpoint",
-          "Review task_8de74c002256 invalidated the VER-015 overall pass claim until the shared capture deadline also bounds artifact downloads and releases their operation lease",
-          "pnpm exec vitest --run tests/state-concurrency.test.ts: 10 tests passed after artifact watchdog propagation; the SQLite transaction and subprocess recovery matrix remains valid",
-          "pnpm test: 8 test files and 89 tests passed on ba09c01c6c8d7d343fc3108655047c923da2a8c5",
-          "pnpm collab -- help and absolute collab.ts help from a temporary directory without package.json both exited 0 and retained independent observationWindowMs/captureTimeoutMs parameters",
-          "historical ba09c01c6c8d7d343fc3108655047c923da2a8c5 checkpoint: spec-tasks check --final exited 1 because all IMP tasks were implemented and Review evidence was not yet recorded; this was superseded by the root Review closure reconciliation",
-          "Final Review reconciliation superseded by current evidence: VER-007, VER-010, VER-011, and VER-012 now pass, while the post-Review fix 7255f52a0f39a96f332a12f8ece34ed1890217e8 still requires independent Review closure",
-          "Historical ledger checks after the root Review closure: spec-tasks diff reported no Spec/context drift and check --ready passed; check --final then exited 1 because IMP-001, IMP-003, IMP-004, IMP-006, IMP-007, and IMP-008 retained their recorded VER or independent-Review gaps",
-          "VER-007 live task fc4bad58-0475-4725-9e03-662255b55adb turns 0af0b2c4-88ec-43ae-8a26-bf6322330720 and 1daef080-027a-473c-be60-f19edbe4958a: the same host prompt and attachment paths plus same-result.txt name were reused; after host files changed and task closed, fresh CLI/SQLite processes reread stable per-turn prompt copies, responses, artifact paths/inodes/mtime/hashes, and found zero session copies of the attachment body marker",
-          "7255f52a0f39a96f332a12f8ece34ed1890217e8 fixes a live-discovered audit inconsistency by clearing the provisional unknown-submission error in the same markTurnPending transaction; tests/state.test.ts and the direct runCli pending test assert status=pending/error=NULL",
-          "current HEAD full checks before the close-gate P1 repair: pnpm format:check, pnpm lint, pnpm typecheck, pnpm test (8 files/90 tests), pnpm exec vitest --run tests/state-concurrency.test.ts (10 subprocess recovery/concurrency tests), pnpm collab -- help, absolute collab.ts help from a manifest-free host, and git diff --check all passed",
-          "Independent Review task_1775af5d8e88 accepted 7255f52a0f39a96f332a12f8ece34ed1890217e8 with no P1/P2/P3 finding; status msg_125124b44bcc and worker_done msg_2072e50a65b2 recorded all repository checks passing",
-          "after 0ccb41a432f0608cbf0bfba5a4c20fa964ac4ebc, VER-010/VER-011/VER-012 checks passed: pnpm format:check, lint, typecheck, test (8 files/91 tests), state-concurrency (10 subprocess tests), CLI and manifest-free help, Node v25.9.0/v22.19.0 sqlite and TypeScript entry smoke tests, Playwright CLI help, and git diff --check",
-          "Current reconciliation: done because VER-007, VER-010, VER-011, and VER-012 pass, root Review task_f83d3a0d427b is closed, and independent Review task_1775af5d8e88 accepted the pending-error fix; the close P1 belongs to IMP-007",
-          "final ledger checks after repeated-close P1 review closure: spec-tasks diff reported specChanged=false/contextChanged=false with no impacted tasks; check --ready returned ok=true/readiness=ready for 12 behaviors, 15 verifications, and 8 tasks; check --final exited 1 and named exactly IMP-001, IMP-003, and IMP-006 because each remains implemented rather than done/cancelled"
-        ],
-        "reviews": [
-          "Root Review task_f83d3a0d427b; reviewer conversation/session 019fcdfa-ef5f-7410-a245-6bbaf7be52dd remained the same across initial carrier terminal term_bbb86a6a-edf1-4303-9b32-a690e443e75b and resumed carrier terminal term_7d1b0d8c-5693-4670-8a3f-488148223680; final closure status msg_19d1aefb2cb6 and worker_done msg_e00d44341bfe: F1-F5 all closed, no independent candidate",
-          "Independent Review task_1775af5d8e88 on reviewer terminal/session term_06b82156-4ca3-40e8-aa18-cd01a4a74ed9; status msg_125124b44bcc and worker_done msg_2072e50a65b2: commit 7255f52 accepted with no P1/P2/P3 finding"
-        ]
-      }
+      "evidence": { "commits": [], "checks": [], "reviews": [] }
     }
   ]
 }
