@@ -1200,9 +1200,6 @@ function protocolFailureDetail(stdout: string): string {
 /**
  * Builds the indefinite setup login gate from directly observable page state.
  *
- * @param localTurnId Local durable turn identity used to isolate page recovery state.
- * @param observationWindowMs Remaining finite observation budget.
- * @param stallGraceMs Monotonic page-time grace before attempting the one recovery reload.
  * @returns A Playwright page function source.
  * @throws {Error} This pure source builder does not throw.
  */
@@ -1498,6 +1495,9 @@ function observationScript(
     if (url.hostname !== 'chatgpt.com' || match === null || match[1] !== expectedConversationId) {
       throw new Error('conversation identity does not match the pending turn');
     }
+    const targetBindingKey =
+      'chatgpt-pro-collab:completion-target-binding:' + expectedConversationId + ':' + localTurnId;
+    let boundAssistantTurnId = await page.evaluate((key) => sessionStorage.getItem(key), targetBindingKey);
     const turnSelector = '[data-testid^="conversation-turn-"][data-turn]';
     const copySelector = '[data-testid="copy-turn-action-button"]';
     let assistantIndex = -1;
@@ -1531,19 +1531,28 @@ function observationScript(
       ) {
         throw new Error('target assistant turn changed while recovering stuck completion indicator');
       }
-      if (candidate?.copyVisible === true && !stopVisible) {
-        if (candidate.index !== assistantIndex || candidate.turnId !== assistantTurnId) stableCompletedPolls = 0;
-        assistantIndex = candidate.index;
-        assistantTurnId = candidate.turnId;
+      const targetCandidate =
+        boundAssistantTurnId !== null && candidate?.turnId !== boundAssistantTurnId ? null : candidate;
+      if (targetCandidate?.copyVisible === true && !stopVisible) {
+        if (targetCandidate.index !== assistantIndex || targetCandidate.turnId !== assistantTurnId) {
+          stableCompletedPolls = 0;
+        }
+        assistantIndex = targetCandidate.index;
+        assistantTurnId = targetCandidate.turnId;
         stableCompletedPolls += 1;
       } else {
         assistantIndex = -1;
         assistantTurnId = null;
         stableCompletedPolls = 0;
       }
-      if (candidate?.copyVisible === true && stopVisible) {
+      if (targetCandidate?.copyVisible === true && stopVisible) {
         const stallKey =
-          'chatgpt-pro-collab:completion-stall:' + expectedConversationId + ':' + localTurnId + ':' + candidate.turnId;
+          'chatgpt-pro-collab:completion-stall:' +
+          expectedConversationId +
+          ':' +
+          localTurnId +
+          ':' +
+          targetCandidate.turnId;
         const pageNow = await page.evaluate(() => performance.timeOrigin + performance.now());
         const stallState = await page.evaluate((key) => {
           const raw = sessionStorage.getItem(key);
@@ -1556,18 +1565,26 @@ function observationScript(
           }
         }, stallKey);
         const stableSince =
-          stallState?.turnId === candidate.turnId && stallState.content === candidate.content
+          stallState?.turnId === targetCandidate.turnId && stallState.content === targetCandidate.content
             ? stallState.stableSince
             : pageNow;
         await page.evaluate(
           (argument) => {
             sessionStorage.setItem(argument.key, JSON.stringify(argument.state));
           },
-          { key: stallKey, state: { turnId: candidate.turnId, content: candidate.content, stableSince } },
+          {
+            key: stallKey,
+            state: { turnId: targetCandidate.turnId, content: targetCandidate.content, stableSince },
+          },
         );
         if (pageNow - stableSince >= stallGraceMs) {
           const reloadKey =
-            'chatgpt-pro-collab:completion-reload:' + expectedConversationId + ':' + localTurnId + ':' + candidate.turnId;
+            'chatgpt-pro-collab:completion-reload:' +
+            expectedConversationId +
+            ':' +
+            localTurnId +
+            ':' +
+            targetCandidate.turnId;
           const remaining = Math.max(0, observationDeadline - Date.now());
           if (remaining <= 1) return JSON.stringify({ protocol: '${PROTOCOL}', kind: 'observe', status: 'pending' });
           const shouldReload = await page.evaluate((key) => {
@@ -1575,8 +1592,17 @@ function observationScript(
             sessionStorage.setItem(key, '1');
             return true;
           }, reloadKey);
+          if (!shouldReload && boundAssistantTurnId === null) {
+            return JSON.stringify({ protocol: '${PROTOCOL}', kind: 'observe', status: 'pending' });
+          }
           if (shouldReload) {
-            reloadedAssistantTurnId = candidate.turnId;
+            reloadedAssistantTurnId = targetCandidate.turnId;
+            await page.evaluate(
+              (argument) => {
+                sessionStorage.setItem(argument.key, argument.turnId);
+              },
+              { key: targetBindingKey, turnId: targetCandidate.turnId },
+            );
             try {
               await page.reload({ waitUntil: 'domcontentloaded', timeout: remaining });
               const reloadedUrl = await page.evaluate(() => {
@@ -1599,6 +1625,7 @@ function observationScript(
             assistantIndex = -1;
             assistantTurnId = null;
             stableCompletedPolls = 0;
+            boundAssistantTurnId = targetCandidate.turnId;
             continue;
           }
         }
@@ -1685,6 +1712,13 @@ function captureScript(
       suppliedAssistantTurnId ?? (await page.evaluate((key) => sessionStorage.getItem(key), targetTurnKey));
     if (expectedAssistantTurnId === null) {
       throw new Error('page contract drift: completed assistant identity was not retained');
+    }
+    const boundAssistantTurnId = await page.evaluate(
+      (key) => sessionStorage.getItem(key),
+      'chatgpt-pro-collab:completion-target-binding:' + expectedConversationId + ':' + localTurnId,
+    );
+    if (boundAssistantTurnId !== null && boundAssistantTurnId !== expectedAssistantTurnId) {
+      throw new Error('page contract drift: captured assistant differs from the bound target turn');
     }
     const copySelector = '[data-testid="copy-turn-action-button"]';
     const assistantIndices = await page.locator(turnSelector).evaluateAll((elements, targetTurnId) => {

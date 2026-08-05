@@ -524,6 +524,52 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     expect(fixture.reloadCount()).toBe(0);
   });
 
+  it('keeps the pre-reload target bound across a delayed successful reload and next observation', async () => {
+    const fixture = await executableObservationBrowserFixture({
+      stopVisibleBeforeReload: true,
+      stopVisibleAfterReload: false,
+      pageClockStepMs: 6_000,
+      reloadDelayMs: 10,
+      assistantTurnIdAfterReloadAfterPolls: 12,
+    });
+
+    await expect(
+      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 100),
+    ).resolves.toMatchObject({
+      status: 'completed',
+      assistantTurnId: 'conversation-turn-2',
+    });
+    await expect(
+      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 100),
+    ).resolves.toEqual({ status: 'pending' });
+    expect(fixture.reloadCount()).toBe(1);
+    expect(fixture.reloadTimeouts()[0]).toBeLessThanOrEqual(100);
+    expect(
+      fixture.events.some((event) => {
+        return event.startsWith('storage:chatgpt-pro-collab:completion-target-binding:');
+      }),
+    ).toBe(true);
+  });
+
+  it('does not cross the observation deadline during a slow reload and retries the bound target', async () => {
+    const fixture = await executableObservationBrowserFixture({
+      stopVisibleBeforeReload: true,
+      stopVisibleAfterReload: true,
+      pageClockStepMs: 6_000,
+      reloadDelayMs: 20,
+    });
+
+    await expect(
+      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 5),
+    ).rejects.toMatchObject({ code: 'PLAYWRIGHT_CONTRACT_DRIFT' });
+    await expect(
+      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 5),
+    ).rejects.toMatchObject({ code: 'PLAYWRIGHT_CONTRACT_DRIFT' });
+    expect(fixture.reloadCount()).toBe(2);
+    expect(fixture.reloadTimeouts()[0]).toBeLessThanOrEqual(5);
+    expect(fixture.reloadTimeouts()[1]).toBeLessThanOrEqual(5);
+  });
+
   it('bounds reload by the observation deadline and rolls back a rejected attempt marker', async () => {
     const fixture = await executableObservationBrowserFixture({
       stopVisibleBeforeReload: true,

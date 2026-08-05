@@ -1,6 +1,7 @@
 export interface ObservationPageOptions {
   readonly assistantTurnIdBeforeReload?: string;
   readonly assistantTurnIdAfterReload?: string;
+  readonly assistantTurnIdAfterReloadAfterPolls?: number;
   readonly contentBeforeReload?: string;
   readonly contentBeforeReloadByPoll?: readonly string[];
   readonly contentAfterReload?: string;
@@ -12,6 +13,7 @@ export interface ObservationPageOptions {
   readonly pageClockStepMs?: number;
   readonly reloadReject?: boolean;
   readonly reloadRejectCount?: number;
+  readonly reloadDelayMs?: number;
 }
 
 export interface ObservationPageFixture {
@@ -39,6 +41,13 @@ export function observationPageFixture(options: ObservationPageOptions = {}): Ob
   let pageClockMs = 0;
 
   const currentAssistantTurnId = (): string => {
+    if (
+      reloaded &&
+      options.assistantTurnIdAfterReloadAfterPolls !== undefined &&
+      polls > options.assistantTurnIdAfterReloadAfterPolls
+    ) {
+      return 'conversation-turn-3';
+    }
     return reloaded
       ? (options.assistantTurnIdAfterReload ?? options.assistantTurnIdBeforeReload ?? 'conversation-turn-2')
       : (options.assistantTurnIdBeforeReload ?? 'conversation-turn-2');
@@ -151,16 +160,25 @@ export function observationPageFixture(options: ObservationPageOptions = {}): Ob
       }
       return stop;
     },
-    reload(reloadOptions?: { readonly timeout?: number }) {
+    async reload(reloadOptions?: { readonly timeout?: number }) {
       reloads += 1;
-      reloaded = true;
-      events.push('reload');
-      reloadTimeouts.push(reloadOptions?.timeout ?? 0);
+      const timeout = reloadOptions?.timeout ?? Number.POSITIVE_INFINITY;
+      reloadTimeouts.push(timeout);
       if (options.reloadReject === true || reloadRejections < (options.reloadRejectCount ?? 0)) {
         reloadRejections += 1;
-        return Promise.reject(new Error(`reload rejected timeout=${reloadOptions?.timeout ?? 'none'}`));
+        throw new Error(`reload rejected timeout=${reloadOptions?.timeout ?? 'none'}`);
       }
-      return Promise.resolve();
+      const delay = options.reloadDelayMs ?? 0;
+      if (delay > timeout) {
+        throw new Error(`reload timed out timeout=${timeout}`);
+      }
+      if (delay > 0) {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, delay);
+        });
+      }
+      reloaded = true;
+      events.push('reload');
     },
     waitForTimeout() {
       return Promise.resolve();
