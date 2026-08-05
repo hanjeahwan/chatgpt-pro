@@ -153,9 +153,12 @@
           "b4743e7802478961e735c202ffc08b77c37b3985 removes recovery-only fixtures/tests, keeps the 50ms resume window, and executes normal completion, persistent-Stop pending, exact T1 with later T2, missing target rejection, and clipboard install/click-write/read/restore paths",
           "ae34b659535db798b0b2b76f56fdc3c9873ea6cf makes the exact-T1 fixture return a distinguishable later-assistant locator, so implicit T2 selection cannot accidentally satisfy the regression",
           "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts: 54 tests passed; pnpm format:check, pnpm lint, pnpm typecheck, pnpm test (8 files/94 tests), and git diff --check passed",
-          "Current reconciliation: implemented; VER-014 and the historical normal-path VER-004 evidence remain recorded, but the changed contract and commits require a new independent Review before done"
+          "Independent Review task_3e0f0281cad7, dispatch ctx_d6b7437bcbe7, reviewer terminal term_c6bb7bb1-bc9e-449a-8207-d68ee996766d, worker_done msg_fc9f4e6c9a9f: ACCEPTED/CLOSED reviewed HEAD eeb27d4dccc8951f59c5bfc8c83d1d5d2cd2a539 with no P1/P2/P3",
+          "Current reconciliation: implemented; the new Review and VER-014 are complete, but current VER-004 remains partial because the preserved normal-path live run predates the related BEH/VER and implementation change, so no post-change live run proves the restored end-to-end contract"
         ],
-        "reviews": []
+        "reviews": [
+          "Independent Review task_3e0f0281cad7, dispatch ctx_d6b7437bcbe7, reviewer terminal term_c6bb7bb1-bc9e-449a-8207-d68ee996766d, closure worker_done msg_fc9f4e6c9a9f: ACCEPTED/CLOSED reviewed HEAD eeb27d4dccc8951f59c5bfc8c83d1d5d2cd2a539 with no P1/P2/P3"
+        ]
       }
     },
     {
@@ -273,7 +276,7 @@
     {
       "id": "IMP-008",
       "title": "完成中断恢复矩阵与全量运行基线验证",
-      "status": "implemented",
+      "status": "done",
       "covers": ["BEH-002", "BEH-004", "BEH-006", "BEH-007", "BEH-012"],
       "verifies": ["VER-007", "VER-010", "VER-011", "VER-012"],
       "dependsOn": ["IMP-001", "IMP-002", "IMP-003", "IMP-004", "IMP-005", "IMP-006", "IMP-007"],
@@ -311,9 +314,12 @@
           "1a731ee3b7798e700491d2e0fe8aabb2a0acd86e and b4743e7802478961e735c202ffc08b77c37b3985 restore the normal completion baseline without changing SQLite, capture deadline, artifact deadline, or interrupt recovery mechanisms",
           "ae34b659535db798b0b2b76f56fdc3c9873ea6cf strengthens the T1/T2 fixture without changing production behavior",
           "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts: 54 tests passed; pnpm format:check, pnpm lint, pnpm typecheck, pnpm test (8 files/94 tests, including 10 state-concurrency subprocess tests), and git diff --check passed",
-          "Current reconciliation: implemented; mapped VER-007/010/011/012 evidence remains valid, but the changed browser/collab baseline requires a new independent Review before done"
+          "Independent Review task_3e0f0281cad7, dispatch ctx_d6b7437bcbe7, reviewer terminal term_c6bb7bb1-bc9e-449a-8207-d68ee996766d, worker_done msg_fc9f4e6c9a9f: ACCEPTED/CLOSED reviewed HEAD eeb27d4dccc8951f59c5bfc8c83d1d5d2cd2a539 with no P1/P2/P3",
+          "Current reconciliation: done because mapped VER-007/010/011/012, implementation/full checks, and the new independent Review are complete; VER-004 remains owned by IMP-004 and does not replace these mapped gates"
         ],
-        "reviews": []
+        "reviews": [
+          "Independent Review task_3e0f0281cad7, dispatch ctx_d6b7437bcbe7, reviewer terminal term_c6bb7bb1-bc9e-449a-8207-d68ee996766d, closure worker_done msg_fc9f4e6c9a9f: ACCEPTED/CLOSED reviewed HEAD eeb27d4dccc8951f59c5bfc8c83d1d5d2cd2a539 with no P1/P2/P3"
+        ]
       }
     }
   ]
