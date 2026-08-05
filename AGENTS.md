@@ -25,12 +25,20 @@
 - **监督式协作**：例如“把任务拆成 A、B、C，交给多个 Agent；你负责监督、等待结果并最终汇总。”使用 `orchestration`
   Skill。
 - **完整任务交接**：例如“把这个任务交给另一个 Agent 完成，你不需要继续跟踪。”使用 `orca-cli` Skill。
-- **普通 Orca 操作**：例如“创建一个 Worktree”“在当前 Worktree 启动新 Agent”或“读取指定 Terminal 的输出。”使用 `orca-
-cli` Skill。
+- **普通 Orca 操作**：例如“创建一个 Worktree”“在当前 Worktree 启动新 Agent”或“读取指定 Terminal 的输出。”使用 `orca-cli` Skill。
 - **边界不明确**：用户仅要求“交给另一个 Agent 或 Worktree”，但没有要求监督、等待或汇总结果时，按完整任务交接处理。
 
-核心判断：任务转交后，当前 Agent 是否继续对执行过程和最终结果负责；继续负责时使用 `orchestration`，转移所有权或仅操
-作 Orca 资源时使用 `orca-cli`。
+核心判断：任务转交后，当前 Agent 是否继续对执行过程和最终结果负责；继续负责时使用 `orchestration`，转移所有权或仅操作 Orca 资源时使用 `orca-cli`。
+
+## Git 与提交
+
+- 新提交使用 Unicode Gitmoji，格式为 `<gitmoji> (<scope>): <summary>`；没有有意义的 scope 时省略 `(<scope>):`。
+- 每个提交只使用一个表示主要意图的 Gitmoji，不再叠加 `feat:`、`fix:`、`docs:` 等类型前缀。
+- 默认保持线性历史：开发分支通过 rebase 同步目标分支，最终只允许 fast-forward 集成。
+- 只有用户明确要求保留分支拓扑，或上游同步必须保留 merge 关系时，才能创建 merge commit。
+- 创建 merge commit 时，在最终报告中说明原因。
+
+按 Spec 实施时，implementation branch 的同步、Review 冻结和集成步骤以 `execute-spec-workflow` Skill 为准。
 
 ## Markdown 文档格式
 
