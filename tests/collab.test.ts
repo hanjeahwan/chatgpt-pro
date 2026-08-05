@@ -863,6 +863,7 @@ class FakeBrowser implements CollabBrowser {
    * @param taskId Task identifier.
    * @param _sessionName Unused named session.
    * @param expectedConversationId Database-bound identity.
+   * @param _localTurnId Unused local turn identity.
    * @param _observationWindowMs Unused finite observation budget.
    * @param observer Task-lease child-process observer.
    * @returns Fake copied response and unchanged conversation.
@@ -872,6 +873,7 @@ class FakeBrowser implements CollabBrowser {
     taskId: string,
     _sessionName: string,
     expectedConversationId: string,
+    _localTurnId: string,
     _observationWindowMs: number,
     observer?: BrowserOperationObserver,
   ) {
@@ -888,6 +890,7 @@ class FakeBrowser implements CollabBrowser {
       status: 'completed' as const,
       conversationId: expectedConversationId,
       conversationUrl: `https://chatgpt.com/c/${expectedConversationId}`,
+      assistantTurnId: 'conversation-turn-2',
     };
   }
 
@@ -897,6 +900,8 @@ class FakeBrowser implements CollabBrowser {
    * @param taskId Task identifier.
    * @param _sessionName Unused named session.
    * @param expectedConversationId Database-bound identity.
+   * @param _localTurnId Unused local turn identity.
+   * @param _expectedAssistantTurnId Unused observed assistant identity.
    * @param _captureTimeoutMs Unused finite capture budget.
    * @param signal Host cancellation used by capture timeout tests.
    * @param observer Task-lease child-process observer.
@@ -907,6 +912,8 @@ class FakeBrowser implements CollabBrowser {
     taskId: string,
     _sessionName: string,
     expectedConversationId: string,
+    _localTurnId: string,
+    _expectedAssistantTurnId: string | null,
     _captureTimeoutMs: number,
     signal: AbortSignal,
     observer?: BrowserOperationObserver,

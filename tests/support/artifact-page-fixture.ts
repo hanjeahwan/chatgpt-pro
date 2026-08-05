@@ -1,6 +1,7 @@
 import { writeFile } from 'node:fs/promises';
 
 export interface ArtifactPageOptions {
+  readonly assistantTurnId?: string;
   readonly responseHtml: string;
   readonly behaviorButtonCount: number;
   readonly artifactRows?: readonly string[];
@@ -39,6 +40,7 @@ interface FixtureElement {
  */
 export function artifactPageFixture(options: ArtifactPageOptions): ArtifactPageFixture {
   const events: string[] = [];
+  const storage = new Map<string, string>();
   const attributes = new WeakMap<object, Map<string, string>>();
   const assistantElement = fixtureElement(attributes, { behaviorButtonCount: options.behaviorButtonCount });
   let resolveDownload: ((download: object) => void) | undefined;
@@ -148,8 +150,11 @@ export function artifactPageFixture(options: ArtifactPageOptions): ArtifactPageF
   };
 
   const turns = [
-    fixtureElement(attributes, { dataTurn: 'user' }),
-    fixtureElement(attributes, { dataTurn: 'assistant' }),
+    fixtureElement(attributes, { dataTurn: 'user', dataTestId: 'conversation-turn-1' }),
+    fixtureElement(attributes, {
+      dataTurn: 'assistant',
+      dataTestId: options.assistantTurnId ?? 'conversation-turn-2',
+    }),
   ];
   const turnLocator = {
     last() {
@@ -160,8 +165,8 @@ export function artifactPageFixture(options: ArtifactPageOptions): ArtifactPageF
     nth(index: number) {
       return index === 1 ? assistant : locatorCollection([]);
     },
-    evaluateAll(callback: unknown) {
-      return Promise.resolve(invoke(callback, turns));
+    evaluateAll(callback: unknown, argument?: unknown) {
+      return Promise.resolve(invoke(callback, turns, argument));
     },
   };
 
@@ -189,6 +194,17 @@ export function artifactPageFixture(options: ArtifactPageOptions): ArtifactPageF
       }
       if (source.includes('globalThis.__chatgptProCollabClipboard.captured')) {
         return Promise.resolve(response);
+      }
+      if (source.includes('sessionStorage.getItem')) {
+        const sessionStorage = {
+          getItem(key: string) {
+            return storage.get(key) ?? (key.includes(':completion-target:') ? 'conversation-turn-2' : null);
+          },
+          setItem(key: string, value: string) {
+            storage.set(key, value);
+          },
+        };
+        return Promise.resolve(withGlobal('sessionStorage', sessionStorage, callback, argument));
       }
       if (source.includes('new DOMParser')) {
         return Promise.resolve(withFixtureDomParser(callback, argument));
@@ -240,6 +256,7 @@ function fixtureElement(
     readonly assistantElement?: FixtureElement;
     readonly behaviorButtonCount?: number;
     readonly dataTurn?: string;
+    readonly dataTestId?: string;
     readonly innerText?: string;
     readonly parentElement?: FixtureElement;
     readonly unrelatedRowControls?: boolean;
@@ -258,6 +275,9 @@ function fixtureElement(
       }
       if (name === 'data-turn') {
         return options.dataTurn ?? null;
+      }
+      if (name === 'data-testid') {
+        return options.dataTestId ?? null;
       }
       return attributes.get(element)?.get(name) ?? null;
     },
@@ -389,6 +409,34 @@ function invoke(callback: unknown, ...arguments_: readonly unknown[]): unknown {
     throw new TypeError('fixture callback is not a function');
   }
   return Reflect.apply(callback, undefined, arguments_);
+}
+
+/**
+ * Installs one browser global while executing a generated page callback.
+ *
+ * @param name Global property name.
+ * @param value Temporary fixture implementation.
+ * @param callback Generated callback.
+ * @param argument Callback argument.
+ * @returns Callback result.
+ * @throws {TypeError} If the generated callback is not callable.
+ */
+function withGlobal(name: string, value: unknown, callback: unknown, argument: unknown): unknown {
+  const globals = globalThis as unknown as Record<string, unknown>;
+  const previous = globals[name];
+  globals[name] = value;
+  try {
+    if (typeof callback !== 'function') {
+      throw new TypeError('fixture callback is not a function');
+    }
+    return Reflect.apply(callback, undefined, [argument]);
+  } finally {
+    if (previous === undefined) {
+      delete globals[name];
+    } else {
+      globals[name] = previous;
+    }
+  }
 }
 
 /** Minimal parser for the anchor-only Copy response contract exercised by the generated functions. */

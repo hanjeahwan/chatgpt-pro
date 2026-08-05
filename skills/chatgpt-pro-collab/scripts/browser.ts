@@ -15,6 +15,7 @@ const COMMAND_PID_NOTIFICATION_FAILED_EXIT_CODE = 70;
 const COMMAND_SPAWN_FAILED_EXIT_CODE = 127;
 const COMMAND_STOPPED_BEFORE_SPAWN_EXIT_CODE = 128;
 const COMMAND_ABORT_GRACE_MS = 100;
+const COMPLETION_STALL_GRACE_MS = 30_000;
 
 export interface BrowserCommandInvocation {
   readonly executable: string;
@@ -87,6 +88,7 @@ export type BrowserObservationResult =
       readonly status: 'completed';
       readonly conversationId: string;
       readonly conversationUrl: string;
+      readonly assistantTurnId: string;
     };
 
 export interface BrowserArtifactDescription {
@@ -144,6 +146,7 @@ interface ObservationProtocolResult extends ProtocolResult {
   readonly status: BrowserObservationResult['status'];
   readonly conversationId?: string;
   readonly conversationUrl?: string;
+  readonly assistantTurnId?: string;
 }
 
 interface CaptureProtocolResult extends ProtocolResult {
@@ -492,6 +495,7 @@ export class PlaywrightBrowser {
    * @param taskId Owning task identifier.
    * @param sessionName Owning Playwright named session.
    * @param expectedConversationId Database-bound conversation identity.
+   * @param localTurnId Local durable turn identity used to isolate recovery state.
    * @param observationWindowMs Remaining finite observation budget.
    * @param observer Task-lease child-process observer.
    * @returns Pending, or the re-observed completed conversation identity.
@@ -502,6 +506,7 @@ export class PlaywrightBrowser {
     taskId: string,
     sessionName: string,
     expectedConversationId: string,
+    localTurnId: string,
     observationWindowMs: number,
     observer?: BrowserOperationObserver,
   ): Promise<BrowserObservationResult> {
@@ -509,7 +514,7 @@ export class PlaywrightBrowser {
       sessionName,
       taskId,
       'observe-response',
-      observationScript(expectedConversationId, observationWindowMs),
+      observationScript(expectedConversationId, localTurnId, observationWindowMs, COMPLETION_STALL_GRACE_MS),
       'observe response completion',
       'observe',
       observer,
@@ -517,7 +522,11 @@ export class PlaywrightBrowser {
     if (result.status === 'pending') {
       return { status: 'pending' };
     }
-    if (result.conversationId === undefined || result.conversationUrl === undefined) {
+    if (
+      result.conversationId === undefined ||
+      result.conversationUrl === undefined ||
+      result.assistantTurnId === undefined
+    ) {
       throw new BrowserError(
         'BROWSER_PROTOCOL_ERROR',
         'observe response completion',
@@ -528,6 +537,7 @@ export class PlaywrightBrowser {
       status: 'completed',
       conversationId: result.conversationId,
       conversationUrl: result.conversationUrl,
+      assistantTurnId: result.assistantTurnId,
     };
   }
 
@@ -537,6 +547,8 @@ export class PlaywrightBrowser {
    * @param taskId Owning task identifier.
    * @param sessionName Owning Playwright named session.
    * @param expectedConversationId Database-bound conversation identity.
+   * @param localTurnId Local durable turn identity used to look up a prior observation on retry.
+   * @param expectedAssistantTurnId Assistant DOM identity returned by completion observation, or null for a capturing retry.
    * @param captureTimeoutMs Remaining finite capture budget.
    * @param signal Host cancellation used to terminate the command at the monotonic deadline.
    * @param observer Task-lease child-process observer.
@@ -548,6 +560,8 @@ export class PlaywrightBrowser {
     taskId: string,
     sessionName: string,
     expectedConversationId: string,
+    localTurnId: string,
+    expectedAssistantTurnId: string | null,
     captureTimeoutMs: number,
     signal: AbortSignal,
     observer?: BrowserOperationObserver,
@@ -557,7 +571,7 @@ export class PlaywrightBrowser {
       sessionName,
       taskId,
       'capture-response',
-      captureScript(expectedConversationId, captureTimeoutMs),
+      captureScript(expectedConversationId, localTurnId, expectedAssistantTurnId, captureTimeoutMs),
       'copy completed response',
       'capture',
       observer,
@@ -1186,7 +1200,9 @@ function protocolFailureDetail(stdout: string): string {
 /**
  * Builds the indefinite setup login gate from directly observable page state.
  *
+ * @param localTurnId Local durable turn identity used to isolate page recovery state.
  * @param observationWindowMs Remaining finite observation budget.
+ * @param stallGraceMs Monotonic page-time grace before attempting the one recovery reload.
  * @returns A Playwright page function source.
  * @throws {Error} This pure source builder does not throw.
  */
@@ -1457,14 +1473,23 @@ function sendScript(expectedConversationId: string | null, prompt: string): stri
  * Builds one bounded completion observation for the assistant after the latest user turn.
  *
  * @param expectedConversationId Database-bound canonical identity.
+ * @param localTurnId Local durable turn identity used to look up a prior observation on retry.
+ * @param stallGraceMs Monotonic page-time grace before attempting the one recovery reload.
  * @param observationWindowMs Remaining finite observation budget.
  * @returns A Playwright page function source.
  * @throws {Error} This pure source builder does not throw.
  */
-function observationScript(expectedConversationId: string, observationWindowMs: number): string {
+function observationScript(
+  expectedConversationId: string,
+  localTurnId: string,
+  observationWindowMs: number,
+  stallGraceMs: number,
+): string {
   return `async (page) => {
     const expectedConversationId = ${JSON.stringify(expectedConversationId)};
+    const localTurnId = ${JSON.stringify(localTurnId)};
     const observationWindowMs = ${JSON.stringify(observationWindowMs)};
+    const stallGraceMs = ${JSON.stringify(stallGraceMs)};
     const observationDeadline = Date.now() + observationWindowMs;
     const url = await page.evaluate(() => {
       return { hostname: location.hostname, pathname: location.pathname, origin: location.origin };
@@ -1478,9 +1503,6 @@ function observationScript(expectedConversationId: string, observationWindowMs: 
     let assistantIndex = -1;
     let assistantTurnId = null;
     let stableCompletedPolls = 0;
-    let stuckAssistantTurnId = null;
-    let stuckContent = null;
-    let stableStuckPolls = 0;
     let reloadedAssistantTurnId = null;
     let polls = 0;
     while (stableCompletedPolls < 6 && polls < 24 && Date.now() < observationDeadline) {
@@ -1520,48 +1542,75 @@ function observationScript(expectedConversationId: string, observationWindowMs: 
         stableCompletedPolls = 0;
       }
       if (candidate?.copyVisible === true && stopVisible) {
-        if (candidate.turnId === stuckAssistantTurnId && candidate.content === stuckContent) {
-          stableStuckPolls += 1;
-        } else {
-          stuckAssistantTurnId = candidate.turnId;
-          stuckContent = candidate.content;
-          stableStuckPolls = 1;
+        const stallKey =
+          'chatgpt-pro-collab:completion-stall:' + expectedConversationId + ':' + localTurnId + ':' + candidate.turnId;
+        const pageNow = await page.evaluate(() => performance.timeOrigin + performance.now());
+        const stallState = await page.evaluate((key) => {
+          const raw = sessionStorage.getItem(key);
+          if (raw === null) return null;
+          try {
+            return JSON.parse(raw);
+          } catch {
+            sessionStorage.removeItem(key);
+            return null;
+          }
+        }, stallKey);
+        const stableSince =
+          stallState?.turnId === candidate.turnId && stallState.content === candidate.content
+            ? stallState.stableSince
+            : pageNow;
+        await page.evaluate(
+          (argument) => {
+            sessionStorage.setItem(argument.key, JSON.stringify(argument.state));
+          },
+          { key: stallKey, state: { turnId: candidate.turnId, content: candidate.content, stableSince } },
+        );
+        if (pageNow - stableSince >= stallGraceMs) {
+          const reloadKey =
+            'chatgpt-pro-collab:completion-reload:' + expectedConversationId + ':' + localTurnId + ':' + candidate.turnId;
+          const remaining = Math.max(0, observationDeadline - Date.now());
+          if (remaining <= 1) return JSON.stringify({ protocol: '${PROTOCOL}', kind: 'observe', status: 'pending' });
+          const shouldReload = await page.evaluate((key) => {
+            if (sessionStorage.getItem(key) === '1') return false;
+            sessionStorage.setItem(key, '1');
+            return true;
+          }, reloadKey);
+          if (shouldReload) {
+            reloadedAssistantTurnId = candidate.turnId;
+            try {
+              await page.reload({ waitUntil: 'domcontentloaded', timeout: remaining });
+              const reloadedUrl = await page.evaluate(() => {
+                return { hostname: location.hostname, pathname: location.pathname };
+              });
+              const reloadedMatch = /^\\/c\\/([^/?#]+)\\/?$/.exec(reloadedUrl.pathname);
+              if (
+                reloadedUrl.hostname !== 'chatgpt.com' ||
+                reloadedMatch === null ||
+                reloadedMatch[1] !== expectedConversationId
+              ) {
+                throw new Error('conversation identity changed while recovering stuck completion indicator');
+              }
+            } catch (error) {
+              await page.evaluate((key) => {
+                if (sessionStorage.getItem(key) === '1') sessionStorage.removeItem(key);
+              }, reloadKey);
+              throw error;
+            }
+            assistantIndex = -1;
+            assistantTurnId = null;
+            stableCompletedPolls = 0;
+            continue;
+          }
         }
       } else {
-        stuckAssistantTurnId = null;
-        stuckContent = null;
-        stableStuckPolls = 0;
-      }
-      if (candidate !== null && stableStuckPolls === 6) {
-        const reloadKey =
-          'chatgpt-pro-collab:completion-reload:' + expectedConversationId + ':' + candidate.turnId;
-        const shouldReload = await page.evaluate((key) => {
-          if (sessionStorage.getItem(key) === '1') return false;
-          sessionStorage.setItem(key, '1');
-          return true;
-        }, reloadKey);
-        if (shouldReload) {
-          reloadedAssistantTurnId = candidate.turnId;
-          await page.reload({ waitUntil: 'domcontentloaded' });
-          const reloadedUrl = await page.evaluate(() => {
-            return { hostname: location.hostname, pathname: location.pathname };
-          });
-          const reloadedMatch = /^\\/c\\/([^/?#]+)\\/?$/.exec(reloadedUrl.pathname);
-          if (
-            reloadedUrl.hostname !== 'chatgpt.com' ||
-            reloadedMatch === null ||
-            reloadedMatch[1] !== expectedConversationId
-          ) {
-            throw new Error('conversation identity changed while recovering stuck completion indicator');
+        const stallPrefix =
+          'chatgpt-pro-collab:completion-stall:' + expectedConversationId + ':' + localTurnId + ':';
+        await page.evaluate((prefix) => {
+          for (let index = sessionStorage.length - 1; index >= 0; index -= 1) {
+            const key = sessionStorage.key(index);
+            if (key?.startsWith(prefix)) sessionStorage.removeItem(key);
           }
-          assistantIndex = -1;
-          assistantTurnId = null;
-          stableCompletedPolls = 0;
-          stuckAssistantTurnId = null;
-          stuckContent = null;
-          stableStuckPolls = 0;
-          continue;
-        }
+        }, stallPrefix);
       }
       if (stableCompletedPolls < 6 && Date.now() < observationDeadline) {
         await page.waitForTimeout(Math.min(500, Math.max(1, observationDeadline - Date.now())));
@@ -1581,12 +1630,22 @@ function observationScript(expectedConversationId: string, observationWindowMs: 
     ) {
       throw new Error('conversation identity changed while observing response completion');
     }
+    await page.evaluate(
+      (argument) => {
+        sessionStorage.setItem(argument.key, argument.turnId);
+      },
+      {
+        key: 'chatgpt-pro-collab:completion-target:' + expectedConversationId + ':' + localTurnId,
+        turnId: assistantTurnId,
+      },
+    );
     return JSON.stringify({
       protocol: '${PROTOCOL}',
       kind: 'observe',
       status: 'completed',
       conversationId: completedMatch[1],
       conversationUrl: completedUrl.origin + '/c/' + completedMatch[1],
+      assistantTurnId,
     });
   }`;
 }
@@ -1595,13 +1654,22 @@ function observationScript(expectedConversationId: string, observationWindowMs: 
  * Builds page-local Copy response interception for the already completed target assistant turn.
  *
  * @param expectedConversationId Database-bound canonical identity.
+ * @param localTurnId Local durable turn identity used to look up a prior observation on retry.
+ * @param expectedAssistantTurnId Assistant DOM identity returned by completion observation, or null for a capturing retry.
  * @param captureTimeoutMs Remaining finite capture budget.
  * @returns A Playwright page function source.
  * @throws {Error} This pure source builder does not throw.
  */
-function captureScript(expectedConversationId: string, captureTimeoutMs: number): string {
+function captureScript(
+  expectedConversationId: string,
+  localTurnId: string,
+  expectedAssistantTurnId: string | null,
+  captureTimeoutMs: number,
+): string {
   return `async (page) => {
     const expectedConversationId = ${JSON.stringify(expectedConversationId)};
+    const localTurnId = ${JSON.stringify(localTurnId)};
+    const suppliedAssistantTurnId = ${JSON.stringify(expectedAssistantTurnId)};
     const captureTimeoutMs = ${JSON.stringify(captureTimeoutMs)};
     const captureDeadline = Date.now() + captureTimeoutMs;
     const url = await page.evaluate(() => {
@@ -1612,16 +1680,25 @@ function captureScript(expectedConversationId: string, captureTimeoutMs: number)
       throw new Error('conversation identity does not match the capturing turn');
     }
     const turnSelector = '[data-testid^="conversation-turn-"][data-turn]';
+    const targetTurnKey = 'chatgpt-pro-collab:completion-target:' + expectedConversationId + ':' + localTurnId;
+    const expectedAssistantTurnId =
+      suppliedAssistantTurnId ?? (await page.evaluate((key) => sessionStorage.getItem(key), targetTurnKey));
+    if (expectedAssistantTurnId === null) {
+      throw new Error('page contract drift: completed assistant identity was not retained');
+    }
     const copySelector = '[data-testid="copy-turn-action-button"]';
-    const assistantIndex = await page.locator(turnSelector).evaluateAll((elements) => {
-      let latestUser = -1;
-      for (let index = 0; index < elements.length; index += 1) {
-        if (elements[index].getAttribute('data-turn') === 'user') latestUser = index;
-      }
-      if (latestUser < 0 || latestUser + 1 >= elements.length) return -1;
-      return elements[latestUser + 1].getAttribute('data-turn') === 'assistant' ? latestUser + 1 : -1;
-    });
-    if (assistantIndex < 0) throw new Error('page contract drift: target assistant turn is absent');
+    const assistantIndices = await page.locator(turnSelector).evaluateAll((elements, targetTurnId) => {
+      return elements.flatMap((element, index) => {
+        return element.getAttribute('data-turn') === 'assistant' &&
+          element.getAttribute('data-testid') === targetTurnId
+          ? [index]
+          : [];
+      });
+    }, expectedAssistantTurnId);
+    if (assistantIndices.length !== 1) {
+      throw new Error('page contract drift: observed assistant turn identity is absent or not unique');
+    }
+    const assistantIndex = assistantIndices[0];
     const assistant = page.locator(turnSelector).nth(assistantIndex);
     const copy = assistant.locator(copySelector);
     if (await copy.count() !== 1 || !(await copy.isVisible())) {

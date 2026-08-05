@@ -9,12 +9,16 @@ export interface ObservationPageOptions {
   readonly copyVisibleAfterReload?: boolean;
   readonly stopVisibleBeforeReload?: boolean;
   readonly stopVisibleAfterReload?: boolean;
+  readonly pageClockStepMs?: number;
+  readonly reloadReject?: boolean;
+  readonly reloadRejectCount?: number;
 }
 
 export interface ObservationPageFixture {
   readonly page: object;
   readonly events: string[];
   reloadCount(): number;
+  reloadTimeouts(): readonly number[];
 }
 
 /**
@@ -30,6 +34,9 @@ export function observationPageFixture(options: ObservationPageOptions = {}): Ob
   let polls = 0;
   let reloaded = false;
   let reloads = 0;
+  let reloadRejections = 0;
+  const reloadTimeouts: number[] = [];
+  let pageClockMs = 0;
 
   const currentAssistantTurnId = (): string => {
     return reloaded
@@ -77,14 +84,14 @@ export function observationPageFixture(options: ObservationPageOptions = {}): Ob
   };
 
   const turnLocator = {
-    evaluateAll(callback: unknown) {
+    evaluateAll(callback: unknown, argument?: unknown) {
       polls += 1;
       events.push(`poll:${polls}:${currentAssistantTurnId()}`);
       const elements = [
         new FixtureHtmlElement('user', 'conversation-turn-1', 'fixture prompt', false),
         new FixtureHtmlElement('assistant', currentAssistantTurnId(), currentContent(), copyVisible()),
       ];
-      return Promise.resolve(withFixtureHtmlElement(callback, elements));
+      return Promise.resolve(withFixtureHtmlElement(callback, elements, argument));
     },
   };
 
@@ -98,8 +105,14 @@ export function observationPageFixture(options: ObservationPageOptions = {}): Ob
           origin: 'https://chatgpt.com',
         });
       }
-      if (source.includes('sessionStorage.getItem')) {
+      if (source.includes('sessionStorage')) {
         const sessionStorage = {
+          get length() {
+            return storage.size;
+          },
+          key(index: number) {
+            return [...storage.keys()][index] ?? null;
+          },
           getItem(key: string) {
             return storage.get(key) ?? null;
           },
@@ -107,8 +120,22 @@ export function observationPageFixture(options: ObservationPageOptions = {}): Ob
             events.push(`storage:${key}`);
             storage.set(key, value);
           },
+          removeItem(key: string) {
+            events.push(`storage-remove:${key}`);
+            storage.delete(key);
+          },
         };
         return Promise.resolve(withGlobal('sessionStorage', sessionStorage, callback, argument));
+      }
+      if (source.includes('performance.timeOrigin')) {
+        pageClockMs += options.pageClockStepMs ?? 1000;
+        const performance = {
+          timeOrigin: 0,
+          now: () => {
+            return pageClockMs;
+          },
+        };
+        return Promise.resolve(withGlobal('performance', performance, callback, argument));
       }
       return Promise.reject(new Error(`fixture cannot execute page.evaluate callback: ${source.slice(0, 80)}`));
     },
@@ -124,10 +151,15 @@ export function observationPageFixture(options: ObservationPageOptions = {}): Ob
       }
       return stop;
     },
-    reload() {
+    reload(reloadOptions?: { readonly timeout?: number }) {
       reloads += 1;
       reloaded = true;
       events.push('reload');
+      reloadTimeouts.push(reloadOptions?.timeout ?? 0);
+      if (options.reloadReject === true || reloadRejections < (options.reloadRejectCount ?? 0)) {
+        reloadRejections += 1;
+        return Promise.reject(new Error(`reload rejected timeout=${reloadOptions?.timeout ?? 'none'}`));
+      }
       return Promise.resolve();
     },
     waitForTimeout() {
@@ -140,6 +172,9 @@ export function observationPageFixture(options: ObservationPageOptions = {}): Ob
     events,
     reloadCount() {
       return reloads;
+    },
+    reloadTimeouts() {
+      return reloadTimeouts;
     },
   };
 }
@@ -213,11 +248,30 @@ class FixtureHtmlElement {
  *
  * @param callback Generated DOM callback.
  * @param elements Ordered user and assistant elements.
+ * @param argument Optional callback argument.
  * @returns Callback result.
  * @throws {TypeError} If the generated callback is not callable.
  */
-function withFixtureHtmlElement(callback: unknown, elements: readonly FixtureHtmlElement[]): unknown {
-  return withGlobal('HTMLElement', FixtureHtmlElement, callback, elements);
+function withFixtureHtmlElement(
+  callback: unknown,
+  elements: readonly FixtureHtmlElement[],
+  argument?: unknown,
+): unknown {
+  const globals = globalThis as unknown as Record<string, unknown>;
+  const previous = globals.HTMLElement;
+  globals.HTMLElement = FixtureHtmlElement;
+  try {
+    if (typeof callback !== 'function') {
+      throw new TypeError('fixture callback is not a function');
+    }
+    return Reflect.apply(callback, undefined, [elements, argument]);
+  } finally {
+    if (previous === undefined) {
+      delete globals.HTMLElement;
+    } else {
+      globals.HTMLElement = previous;
+    }
+  }
 }
 
 /**

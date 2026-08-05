@@ -341,6 +341,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
         status: 'completed',
         conversationId: 'conversation-a',
         conversationUrl: 'https://chatgpt.com/c/conversation-a',
+        assistantTurnId: 'conversation-turn-2',
       }),
       pageResult({
         protocol,
@@ -353,12 +354,14 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
       }),
     ]);
 
-    const observed = await fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 5000);
+    const observed = await fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 5000);
     const controller = new AbortController();
     const captured = await fixture.browser.captureResponse(
       'task-a',
       'session-a',
       'conversation-a',
+      'turn-a',
+      'conversation-turn-2',
       5000,
       controller.signal,
     );
@@ -373,9 +376,11 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     });
     expect(fixture.invocations[1]?.signal).toBe(controller.signal);
     expect(observationSource).toContain('stableCompletedPolls < 6');
-    expect(observationSource).toContain('stableStuckPolls === 6');
+    expect(observationSource).toContain('stallGraceMs');
+    expect(observationSource).toContain('performance.timeOrigin + performance.now()');
+    expect(observationSource).toContain('localTurnId');
     expect(observationSource).toContain("sessionStorage.getItem(key) === '1'");
-    expect(observationSource).toContain("page.reload({ waitUntil: 'domcontentloaded' })");
+    expect(observationSource).toContain("page.reload({ waitUntil: 'domcontentloaded', timeout: remaining })");
     expect(observationSource).toContain('target assistant turn changed while recovering stuck completion indicator');
     expect(observationSource).toContain("kind: 'observe', status: 'pending'");
     expect(observationSource).not.toContain('stop.click');
@@ -399,10 +404,13 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
   it('keeps the unchanged normal completion path free of reloads', async () => {
     const fixture = await executableObservationBrowserFixture({ stopVisibleBeforeReload: false });
 
-    await expect(fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 5000)).resolves.toEqual({
+    await expect(
+      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 5000),
+    ).resolves.toEqual({
       status: 'completed',
       conversationId: 'conversation-a',
       conversationUrl: 'https://chatgpt.com/c/conversation-a',
+      assistantTurnId: 'conversation-turn-2',
     });
     expect(fixture.reloadCount()).toBe(0);
     expect(
@@ -416,12 +424,16 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     const fixture = await executableObservationBrowserFixture({
       stopVisibleBeforeReload: true,
       stopVisibleAfterReload: false,
+      pageClockStepMs: 6_000,
     });
 
-    await expect(fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 5000)).resolves.toEqual({
+    await expect(
+      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 5000),
+    ).resolves.toEqual({
       status: 'completed',
       conversationId: 'conversation-a',
       conversationUrl: 'https://chatgpt.com/c/conversation-a',
+      assistantTurnId: 'conversation-turn-2',
     });
     expect(fixture.reloadCount()).toBe(1);
     expect(
@@ -431,7 +443,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     ).toHaveLength(1);
     expect(
       fixture.events.filter((event) => {
-        return event.startsWith('storage:');
+        return event.includes('completion-reload:');
       }),
     ).toHaveLength(1);
     expect(fixture.events.slice(fixture.events.indexOf('reload') + 1)).toContain('stop:false');
@@ -445,7 +457,9 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
       stopVisibleBeforeReload: true,
     });
 
-    await expect(fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 5000)).resolves.toEqual({
+    await expect(
+      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 5000),
+    ).resolves.toEqual({
       status: 'pending',
     });
     expect(fixture.reloadCount()).toBe(0);
@@ -455,41 +469,130 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     const fixture = await executableObservationBrowserFixture({
       stopVisibleBeforeReload: true,
       stopVisibleAfterReload: true,
+      pageClockStepMs: 6_000,
     });
 
-    await expect(fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 5000)).resolves.toEqual({
+    await expect(
+      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 5000),
+    ).resolves.toEqual({
       status: 'pending',
     });
-    await expect(fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 5000)).resolves.toEqual({
+    await expect(
+      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 5000),
+    ).resolves.toEqual({
       status: 'pending',
     });
     expect(fixture.reloadCount()).toBe(1);
     expect(
       fixture.events.filter((event) => {
-        return event.startsWith('storage:');
+        return event.includes('completion-reload:');
       }),
     ).toHaveLength(1);
+  });
+
+  it('does not reuse a reload marker across local semantic turns', async () => {
+    const fixture = await executableObservationBrowserFixture({
+      stopVisibleBeforeReload: true,
+      stopVisibleAfterReload: true,
+      pageClockStepMs: 6_000,
+    });
+
+    await expect(
+      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 5000),
+    ).resolves.toEqual({
+      status: 'pending',
+    });
+    await expect(
+      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-b', 5000),
+    ).resolves.toEqual({
+      status: 'pending',
+    });
+    expect(fixture.reloadCount()).toBe(2);
+  });
+
+  it('keeps observing a normal-generation pause for less than the 30 second stall grace', async () => {
+    const fixture = await executableObservationBrowserFixture({
+      stopVisibleBeforeReload: true,
+      pageClockStepMs: 1_000,
+    });
+
+    await expect(
+      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 5000),
+    ).resolves.toEqual({
+      status: 'pending',
+    });
+    expect(fixture.reloadCount()).toBe(0);
+  });
+
+  it('bounds reload by the observation deadline and rolls back a rejected attempt marker', async () => {
+    const fixture = await executableObservationBrowserFixture({
+      stopVisibleBeforeReload: true,
+      stopVisibleAfterReload: true,
+      pageClockStepMs: 6_000,
+      reloadRejectCount: 1,
+    });
+
+    await expect(
+      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 5000),
+    ).rejects.toMatchObject({ code: 'PLAYWRIGHT_CONTRACT_DRIFT' });
+    await expect(
+      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 5000),
+    ).resolves.toEqual({
+      status: 'pending',
+    });
+    expect(fixture.reloadCount()).toBe(2);
+    expect(fixture.reloadTimeouts()[0]).toBeLessThanOrEqual(5000);
   });
 
   it.each([
     {
       label: 'canonical conversation',
-      options: { stopVisibleBeforeReload: true, conversationIdAfterReload: 'conversation-b' },
+      options: {
+        stopVisibleBeforeReload: true,
+        conversationIdAfterReload: 'conversation-b',
+        pageClockStepMs: 6_000,
+      },
       message: 'conversation identity changed while recovering stuck completion indicator',
     },
     {
       label: 'target assistant turn',
-      options: { stopVisibleBeforeReload: true, assistantTurnIdAfterReload: 'conversation-turn-99' },
+      options: {
+        stopVisibleBeforeReload: true,
+        assistantTurnIdAfterReload: 'conversation-turn-99',
+        pageClockStepMs: 6_000,
+      },
       message: 'target assistant turn changed while recovering stuck completion indicator',
     },
   ])('rejects a changed $label after stuck-indicator reload', async ({ options, message }) => {
     const fixture = await executableObservationBrowserFixture(options);
 
-    await expect(fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 5000)).rejects.toMatchObject({
+    await expect(
+      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 5000),
+    ).rejects.toMatchObject({
       code: 'PLAYWRIGHT_CONTRACT_DRIFT',
       message: expect.stringContaining(message),
     });
     expect(fixture.reloadCount()).toBe(1);
+  });
+
+  it('rejects capture when the observed assistant turn is replaced before the capture command', async () => {
+    const fixture = await executableBrowserFixture({
+      assistantTurnId: 'conversation-turn-2',
+      responseHtml: '<p>response</p>',
+      behaviorButtonCount: 0,
+    });
+
+    await expect(
+      fixture.browser.captureResponse(
+        'task-a',
+        'session-a',
+        'conversation-a',
+        'turn-a',
+        'conversation-turn-1',
+        5000,
+        new AbortController().signal,
+      ),
+    ).rejects.toMatchObject({ code: 'PLAYWRIGHT_CONTRACT_DRIFT' });
   });
 
   it('maps one recorded sandbox target to an exact download event and task-owned save path', async () => {
@@ -573,7 +676,15 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     });
 
     await expect(
-      fixture.browser.captureResponse('task-a', 'session-a', 'conversation-a', 5000, new AbortController().signal),
+      fixture.browser.captureResponse(
+        'task-a',
+        'session-a',
+        'conversation-a',
+        'turn-a',
+        'conversation-turn-2',
+        5000,
+        new AbortController().signal,
+      ),
     ).resolves.toMatchObject({
       response: 'fixture response',
       artifacts: [
@@ -591,7 +702,15 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     });
 
     await expect(
-      fixture.browser.captureResponse('task-a', 'session-a', 'conversation-a', 5000, new AbortController().signal),
+      fixture.browser.captureResponse(
+        'task-a',
+        'session-a',
+        'conversation-a',
+        'turn-a',
+        'conversation-turn-2',
+        5000,
+        new AbortController().signal,
+      ),
     ).rejects.toMatchObject({ code: 'PLAYWRIGHT_CONTRACT_DRIFT' });
   });
 
@@ -960,6 +1079,9 @@ async function executableObservationBrowserFixture(options: ObservationPageOptio
     invocations,
     reloadCount() {
       return pageFixture.reloadCount();
+    },
+    reloadTimeouts() {
+      return pageFixture.reloadTimeouts();
     },
   };
 }

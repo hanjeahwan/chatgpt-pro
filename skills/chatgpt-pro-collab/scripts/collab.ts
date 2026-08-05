@@ -48,6 +48,7 @@ export interface CollabBrowser {
     taskId: string,
     sessionName: string,
     expectedConversationId: string,
+    localTurnId: string,
     observationWindowMs: number,
     observer?: BrowserOperationObserver,
   ): Promise<BrowserObservationResult>;
@@ -55,6 +56,8 @@ export interface CollabBrowser {
     taskId: string,
     sessionName: string,
     expectedConversationId: string,
+    localTurnId: string,
+    expectedAssistantTurnId: string | null,
     captureTimeoutMs: number,
     signal: AbortSignal,
     observer?: BrowserOperationObserver,
@@ -313,6 +316,7 @@ export class CollabService {
           }
 
           let targetResponsePath = turn.responsePath;
+          let expectedAssistantTurnId: string | null = null;
           const captureWasPending = turn.status === 'pending';
           if (turn.status === 'pending') {
             const remainingObservationMs = remainingMilliseconds(observationDeadline);
@@ -323,6 +327,7 @@ export class CollabService {
               taskId,
               task.playwrightSession,
               task.conversationId,
+              turnId,
               remainingObservationMs,
               observer,
             );
@@ -332,6 +337,7 @@ export class CollabService {
                 : null;
             }
             assertConversation(taskId, task.conversationId, task.conversationUrl, observed);
+            expectedAssistantTurnId = observed.assistantTurnId;
             targetResponsePath = responsePath(this.#paths, taskId, turnId);
             captureDeadline = performance.now() + captureTimeoutMs;
           }
@@ -348,6 +354,8 @@ export class CollabService {
                 taskId,
                 task.playwrightSession,
                 conversationId,
+                turnId,
+                expectedAssistantTurnId,
                 remainingCaptureMs,
                 signal,
                 observer,
