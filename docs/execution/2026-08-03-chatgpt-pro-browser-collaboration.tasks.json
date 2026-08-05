@@ -123,7 +123,8 @@
           "7255f52a0f39a96f332a12f8ece34ed1890217e8",
           "435d72d766ea273d5fdf67ab5f1e7a285970d114",
           "1a731ee3b7798e700491d2e0fe8aabb2a0acd86e",
-          "b4743e7802478961e735c202ffc08b77c37b3985"
+          "b4743e7802478961e735c202ffc08b77c37b3985",
+          "ae34b659535db798b0b2b76f56fdc3c9873ea6cf"
         ],
         "checks": [
           "pnpm exec vitest --run tests/browser.test.ts: 42 tests passed with executable page functions covering deadline-bounded SHA-256 digest never-settles/reject/one-call paths, durable pre-reload target binding, post-reload recovered-stuck completion proof/fingerprint, content-change stability reset, delayed reload and subsequent observation, T1 observation to T2 capture rejection, local-turn recovery-key isolation, 30-second stall grace, bounded reload timeout, rejected-reload marker rollback, normal/pending/identity paths",
@@ -150,6 +151,7 @@
           "Product decision at BASE_SHA 188e87c1ac4e47c11b38b47f43256968d6952968 withdraws completion-recovery commits and their Review/live evidence from the active solution; pre-recovery implementation evidence and the independent 435d72d test-window fix remain historical inputs",
           "1a731ee3b7798e700491d2e0fe8aabb2a0acd86e removes completion reload/stability/fingerprint/sessionStorage recovery while preserving normal Copy-visible/Stop-absent observation and explicitly binding its assistant DOM identity to pending capture",
           "b4743e7802478961e735c202ffc08b77c37b3985 removes recovery-only fixtures/tests, keeps the 50ms resume window, and executes normal completion, persistent-Stop pending, exact T1 with later T2, missing target rejection, and clipboard install/click-write/read/restore paths",
+          "ae34b659535db798b0b2b76f56fdc3c9873ea6cf makes the exact-T1 fixture return a distinguishable later-assistant locator, so implicit T2 selection cannot accidentally satisfy the regression",
           "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts: 54 tests passed; pnpm format:check, pnpm lint, pnpm typecheck, pnpm test (8 files/94 tests), and git diff --check passed",
           "Current reconciliation: implemented; VER-014 and the historical normal-path VER-004 evidence remain recorded, but the changed contract and commits require a new independent Review before done"
         ],
@@ -286,7 +288,8 @@
           "7255f52a0f39a96f332a12f8ece34ed1890217e8",
           "435d72d766ea273d5fdf67ab5f1e7a285970d114",
           "1a731ee3b7798e700491d2e0fe8aabb2a0acd86e",
-          "b4743e7802478961e735c202ffc08b77c37b3985"
+          "b4743e7802478961e735c202ffc08b77c37b3985",
+          "ae34b659535db798b0b2b76f56fdc3c9873ea6cf"
         ],
         "checks": [
           "pnpm format:check",
@@ -306,6 +309,7 @@
           "Completion-recovery Review task_02ea3ed7823a at accepted HEAD 859e981cb0e6621761be47c572abf513d9ccf9f3, closure status msg_18f367b1e063: ACCEPTED/CLOSED with no P1/P2/P3 after 49 browser, 26 collab, 115 full tests, format/lint/typecheck/diff, ledger diff, and check-ready passed",
           "Product decision at BASE_SHA 188e87c1ac4e47c11b38b47f43256968d6952968 withdraws completion-recovery commits and their Review evidence from the active solution; pre-recovery interrupt/state evidence and the independent 435d72d test-window fix remain historical inputs",
           "1a731ee3b7798e700491d2e0fe8aabb2a0acd86e and b4743e7802478961e735c202ffc08b77c37b3985 restore the normal completion baseline without changing SQLite, capture deadline, artifact deadline, or interrupt recovery mechanisms",
+          "ae34b659535db798b0b2b76f56fdc3c9873ea6cf strengthens the T1/T2 fixture without changing production behavior",
           "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts: 54 tests passed; pnpm format:check, pnpm lint, pnpm typecheck, pnpm test (8 files/94 tests, including 10 state-concurrency subprocess tests), and git diff --check passed",
           "Current reconciliation: implemented; mapped VER-007/010/011/012 evidence remains valid, but the changed browser/collab baseline requires a new independent Review before done"
         ],
