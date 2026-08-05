@@ -1,7 +1,7 @@
 {
   "spec": "docs/specs/2026-08-03-chatgpt-pro-browser-collaboration.md",
-  "specDigest": "sha256:a91858baa7435d2559e5d4813d95db71b2c5997f3a646321140997fe6f2211de",
-  "contextDigest": "sha256:5ad8f3e7585f16ca19612fe8472dfe27860cefa0aa0b0589d89b8240f6b0a656",
+  "specDigest": "sha256:c9a9a3c61ba6c7a90db19c168790147b9a082d471d03d698226549ab9284ccfc",
+  "contextDigest": "sha256:d913fb48fc5300dd3675cdffd2c0e8d7bc221d6bb73d918696b5136e4baec66a",
   "sourceDigests": {
     "BEH-001": "sha256:81fc722eeffe25bb65e2eecd66fa5632133c4fa1cd9fc193ee60814d1fb3b0ae",
     "BEH-002": "sha256:a6b90a57305e58f15ae9b0d5868fe3182950dfd2743a0b335e00ffde43be7e43",
@@ -110,7 +110,7 @@
     {
       "id": "IMP-004",
       "title": "实现单次 wait 的内部观察与原始文字捕获",
-      "status": "pending",
+      "status": "implemented",
       "covers": ["BEH-004", "BEH-011"],
       "verifies": ["VER-004", "VER-014"],
       "dependsOn": ["IMP-001", "IMP-002", "IMP-003"],
@@ -121,7 +121,9 @@
           "fe6c221706fbfe9a87844b064038927e0fcaf029",
           "ba09c01c6c8d7d343fc3108655047c923da2a8c5",
           "7255f52a0f39a96f332a12f8ece34ed1890217e8",
-          "435d72d766ea273d5fdf67ab5f1e7a285970d114"
+          "435d72d766ea273d5fdf67ab5f1e7a285970d114",
+          "1a731ee3b7798e700491d2e0fe8aabb2a0acd86e",
+          "b4743e7802478961e735c202ffc08b77c37b3985"
         ],
         "checks": [
           "pnpm exec vitest --run tests/browser.test.ts: 42 tests passed with executable page functions covering deadline-bounded SHA-256 digest never-settles/reject/one-call paths, durable pre-reload target binding, post-reload recovered-stuck completion proof/fingerprint, content-change stability reset, delayed reload and subsequent observation, T1 observation to T2 capture rejection, local-turn recovery-key isolation, 30-second stall grace, bounded reload timeout, rejected-reload marker rollback, normal/pending/identity paths",
@@ -146,7 +148,10 @@
           "Completion-recovery Review task_02ea3ed7823a at accepted HEAD 859e981cb0e6621761be47c572abf513d9ccf9f3, closure status msg_18f367b1e063: ACCEPTED/CLOSED with no P1/P2/P3 after 49 browser, 26 collab, 115 full tests, format/lint/typecheck/diff, ledger diff, and check-ready passed",
           "VER-004 post-fix live task task_6f9761a8ce57, status msg_62d7d7bcfc2b, report /private/tmp/host-a-live-ver004-review.rzXuyY/report.md: one wait from 2026-08-05T07:14:05.222Z to 07:24:26.519Z exited 0 with the sole JSON status=pending and empty stderr; the active task retained a pending turn with response_path null, artifact_set_recorded=0, error null, and no operation lease/PID fields",
           "Product decision at BASE_SHA 188e87c1ac4e47c11b38b47f43256968d6952968 withdraws completion-recovery commits and their Review/live evidence from the active solution; pre-recovery implementation evidence and the independent 435d72d test-window fix remain historical inputs",
-          "Current reconciliation: pending until the normal Copy-visible/Stop-absent contract, exact observed assistant identity capture, deterministic clipboard fixture, full checks, and a new Review are complete"
+          "1a731ee3b7798e700491d2e0fe8aabb2a0acd86e removes completion reload/stability/fingerprint/sessionStorage recovery while preserving normal Copy-visible/Stop-absent observation and explicitly binding its assistant DOM identity to pending capture",
+          "b4743e7802478961e735c202ffc08b77c37b3985 removes recovery-only fixtures/tests, keeps the 50ms resume window, and executes normal completion, persistent-Stop pending, exact T1 with later T2, missing target rejection, and clipboard install/click-write/read/restore paths",
+          "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts: 54 tests passed; pnpm format:check, pnpm lint, pnpm typecheck, pnpm test (8 files/94 tests), and git diff --check passed",
+          "Current reconciliation: implemented; VER-014 and the historical normal-path VER-004 evidence remain recorded, but the changed contract and commits require a new independent Review before done"
         ],
         "reviews": []
       }
@@ -266,7 +271,7 @@
     {
       "id": "IMP-008",
       "title": "完成中断恢复矩阵与全量运行基线验证",
-      "status": "pending",
+      "status": "implemented",
       "covers": ["BEH-002", "BEH-004", "BEH-006", "BEH-007", "BEH-012"],
       "verifies": ["VER-007", "VER-010", "VER-011", "VER-012"],
       "dependsOn": ["IMP-001", "IMP-002", "IMP-003", "IMP-004", "IMP-005", "IMP-006", "IMP-007"],
@@ -279,7 +284,9 @@
           "fe6c221706fbfe9a87844b064038927e0fcaf029",
           "ba09c01c6c8d7d343fc3108655047c923da2a8c5",
           "7255f52a0f39a96f332a12f8ece34ed1890217e8",
-          "435d72d766ea273d5fdf67ab5f1e7a285970d114"
+          "435d72d766ea273d5fdf67ab5f1e7a285970d114",
+          "1a731ee3b7798e700491d2e0fe8aabb2a0acd86e",
+          "b4743e7802478961e735c202ffc08b77c37b3985"
         ],
         "checks": [
           "pnpm format:check",
@@ -298,7 +305,9 @@
           "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts: 75 tests passed with actual clipboard install/write/read/restore and URL success/failure paths; pnpm format:check, pnpm lint, pnpm typecheck, pnpm test (8 files/115 tests), and git diff --check passed; no live or reviewer acceptance claimed",
           "Completion-recovery Review task_02ea3ed7823a at accepted HEAD 859e981cb0e6621761be47c572abf513d9ccf9f3, closure status msg_18f367b1e063: ACCEPTED/CLOSED with no P1/P2/P3 after 49 browser, 26 collab, 115 full tests, format/lint/typecheck/diff, ledger diff, and check-ready passed",
           "Product decision at BASE_SHA 188e87c1ac4e47c11b38b47f43256968d6952968 withdraws completion-recovery commits and their Review evidence from the active solution; pre-recovery interrupt/state evidence and the independent 435d72d test-window fix remain historical inputs",
-          "Current reconciliation: pending until the affected browser/collab test baseline, full checks, and a new Review validate the rollback without regressing VER-007/010/011/012"
+          "1a731ee3b7798e700491d2e0fe8aabb2a0acd86e and b4743e7802478961e735c202ffc08b77c37b3985 restore the normal completion baseline without changing SQLite, capture deadline, artifact deadline, or interrupt recovery mechanisms",
+          "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts: 54 tests passed; pnpm format:check, pnpm lint, pnpm typecheck, pnpm test (8 files/94 tests, including 10 state-concurrency subprocess tests), and git diff --check passed",
+          "Current reconciliation: implemented; mapped VER-007/010/011/012 evidence remains valid, but the changed browser/collab baseline requires a new independent Review before done"
         ],
         "reviews": []
       }
