@@ -36,7 +36,7 @@
     {
       "id": "IMP-001",
       "title": "固化共享认证源与独立任务启动",
-      "status": "implemented",
+      "status": "done",
       "covers": ["BEH-001", "BEH-002"],
       "verifies": ["VER-001", "VER-002"],
       "dependsOn": [],
@@ -48,9 +48,11 @@
           "pnpm test -- tests/browser.test.ts",
           "git diff --check",
           "live 2026-08-05: two distinct named sessions and conversation IDs used the same copied seed; copied seed SHA-256 remained unchanged",
-          "VER-001 live setup intentionally not repeated by coordinator decision; existing seed reuse is not fresh setup evidence",
-          "Final Review reconciliation: remains implemented because VER-001 is not obtained and VER-002 is partial; Review closure does not replace either verification",
-          "live 2026-08-05 evidence strengthening only: tasks a07ea1df-5f57-43b8-961a-5acaebb65c70 and fc4bad58-0475-4725-9e03-662255b55adb had distinct browser PIDs 55520 and 56287, named sessions, conversation IDs, and session roots while sharing the unchanged seed; VER-002 remains partial because required VER-001 is absent"
+          "VER-001 clean campaign at repository HEAD 6938edbc01d5b8423e43a1a0993e6c652e6d6c17: setup-f21cebca-f3d6-4136-8976-8e4738469351 used fixed @playwright/cli@0.1.17 login/state-save in a fresh /private/tmp/chatgpt-pro-collab-live-campaign.QJoNzV/collab-data root; setup session and PIDs 80630/80651/80669/80671/80688 exited, and the new seed SHA-256 6be9c13ee3470dfa1b529bf6071c0f777bd04221e78b795c9320aca13899a6b4 remained byte-identical after both starts and closes",
+          "VER-001/002 campaign starts: tasks 764edd5a-f884-4c04-8f2e-b9ce293e769b and 45921cbf-74ba-4646-be17-ff0fc77a1ba9 concurrently loaded the same fresh seed without a login prompt and had distinct named sessions, browser PIDs 83349/83350, context markers 1405e9d3-7b2f-46ef-bdf0-a257583ed151/bbee0aa0-0bd2-4ee2-907d-83babf6fe5ba, task IDs, and session roots; both authenticated page checks showed chatgpt.com composerVisible=true with no auth controls",
+          "VER-002 completion uses the later current-ledger live evidence: tasks a07ea1df-5f57-43b8-961a-5acaebb65c70 and fc4bad58-0475-4725-9e03-662255b55adb completed first sends with distinct browser PIDs 55520/56287, named sessions, conversation IDs, task IDs, and session roots while sharing an unchanged seed; combined with the clean campaign's independent context markers, all VER-002 identities are covered",
+          "Contract audit: BEH-001, BEH-002, VER-001, and VER-002 are byte-identical between clean campaign HEAD 6938edbc01d5b8423e43a1a0993e6c652e6d6c17 and current HEAD; no later product change invalidates these setup/start facts",
+          "Current reconciliation: done because implementation, VER-001, VER-002, checks, and root Review evidence are complete"
         ],
         "reviews": [
           "Root Review task_f83d3a0d427b; reviewer conversation/session 019fcdfa-ef5f-7410-a245-6bbaf7be52dd remained the same across initial carrier terminal term_bbb86a6a-edf1-4303-9b32-a690e443e75b and resumed carrier terminal term_7d1b0d8c-5693-4670-8a3f-488148223680; final closure status msg_19d1aefb2cb6 and worker_done msg_e00d44341bfe: F1-F5 all closed, no independent candidate"
