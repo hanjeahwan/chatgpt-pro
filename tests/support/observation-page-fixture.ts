@@ -5,6 +5,7 @@ export interface ObservationPageOptions {
   readonly contentBeforeReload?: string;
   readonly contentBeforeReloadByPoll?: readonly string[];
   readonly contentAfterReload?: string;
+  readonly contentAfterReloadByPoll?: readonly string[];
   readonly conversationIdAfterReload?: string;
   readonly copyVisibleBeforeReload?: boolean;
   readonly copyVisibleAfterReload?: boolean;
@@ -60,6 +61,14 @@ export function observationPageFixture(options: ObservationPageOptions = {}): Ob
         : contentSequence[Math.min(Math.max(polls - 1, 0), contentSequence.length - 1)];
     if (!reloaded && polledContent !== undefined) {
       return polledContent;
+    }
+    const reloadedContentSequence = options.contentAfterReloadByPoll;
+    const reloadedPolledContent =
+      reloadedContentSequence === undefined || reloadedContentSequence.length === 0
+        ? undefined
+        : reloadedContentSequence[Math.min(Math.max(polls - 6, 0), reloadedContentSequence.length - 1)];
+    if (reloaded && reloadedPolledContent !== undefined) {
+      return reloadedPolledContent;
     }
     return reloaded
       ? (options.contentAfterReload ?? options.contentBeforeReload ?? 'stable fixture response')

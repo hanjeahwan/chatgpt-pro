@@ -89,6 +89,8 @@ export type BrowserObservationResult =
       readonly conversationId: string;
       readonly conversationUrl: string;
       readonly assistantTurnId: string;
+      readonly completionMode: 'normal' | 'recovered-stuck';
+      readonly contentFingerprint: string;
     };
 
 export interface BrowserArtifactDescription {
@@ -147,6 +149,8 @@ interface ObservationProtocolResult extends ProtocolResult {
   readonly conversationId?: string;
   readonly conversationUrl?: string;
   readonly assistantTurnId?: string;
+  readonly completionMode?: 'normal' | 'recovered-stuck';
+  readonly contentFingerprint?: string;
 }
 
 interface CaptureProtocolResult extends ProtocolResult {
@@ -525,7 +529,9 @@ export class PlaywrightBrowser {
     if (
       result.conversationId === undefined ||
       result.conversationUrl === undefined ||
-      result.assistantTurnId === undefined
+      result.assistantTurnId === undefined ||
+      result.completionMode === undefined ||
+      result.contentFingerprint === undefined
     ) {
       throw new BrowserError(
         'BROWSER_PROTOCOL_ERROR',
@@ -538,6 +544,8 @@ export class PlaywrightBrowser {
       conversationId: result.conversationId,
       conversationUrl: result.conversationUrl,
       assistantTurnId: result.assistantTurnId,
+      completionMode: result.completionMode,
+      contentFingerprint: result.contentFingerprint,
     };
   }
 
@@ -552,6 +560,8 @@ export class PlaywrightBrowser {
    * @param captureTimeoutMs Remaining finite capture budget.
    * @param signal Host cancellation used to terminate the command at the monotonic deadline.
    * @param observer Task-lease child-process observer.
+   * @param expectedCompletionMode Completion mode returned by observation, when available.
+   * @param expectedContentFingerprint Content fingerprint returned by observation, when available.
    * @returns Exact `text/plain`, matching `text/html`, and re-observed conversation identity.
    * @throws {BrowserError} If the response changed, a clipboard type is absent, or selectors drift.
    * @throws {Error} If a local Playwright artifact cannot be written.
@@ -565,13 +575,22 @@ export class PlaywrightBrowser {
     captureTimeoutMs: number,
     signal: AbortSignal,
     observer?: BrowserOperationObserver,
+    expectedCompletionMode: 'normal' | 'recovered-stuck' | null = null,
+    expectedContentFingerprint: string | null = null,
   ): Promise<BrowserCaptureResult> {
     this.#artifactControlsRefreshed.delete(taskId);
     const result = await this.#runCode<CaptureProtocolResult>(
       sessionName,
       taskId,
       'capture-response',
-      captureScript(expectedConversationId, localTurnId, expectedAssistantTurnId, captureTimeoutMs),
+      captureScript(
+        expectedConversationId,
+        localTurnId,
+        expectedAssistantTurnId,
+        captureTimeoutMs,
+        expectedCompletionMode,
+        expectedContentFingerprint,
+      ),
       'copy completed response',
       'capture',
       observer,
@@ -1504,7 +1523,17 @@ function observationScript(
     let assistantTurnId = null;
     let stableCompletedPolls = 0;
     let reloadedAssistantTurnId = null;
+    let completionMode = 'normal';
+    let completionContent = null;
     let polls = 0;
+    const fingerprint = (content) => {
+      let hash = 2166136261;
+      for (let index = 0; index < content.length; index += 1) {
+        hash ^= content.charCodeAt(index);
+        hash = Math.imul(hash, 16777619);
+      }
+      return (hash >>> 0).toString(16).padStart(8, '0');
+    };
     while (stableCompletedPolls < 6 && polls < 24 && Date.now() < observationDeadline) {
       polls += 1;
       const candidate = await page.locator(turnSelector).evaluateAll((elements) => {
@@ -1539,6 +1568,7 @@ function observationScript(
         }
         assistantIndex = targetCandidate.index;
         assistantTurnId = targetCandidate.turnId;
+        completionContent = targetCandidate.content;
         stableCompletedPolls += 1;
       } else {
         assistantIndex = -1;
@@ -1578,6 +1608,14 @@ function observationScript(
           },
         );
         if (pageNow - stableSince >= stallGraceMs) {
+          if (reloadedAssistantTurnId !== null) {
+            assistantIndex = targetCandidate.index;
+            assistantTurnId = targetCandidate.turnId;
+            completionContent = targetCandidate.content;
+            completionMode = 'recovered-stuck';
+            stableCompletedPolls = 6;
+            break;
+          }
           const reloadKey =
             'chatgpt-pro-collab:completion-reload:' +
             expectedConversationId +
@@ -1625,6 +1663,7 @@ function observationScript(
             assistantIndex = -1;
             assistantTurnId = null;
             stableCompletedPolls = 0;
+            await page.evaluate((key) => sessionStorage.removeItem(key), stallKey);
             boundAssistantTurnId = targetCandidate.turnId;
             continue;
           }
@@ -1660,10 +1699,17 @@ function observationScript(
     await page.evaluate(
       (argument) => {
         sessionStorage.setItem(argument.key, argument.turnId);
+        sessionStorage.setItem(
+          argument.proofKey,
+          JSON.stringify({ mode: argument.mode, turnId: argument.turnId, fingerprint: argument.fingerprint }),
+        );
       },
       {
         key: 'chatgpt-pro-collab:completion-target:' + expectedConversationId + ':' + localTurnId,
         turnId: assistantTurnId,
+        proofKey: 'chatgpt-pro-collab:completion-proof:' + expectedConversationId + ':' + localTurnId,
+        mode: completionMode,
+        fingerprint: fingerprint(completionContent ?? ''),
       },
     );
     return JSON.stringify({
@@ -1673,6 +1719,8 @@ function observationScript(
       conversationId: completedMatch[1],
       conversationUrl: completedUrl.origin + '/c/' + completedMatch[1],
       assistantTurnId,
+      completionMode,
+      contentFingerprint: fingerprint(completionContent ?? ''),
     });
   }`;
 }
@@ -1684,6 +1732,8 @@ function observationScript(
  * @param localTurnId Local durable turn identity used to look up a prior observation on retry.
  * @param expectedAssistantTurnId Assistant DOM identity returned by completion observation, or null for a capturing retry.
  * @param captureTimeoutMs Remaining finite capture budget.
+ * @param expectedCompletionMode Completion mode returned by observation, when available.
+ * @param expectedContentFingerprint Content fingerprint returned by observation, when available.
  * @returns A Playwright page function source.
  * @throws {Error} This pure source builder does not throw.
  */
@@ -1692,11 +1742,15 @@ function captureScript(
   localTurnId: string,
   expectedAssistantTurnId: string | null,
   captureTimeoutMs: number,
+  expectedCompletionMode: 'normal' | 'recovered-stuck' | null,
+  expectedContentFingerprint: string | null,
 ): string {
   return `async (page) => {
     const expectedConversationId = ${JSON.stringify(expectedConversationId)};
     const localTurnId = ${JSON.stringify(localTurnId)};
     const suppliedAssistantTurnId = ${JSON.stringify(expectedAssistantTurnId)};
+    const suppliedCompletionMode = ${JSON.stringify(expectedCompletionMode)};
+    const suppliedContentFingerprint = ${JSON.stringify(expectedContentFingerprint)};
     const captureTimeoutMs = ${JSON.stringify(captureTimeoutMs)};
     const captureDeadline = Date.now() + captureTimeoutMs;
     const url = await page.evaluate(() => {
@@ -1720,6 +1774,29 @@ function captureScript(
     if (boundAssistantTurnId !== null && boundAssistantTurnId !== expectedAssistantTurnId) {
       throw new Error('page contract drift: captured assistant differs from the bound target turn');
     }
+    const proofRaw = await page.evaluate(
+      (key) => sessionStorage.getItem(key),
+      'chatgpt-pro-collab:completion-proof:' + expectedConversationId + ':' + localTurnId,
+    );
+    let completionMode = suppliedCompletionMode;
+    let expectedContentFingerprint = suppliedContentFingerprint;
+    if (proofRaw !== null) {
+      try {
+        const proof = JSON.parse(proofRaw);
+        completionMode ??= proof.mode;
+        expectedContentFingerprint ??= proof.fingerprint;
+      } catch {
+        throw new Error('page contract drift: completion proof is invalid');
+      }
+    }
+    const fingerprint = (content) => {
+      let hash = 2166136261;
+      for (let index = 0; index < content.length; index += 1) {
+        hash ^= content.charCodeAt(index);
+        hash = Math.imul(hash, 16777619);
+      }
+      return (hash >>> 0).toString(16).padStart(8, '0');
+    };
     const copySelector = '[data-testid="copy-turn-action-button"]';
     const assistantIndices = await page.locator(turnSelector).evaluateAll((elements, targetTurnId) => {
       return elements.flatMap((element, index) => {
@@ -1739,8 +1816,17 @@ function captureScript(
       throw new Error('page contract drift: assistant Copy response is not unique and visible');
     }
     const stop = page.getByRole('button', { name: 'Stop answering', exact: true });
-    if (await stop.count() > 0 && await stop.first().isVisible()) {
+    if (completionMode !== 'recovered-stuck' && await stop.count() > 0 && await stop.first().isVisible()) {
       throw new Error('completion state changed before Copy response capture');
+    }
+    if (completionMode === 'recovered-stuck') {
+      if (expectedContentFingerprint === null) {
+        throw new Error('page contract drift: recovered completion fingerprint was not retained');
+      }
+      const currentContent = await assistant.evaluate((element) => element.textContent ?? '');
+      if (fingerprint(currentContent) !== expectedContentFingerprint) {
+        throw new Error('page contract drift: recovered completion content changed before capture');
+      }
     }
     await page.evaluate(() => {
       const clipboard = navigator.clipboard;

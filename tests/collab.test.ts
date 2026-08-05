@@ -891,6 +891,8 @@ class FakeBrowser implements CollabBrowser {
       conversationId: expectedConversationId,
       conversationUrl: `https://chatgpt.com/c/${expectedConversationId}`,
       assistantTurnId: 'conversation-turn-2',
+      completionMode: 'normal' as const,
+      contentFingerprint: 'fixture-fingerprint',
     };
   }
 

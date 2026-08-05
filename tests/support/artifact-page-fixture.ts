@@ -2,6 +2,7 @@ import { writeFile } from 'node:fs/promises';
 
 export interface ArtifactPageOptions {
   readonly assistantTurnId?: string;
+  readonly contentText?: string;
   readonly responseHtml: string;
   readonly behaviorButtonCount: number;
   readonly artifactRows?: readonly string[];
@@ -42,7 +43,10 @@ export function artifactPageFixture(options: ArtifactPageOptions): ArtifactPageF
   const events: string[] = [];
   const storage = new Map<string, string>();
   const attributes = new WeakMap<object, Map<string, string>>();
-  const assistantElement = fixtureElement(attributes, { behaviorButtonCount: options.behaviorButtonCount });
+  const assistantElement = fixtureElement(attributes, {
+    behaviorButtonCount: options.behaviorButtonCount,
+    innerText: options.contentText,
+  });
   let resolveDownload: ((download: object) => void) | undefined;
   let rejectDownload: ((error: Error) => void) | undefined;
 
@@ -154,6 +158,7 @@ export function artifactPageFixture(options: ArtifactPageOptions): ArtifactPageF
     fixtureElement(attributes, {
       dataTurn: 'assistant',
       dataTestId: options.assistantTurnId ?? 'conversation-turn-2',
+      innerText: options.contentText,
     }),
   ];
   const turnLocator = {

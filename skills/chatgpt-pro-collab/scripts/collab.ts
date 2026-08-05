@@ -61,6 +61,8 @@ export interface CollabBrowser {
     captureTimeoutMs: number,
     signal: AbortSignal,
     observer?: BrowserOperationObserver,
+    expectedCompletionMode?: 'normal' | 'recovered-stuck' | null,
+    expectedContentFingerprint?: string | null,
   ): Promise<BrowserCaptureResult>;
   downloadArtifact(
     taskId: string,
@@ -317,6 +319,8 @@ export class CollabService {
 
           let targetResponsePath = turn.responsePath;
           let expectedAssistantTurnId: string | null = null;
+          let expectedCompletionMode: 'normal' | 'recovered-stuck' | null = null;
+          let expectedContentFingerprint: string | null = null;
           const captureWasPending = turn.status === 'pending';
           if (turn.status === 'pending') {
             const remainingObservationMs = remainingMilliseconds(observationDeadline);
@@ -338,6 +342,8 @@ export class CollabService {
             }
             assertConversation(taskId, task.conversationId, task.conversationUrl, observed);
             expectedAssistantTurnId = observed.assistantTurnId;
+            expectedCompletionMode = observed.completionMode;
+            expectedContentFingerprint = observed.contentFingerprint;
             targetResponsePath = responsePath(this.#paths, taskId, turnId);
             captureDeadline = performance.now() + captureTimeoutMs;
           }
@@ -359,6 +365,8 @@ export class CollabService {
                 remainingCaptureMs,
                 signal,
                 observer,
+                expectedCompletionMode,
+                expectedContentFingerprint,
               );
             },
           );

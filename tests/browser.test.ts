@@ -342,6 +342,8 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
         conversationId: 'conversation-a',
         conversationUrl: 'https://chatgpt.com/c/conversation-a',
         assistantTurnId: 'conversation-turn-2',
+        completionMode: 'normal',
+        contentFingerprint: 'fixture-fingerprint',
       }),
       pageResult({
         protocol,
@@ -411,6 +413,8 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
       conversationId: 'conversation-a',
       conversationUrl: 'https://chatgpt.com/c/conversation-a',
       assistantTurnId: 'conversation-turn-2',
+      completionMode: 'normal',
+      contentFingerprint: 'ec444f76',
     });
     expect(fixture.reloadCount()).toBe(0);
     expect(
@@ -434,6 +438,8 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
       conversationId: 'conversation-a',
       conversationUrl: 'https://chatgpt.com/c/conversation-a',
       assistantTurnId: 'conversation-turn-2',
+      completionMode: 'normal',
+      contentFingerprint: 'ec444f76',
     });
     expect(fixture.reloadCount()).toBe(1);
     expect(
@@ -459,9 +465,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
 
     await expect(
       fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 5000),
-    ).resolves.toEqual({
-      status: 'pending',
-    });
+    ).resolves.toEqual({ status: 'pending' });
     expect(fixture.reloadCount()).toBe(0);
   });
 
@@ -475,19 +479,38 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     await expect(
       fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 5000),
     ).resolves.toEqual({
-      status: 'pending',
+      status: 'completed',
+      conversationId: 'conversation-a',
+      conversationUrl: 'https://chatgpt.com/c/conversation-a',
+      assistantTurnId: 'conversation-turn-2',
+      completionMode: 'recovered-stuck',
+      contentFingerprint: 'ec444f76',
     });
     await expect(
       fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 5000),
-    ).resolves.toEqual({
-      status: 'pending',
-    });
+    ).resolves.toEqual({ status: 'pending' });
     expect(fixture.reloadCount()).toBe(1);
     expect(
       fixture.events.filter((event) => {
         return event.includes('completion-reload:');
       }),
     ).toHaveLength(1);
+  });
+
+  it('resets the recovered stability clock when post-reload content changes', async () => {
+    const fixture = await executableObservationBrowserFixture({
+      stopVisibleBeforeReload: true,
+      stopVisibleAfterReload: true,
+      pageClockStepMs: 6_000,
+      contentAfterReloadByPoll: Array.from({ length: 24 }, (_value, index) => {
+        return `recovered-${index}`;
+      }),
+    });
+
+    await expect(
+      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 5000),
+    ).resolves.toEqual({ status: 'pending' });
+    expect(fixture.reloadCount()).toBe(1);
   });
 
   it('does not reuse a reload marker across local semantic turns', async () => {
@@ -499,13 +522,17 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
 
     await expect(
       fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 5000),
-    ).resolves.toEqual({
-      status: 'pending',
+    ).resolves.toMatchObject({
+      status: 'completed',
+      completionMode: 'recovered-stuck',
+      assistantTurnId: 'conversation-turn-2',
     });
     await expect(
       fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-b', 5000),
-    ).resolves.toEqual({
-      status: 'pending',
+    ).resolves.toMatchObject({
+      status: 'completed',
+      completionMode: 'recovered-stuck',
+      assistantTurnId: 'conversation-turn-2',
     });
     expect(fixture.reloadCount()).toBe(2);
   });
@@ -518,9 +545,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
 
     await expect(
       fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 5000),
-    ).resolves.toEqual({
-      status: 'pending',
-    });
+    ).resolves.toEqual({ status: 'pending' });
     expect(fixture.reloadCount()).toBe(0);
   });
 
@@ -583,8 +608,10 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     ).rejects.toMatchObject({ code: 'PLAYWRIGHT_CONTRACT_DRIFT' });
     await expect(
       fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 5000),
-    ).resolves.toEqual({
-      status: 'pending',
+    ).resolves.toMatchObject({
+      status: 'completed',
+      completionMode: 'recovered-stuck',
+      assistantTurnId: 'conversation-turn-2',
     });
     expect(fixture.reloadCount()).toBe(2);
     expect(fixture.reloadTimeouts()[0]).toBeLessThanOrEqual(5000);
@@ -739,6 +766,30 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
       ],
     });
     expect(fixture.events).toEqual(['clipboard:install', 'copy', 'clipboard:restore']);
+  });
+
+  it('rejects recovered capture when the content fingerprint changed', async () => {
+    const fixture = await executableBrowserFixture({
+      responseHtml: '<p>response</p>',
+      behaviorButtonCount: 0,
+      contentText: 'changed content',
+    });
+
+    await expect(
+      fixture.browser.captureResponse(
+        'task-a',
+        'session-a',
+        'conversation-a',
+        'turn-a',
+        'conversation-turn-2',
+        5000,
+        new AbortController().signal,
+        undefined,
+        'recovered-stuck',
+        '00000000',
+      ),
+    ).rejects.toMatchObject({ code: 'PLAYWRIGHT_CONTRACT_DRIFT' });
+    expect(fixture.events).not.toContain('copy');
   });
 
   it('rejects an executed Copy response whose occurrence and behavior-button counts differ', async () => {
