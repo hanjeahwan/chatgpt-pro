@@ -37,8 +37,8 @@
 ### BEH-004 等待并捕获原始回复
 
 - **触发与前置条件**：宿主执行 `wait(taskId, turnId, observationWindowMs, captureTimeoutMs)`，该 turn 已提交，且两个时长都是宿主提供的有限正整数。
-- **可观察行为**：Collab 在观察窗口内检查该 turn 的 Pro 回复。回复完成时，Collab 捕获 Web 端完整 Copy response，不改写其中的文字或链接，将内容写入该 turn 专属且不覆盖其他 turn 的 `response.md`，再完成 BEH-012 的返回文件捕获。`observationWindowMs` 只约束等待回复生成；`captureTimeoutMs` 从首次观察到完成或本次调用开始恢复 `capturing` turn 时计时，约束本次完整文字与剩余文件捕获。观察窗口到期而回复尚未完成时返回 `pending`；捕获超时或浏览器发生真实错误时返回错误。
-- **验收条件**：`completed` 只在 `response.md` 与全部返回文件均已落盘后返回；`pending` 不停止 Pro 生成、不关闭任务、不把 turn 标为失败；捕获超时后 turn 保持 `capturing`，后续 `wait` 使用新的 `captureTimeoutMs` 继续；同一 completed turn 再次 `wait` 返回同一 `responsePath` 和文件路径；调用方中断不会停止远端生成，后续仍可再次 `wait`。
+- **可观察行为**：Collab 在观察窗口内检查该 turn 的 Pro 回复。网页报告回复完成后，Collab 在本次 `captureTimeoutMs` 的宿主侧单调 deadline 内取得 Web 端完整 Copy response 与完整有序 artifact 描述，再以一个 SQLite 事务建立 `capturing` 边界；事务后把原始文字写入该 turn 专属且不覆盖其他 turn 的 `response.md`，并完成 BEH-012 的返回文件捕获。`observationWindowMs` 只约束网页完成观察；`captureTimeoutMs` 从网页报告完成或本次调用开始恢复 `capturing` turn 时计时，约束本次完整文字与剩余文件捕获。观察窗口到期而网页尚未报告完成时返回 `pending`；捕获超时或浏览器发生真实错误时返回错误。
+- **验收条件**：`completed` 只在 `response.md` 与全部返回文件均已落盘后返回；`pending` 是已成功提交但尚未取得完整 Copy response 与 artifact 描述并建立原子 `capturing` 边界的本地持久化状态，不声称 Pro 必然仍在生成。取得完整数据前超时返回 `CAPTURE_TIMEOUT` 或发生其他真实错误时 turn 保持 `pending`，后续 `wait` 重新观察并重取 Copy；进入 `capturing` 后超时、中断或下载失败则保持 `capturing`，后续 `wait` 使用新的 `captureTimeoutMs` 按恢复矩阵继续。同一 completed turn 再次 `wait` 返回同一 `responsePath` 和文件路径；调用方中断不会停止远端生成，后续仍可再次 `wait`。
 - **状态**：已确认。
 
 ### BEH-005 同一任务持续多轮
@@ -94,7 +94,7 @@
 
 - **触发与前置条件**：目标 assistant turn 已完成，且其中可能包含指向 `sandbox:/mnt/data/...` 的文件链接。
 - **可观察行为**：Collab 只检查该 turn，按出现顺序下载其中全部唯一 `sandbox:` 文件链接，不限制文件格式；普通 `https:` 等引用链接不自动下载。完整 Copy response 原样保留在 `response.md`，每个文件保存到不会因同名而碰撞的 turn 专属路径。Collab 不解压、解释、执行或应用下载内容。
-- **验收条件**：同一 `sandbox:` 目标只下载一次；多个同名文件不会相互覆盖；没有返回文件时得到空文件列表；任一文件下载失败或整轮捕获达到 `captureTimeoutMs` 时不把 turn 标为 completed，后续 `wait` 复用已成功保存的文件并继续未完成项；回复完成在观察窗口到期前被观察到后，即使文件下载跨过该窗口也不返回 `pending`，只会在全部完成后返回 `completed`，或在捕获超时及其他真实下载错误时返回错误。
+- **验收条件**：同一 `sandbox:` 目标只下载一次；多个同名文件不会相互覆盖；没有返回文件时得到空文件列表。取得完整 Copy response 与有序 artifact 描述前达到 `captureTimeoutMs` 时返回 `CAPTURE_TIMEOUT` 并保持 `pending`；原子进入 `capturing` 后，任一文件下载失败或整轮捕获超时时不把 turn 标为 completed，后续 `wait` 复用已成功保存的文件并继续未完成项。网页完成在观察窗口到期前被观察到后，即使文字或文件捕获跨过该窗口也不返回成功的 `pending` 结果，只会在全部完成后返回 `completed`，或在捕获超时及其他真实错误时返回错误。
 - **状态**：已确认。
 
 ## 产品边界
@@ -158,7 +158,7 @@
 - 同一个目标 assistant turn 同时作为返回文件发现边界。实现从 Copy response 的 `text/html` 按文档顺序提取 `sandbox:` anchor，按完整逻辑 URL 去重并保留首次出现位置；普通 `https:` 等链接不触发下载。去重前的 sandbox occurrence 与该 turn 中按文档顺序出现的 `button.behavior-btn` 按位置对应；数量不等时返回页面合同漂移。不得从其他 assistant turn、侧栏或页面其他区域发现文件（REF-004）。
 - 目标 turn 的 artifact 行按首次出现顺序构成唯一 sandbox 目标的子序列。实现展开 artifact 列表，以逻辑目标 basename 和顺序把每行的 `Open file` 与同级 `Download file` 映射到对应目标；同名目标按顺序区分。映射到 artifact 行的目标通过行内 `Download file` 捕获 download event；未映射目标通过对应正文行为按钮捕获直接 download event。artifact 行无法形成无歧义子序列、事件没有发生或页面数量、顺序、控件关系发生变化时返回页面合同漂移，不猜测相邻控件（REF-004）。
 - 每个唯一逻辑目标在页面动作前先建立 artifact 记录。`source_url` 保存完整 `sandbox:` 逻辑 URL；浏览器建议名称和带签名的实际下载 URL 只属于当次 download event，不作为目标身份。下载成功后使用建议名称作为原始名称，并保存到带 ordinal 的 turn 路径。
-- 每次页面完成检查保持有界。服务层使用单调时钟分别控制 `observationWindowMs` 和 `captureTimeoutMs`；回复尚未完成且达到观察 deadline 时返回 `pending`。一旦观察到完成，turn 进入 `capturing`，观察 deadline 不再参与判断。捕获 deadline 覆盖本次调用的完整文字与全部剩余文件捕获，不按文件重新计时；turn 已经是 `capturing` 时从本次调用开始建立新的捕获 deadline。达到捕获 deadline 时返回真实错误并保留 `capturing`，不得返回 `pending`。
+- 每次页面完成检查保持有界。服务层使用单调时钟分别控制 `observationWindowMs` 和 `captureTimeoutMs`；网页尚未报告完成且达到观察 deadline 时返回 `pending`。一旦观察到完成，观察 deadline 不再参与判断，服务在宿主侧 capture watchdog 内取得完整 Copy response 与有序 artifact 描述；此阶段达到捕获 deadline 时返回 `CAPTURE_TIMEOUT` 并保持 `pending`，后续 `wait` 重新观察并重取 Copy。取得完整描述后才以单个事务进入 `capturing`；捕获 deadline 继续覆盖本次调用的 response 发布与全部文件捕获，不按文件重新计时。turn 已经是 `capturing` 时从本次调用开始建立新的捕获 deadline；此后达到 deadline 时返回 `CAPTURE_TIMEOUT` 并保留 `capturing`。deadline 前发生的真实浏览器错误保留原错误码；watchdog 必须安全终止对应 command，不能遗留悬挂 command 或 operation lease。
 - `archive` 只使用唯一的 `[data-testid="conversation-options-button"]` 和精确名称为 `Archive` 的 menuitem。脚本先观察 Archive menuitem，只有不可见时才打开菜单，避免把已打开菜单反向关闭；不得用模糊的 `Open conversation options` 匹配侧栏按钮。点击后等待离开目标 `/c/<conversationId>`，刷新侧栏并确认目标链接消失；随后重新导航到原 canonical URL，重新确认页面仍绑定原 `conversationId` 且目标 conversation turn 可定位，才返回成功。恢复后后续 `send` 与 `wait` 必须继续使用同一绑定。
 - Playwright session 自身是浏览器生命周期权威；SQLite 只记录 session name 和已观察到的 conversation identity，不伪造浏览器仍存活。
 
@@ -179,7 +179,7 @@
 
 ### 最小状态与数据布局
 
-每个 task 只定义 `active`、`closed`、`failed` 三种状态；每个 turn 定义 `sending`、`pending`、`capturing`、`completed`、`failed` 和 `unknown-submission`。`capturing` 表示回复完成已被观察到，后续只允许继续保存原始文字和下载返回文件，不能再返回 `pending`。`unknown-submission` 只用于浏览器在提交边界失败、实现无法证明消息是否已经发送的真实歧义，不能被自动重试掩盖。
+每个 task 只定义 `active`、`closed`、`failed` 三种状态；每个 turn 定义 `sending`、`pending`、`capturing`、`completed`、`failed` 和 `unknown-submission`。`pending` 表示提交已成功，但尚未取得完整 Copy response 与有序 artifact 描述并原子建立 `capturing` 边界；它是本地持久化阶段，不等同于 Pro 必然仍在生成。`capturing` 表示原始 response 路径与完整 artifact 集已经冻结，后续只允许发布或核对原始文字并下载返回文件，不能再返回成功的 `pending` 结果。`unknown-submission` 只用于浏览器在提交边界失败、实现无法证明消息是否已经发送的真实歧义，不能被自动重试掩盖。
 
 ```text
 ~/.local/chatgpt-pro-collab/
@@ -192,7 +192,7 @@
         └── turns/
             └── <turnId>/
                 ├── prompt.md         # 发送前复制，后续不覆盖
-                ├── response.md       # capturing 后存在，后续不覆盖
+                ├── response.md       # capturing 事务后发布，可暂不存在，后续不覆盖
                 └── artifacts/
                     └── <ordinal>/
                         └── <filename> # 返回文件；ordinal 防止同名覆盖
@@ -214,29 +214,29 @@ SQLite 只保存协调状态和文件索引，不保存 prompt、response 或返
 
 每个 CLI 进程使用自己的 `DatabaseSync` 连接，并设置 `foreign_keys=ON`、WAL journal 和有限 busy timeout。会影响状态门或外部副作用归属的变更在 `BEGIN IMMEDIATE` 事务中完成；业务代码不得依赖进程内全局状态代替数据库约束。
 
-prompt 文件成功落盘后，turn 才能从 `sending` 进入 `pending`。观察到回复完成并取得 Copy response 与完整 artifact 描述后，单个 SQLite 事务必须先把 turn 从 `pending` 置为 `capturing`、记录确定的 `response_path`，并按页面顺序建立全部 artifact 行；事务提交后才发布 `response.md` 和返回文件。每个文件先写同目录临时文件，再无覆盖地发布到最终路径并标为 completed。只有 response 和全部 artifact 文件均可读时，turn 才能进入 `completed`。
+prompt 文件成功落盘后，turn 才能从 `sending` 进入 `pending`。观察到网页完成后，turn 在取得 Copy response 与完整有序 artifact 描述期间仍保持 `pending`；超时、中断或浏览器错误不得留下 response 路径或部分 artifact 行。取得全部数据后，单个 `BEGIN IMMEDIATE` 事务必须同时把 turn 从 `pending` 置为 `capturing`、记录确定的 `response_path`，并按页面顺序建立全部 artifact 行；事务只能全部提交或全部回滚，不得把 `beginCapture` 与 artifact 建行拆成两个事务。事务提交后才发布 `response.md` 和返回文件。每个文件先写同目录临时文件，再无覆盖地发布到最终路径并标为 completed。只有 response 和全部 artifact 文件均可读时，turn 才能进入 `completed`。
 
 ### 捕获提交与中断恢复
 
 文件系统与 SQLite 不能组成一个原子事务。每次 `wait` 在继续 `capturing` turn 前必须按下表核对；恢复只复用或补齐同一目标 assistant turn 的结果，不删除、覆盖或猜测已有文件。
 
-| 持久状态                                  | 恢复动作                                                                                                   | 不一致处理                                                 |
-| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| `pending`                                 | 重新检查目标 assistant turn；观察到完成后按上一节建立一次完整 `capturing` 事务                             | Web 状态无法确定时返回真实错误，保持 `pending`             |
-| `capturing` 且 `response.md` 不存在       | 从同一目标 assistant turn 重新取得 Copy response，并无覆盖地发布到已记录的 `response_path`                 | 无法重新取得原始回复时返回真实错误，保持 `capturing`       |
-| `capturing` 且 `response.md` 已存在       | 重新取得 Copy response 并逐字节比较；相同时复用现有文件                                                    | 内容不同时返回 `TRANSCRIPT_INCONSISTENT`                   |
-| artifact 为 `pending` 且最终文件不存在    | 重新建立目标 turn 的页面映射，按该行 `source_url` 触发下载到同目录临时文件，无覆盖地发布后标为 `completed` | 下载或发布失败时记录该行错误，turn 保持 `capturing`        |
-| artifact 为 `pending` 但最终文件已经存在  | 重新建立页面映射并按 `source_url` 下载到临时文件，与现有最终文件逐字节比较；相同时复用现有文件             | 内容不同时返回 `ARTIFACT_INCONSISTENT`，不得覆盖现有文件   |
-| artifact 为 `completed`                   | 验证 `local_path` 对应文件可读后直接复用                                                                   | 文件缺失或不可读时返回 `ARTIFACT_INCONSISTENT`             |
-| response 与全部 artifact 均满足完成不变量 | 在事务中把 turn 从 `capturing` 置为 `completed`                                                            | 状态或文件在提交前变化时返回冲突，由下一次 `wait` 重新核对 |
+| 持久状态                                  | 恢复动作                                                                                                                        | 不一致处理                                                              |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `pending`                                 | 重新检查目标 assistant turn；网页完成后重新取得 Copy response 与完整有序 artifact 描述，再按上一节建立一次完整 `capturing` 事务 | 捕获超时返回 `CAPTURE_TIMEOUT`，其他 Web 错误保留原码；均保持 `pending` |
+| `capturing` 且 `response.md` 不存在       | 从同一目标 assistant turn 重新取得 Copy response，并无覆盖地发布到已记录的 `response_path`                                      | 无法重新取得原始回复时返回真实错误，保持 `capturing`                    |
+| `capturing` 且 `response.md` 已存在       | 重新取得 Copy response 并逐字节比较；相同时复用现有文件                                                                         | 内容不同时返回 `TRANSCRIPT_INCONSISTENT`                                |
+| artifact 为 `pending` 且最终文件不存在    | 重新建立目标 turn 的页面映射，按该行 `source_url` 触发下载到同目录临时文件，无覆盖地发布后标为 `completed`                      | 下载或发布失败时记录该行错误，turn 保持 `capturing`                     |
+| artifact 为 `pending` 但最终文件已经存在  | 重新建立页面映射并按 `source_url` 下载到临时文件，与现有最终文件逐字节比较；相同时复用现有文件                                  | 内容不同时返回 `ARTIFACT_INCONSISTENT`，不得覆盖现有文件                |
+| artifact 为 `completed`                   | 验证 `local_path` 对应文件可读后直接复用                                                                                        | 文件缺失或不可读时返回 `ARTIFACT_INCONSISTENT`                          |
+| response 与全部 artifact 均满足完成不变量 | 在事务中把 turn 从 `capturing` 置为 `completed`                                                                                 | 状态或文件在提交前变化时返回冲突，由下一次 `wait` 重新核对              |
 
-每次重新取得目标 turn 时，页面发现的有序唯一 `source_url` 列表必须与已记录 artifact 行一致；不一致时返回 `ARTIFACT_SET_INCONSISTENT`。捕获超时、进程中断或上述错误都不把 `capturing` 改回 `pending` 或改成 `completed`。数据库损坏时返回真实错误，不自动删除 transcript 或伪造成功状态。
+每次重新取得 `capturing` 目标 turn 时，页面发现的有序唯一 `source_url` 列表必须与已记录 artifact 行一致；不一致时返回 `ARTIFACT_SET_INCONSISTENT`。原子边界前的捕获超时、中断或错误保持 `pending` 且不能留下半冻结状态；原子边界后的捕获超时、中断或上述错误都不把 `capturing` 改回 `pending` 或改成 `completed`。数据库损坏时返回真实错误，不自动删除 transcript 或伪造成功状态。
 
 ### 顺序、并发与幂等
 
 - 同一 task 的 CLI 调用通过 SQLite 状态门和同一个 Playwright named session 排序；不同 task 使用不同 named session、浏览器进程、browser context 和 turn 目录。
 - `send` 先写入 turn 标识和 prompt 副本，再进行浏览器副作用；只有确认消息已提交后才返回成功。提交结果不明确时记录 `unknown-submission`，不自动重发。
-- `wait` 的内部页面检查、operation lease 释放和再次检查都不写宿主可见进度；达到观察 deadline 后才返回一次 pending。turn 进入 `capturing` 后，重试跳过生成等待，先执行捕获恢复核对，再复用已完成 artifact 并只下载未完成项。
+- `wait` 的内部页面检查、operation lease 释放和再次检查都不写宿主可见进度；网页未报告完成且达到观察 deadline 后才返回一次 pending。网页已报告完成但捕获在原子边界前失败时返回真实错误并保持持久状态 `pending`；后续重试仍重新观察目标 turn 并重取 Copy。turn 进入 `capturing` 后，重试跳过生成等待，先执行捕获恢复核对，再复用已完成 artifact 并只下载未完成项。
 - completed turn 的 `wait` 是幂等读取；`close` 是幂等清理。`archive` 依赖 Web 端实际状态，只有观察到指定 conversation 已归档且 task 页面恢复原绑定才返回成功。
 - 观察窗口不会关闭 task 或取消远端生成。调用环境中断时，Playwright session 和未完成 turn 继续存在，后续可再次 `wait`。
 - 回复捕获不得依赖未经隔离验证的全局剪贴板。若驱动必须使用 Copy 控件，VER-004 和 VER-006 必须证明并发任务不会读到彼此内容。
@@ -346,8 +346,8 @@ prompt 文件成功落盘后，turn 才能从 `sending` 进入 `pending`。观�
 
 - **覆盖对象**：BEH-002、BEH-004、BEH-006、BEH-007、BEH-012。
 - **前置条件**：state 与文件存储实现及测试存在。
-- **执行或检查**：以多进程覆盖不同 task，并分别在 capturing 事务后、response 发布后、artifact 发布但状态更新前、部分 artifact 完成后终止进程；重开数据库并执行恢复矩阵，最后并发 close。
-- **通过证据**：无丢失更新或跨 task 污染；各中断点都能复用或补齐一致内容；不一致使用规定错误码；文件无覆盖；completed 不变量保持；重启后可继续。
+- **执行或检查**：以多进程覆盖不同 task，并分别在原子 capturing 事务提交前、事务提交后、response 发布后、artifact 发布但状态更新前、部分 artifact 完成后终止进程；重开数据库并执行恢复矩阵，最后并发 close。
+- **通过证据**：事务提交前的中断只保留完整 `pending`，提交后一次可见 `capturing`、response_path 与全部 artifact 行；无丢失更新、半冻结状态或跨 task 污染；各后续中断点都能复用或补齐一致内容；不一致使用规定错误码；文件无覆盖；completed 不变量保持；重启后可继续。
 - **证明边界**：不证明浏览器、下载或 ChatGPT Web 行为。
 - **必需性**：必需。
 
@@ -382,8 +382,8 @@ prompt 文件成功落盘后，turn 才能从 `sending` 进入 `pending`。观�
 
 - **覆盖对象**：BEH-004、BEH-012。
 - **前置条件**：Live Pro 能生成含 sandbox 文件链接的目标回复。
-- **执行或检查**：让目标 turn 返回 HTML、ZIP、图片、源码、两个同名文件、重复 sandbox 目标和普通 HTTPS 链接；执行带两个时长的 wait，核对 Copy response 的两种 ClipboardItem 类型、sandbox occurrence 与正文按钮的顺序、artifact 子序列、直接与 artifact download event 以及落盘文件；另用确定性故障注入覆盖页面数量或顺序漂移、部分下载失败、整轮捕获超时、重试及下载跨过观察 deadline。
-- **通过证据**：Copy response 原样保存；唯一 sandbox 文件按顺序落盘；重复项只下载一次；同名目标以逻辑 URL 区分且本地文件不覆盖；HTTPS 未下载；直接与 artifact 页面路径均成功产生对应 download event；页面映射不一致时返回页面合同漂移；捕获超时返回 `CAPTURE_TIMEOUT` 且保持 capturing；重试复用并完成；不因观察 deadline 返回 pending。
+- **执行或检查**：让目标 turn 返回 HTML、ZIP、图片、源码、两个同名文件、重复 sandbox 目标和普通 HTTPS 链接；执行带两个时长的 wait，核对 Copy response 的两种 ClipboardItem 类型、sandbox occurrence 与正文按钮的顺序、artifact 子序列、直接与 artifact download event 以及落盘文件；另用确定性故障注入覆盖页面数量或顺序漂移、部分下载失败、原子边界前后捕获超时、重试及下载跨过观察 deadline。
+- **通过证据**：Copy response 原样保存；唯一 sandbox 文件按顺序落盘；重复项只下载一次；同名目标以逻辑 URL 区分且本地文件不覆盖；HTTPS 未下载；直接与 artifact 页面路径均成功产生对应 download event；页面映射不一致时返回页面合同漂移；原子边界前捕获超时返回 `CAPTURE_TIMEOUT` 且保持完整 `pending`，边界后捕获超时返回同一码并保持 `capturing`；deadline 前的真实浏览器错误保留原码；重试分别重取 Copy 或复用已冻结内容并完成；不因观察 deadline 返回成功的 pending。
 - **证明边界**：只覆盖当次 ChatGPT Web 文件 UI 与注入的下载失败路径。
 - **必需性**：必需。
 
@@ -401,21 +401,22 @@ VER-001–VER-015 均为完成本规格的必需验证。涉及真实 ChatGPT We
 
 ## 决策记录
 
-| 选择                                | 状态   | 理由                                                                                                | 影响                                                                  |
-| ----------------------------------- | ------ | --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| 轻量浏览器协作通道                  | 已确认 | 仓库理解、安全判断和代码集成不属于浏览器传输职责；核心只保留协作输入、浏览器操作和原始输出          | BEH-001–BEH-012、产品边界、技术设计                                   |
-| 每 task 独立浏览器进程              | 已确认 | 多任务必须能够同时等待和操作，不能由共享浏览器或串行控制互相影响                                    | BEH-002、BEH-006、VER-002、VER-006                                    |
-| 宿主显式提供输入                    | 已确认 | Collab 不可能可靠理解所有用户项目；文件与归档内容应由掌握任务上下文的宿主负责                       | BEH-003、BEH-010、产品边界、VER-003、VER-013                          |
-| send 与 wait 分离                   | 已确认 | Pro 可能长时间生成；提交不应占住宿主模型或阻止其他任务继续工作                                      | BEH-003、BEH-004、BEH-006、BEH-011                                    |
-| 一次 wait 只产生一个终态结果        | 已确认 | 让 Agent 反复检查会浪费 token；页面检查应由浏览器层承担，宿主只在完成、到期或真实错误时取得结果     | BEH-004、BEH-011、CLI、VER-014                                        |
-| 生成观察与结果捕获使用独立时长      | 已确认 | 观察窗口只决定何时返回 pending；回复完成后仍需给整轮文件捕获一个独立、有限且可重试的执行窗口        | BEH-004、BEH-012、命令合同、VER-014、VER-015                          |
-| `.tar.gz` 默认、`.zip` 可选         | 已确认 | 归档用于避免上传大量分散文件；代码任务偏向 tar，跨平台或任务约定需要 zip，同时不固定协作协议        | BEH-010、输入归档合同、VER-013                                        |
-| 原始回复与产物交给宿主解释          | 已确认 | 固定 response schema、diff 或 receipt 解析会写死协作方式；Pro 和宿主应按任务选择 patch、归档或文字  | BEH-004、BEH-012、产品边界、VER-004、VER-015                          |
-| 全部 sandbox 文件落盘后才 completed | 已确认 | 宿主被唤醒时应拿到可操作的完整结果；生成观察窗口不应截断已开始的文件捕获                            | BEH-004、BEH-012、capturing 状态、VER-011、VER-015                    |
-| close 与 Web archive 分离           | 已确认 | 本地进程生命周期与 Web conversation 生命周期是两种独立副作用，必须由不同显式命令触发                | BEH-008、BEH-009、VER-008、VER-009                                    |
-| Playwright CLI 浏览器边界           | 已确认 | 固定版本外部 CLI 提供 session、storage state 和页面命令；浏览器易变细节集中在单一边界（REF-001）    | Browser boundary、VER-001–VER-006、VER-008、VER-009、VER-012、VER-015 |
-| 共享只读 storage state              | 已确认 | 共享 seed 只提供启动认证数据；每 task 独立 browser context 承担运行时状态隔离，复制 seed 不增加隔离 | BEH-001、BEH-002、BEH-006、VER-001、VER-002、VER-006                  |
-| SQLite 与正文/文件分离              | 已确认 | 结构化状态需要事务和跨进程恢复；文字与返回文件仍应直接可读、逐 turn 无覆盖                          | State store、Transcript/artifact store、VER-007、VER-011、VER-012     |
+| 选择                                | 状态   | 理由                                                                                                  | 影响                                                                  |
+| ----------------------------------- | ------ | ----------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| 轻量浏览器协作通道                  | 已确认 | 仓库理解、安全判断和代码集成不属于浏览器传输职责；核心只保留协作输入、浏览器操作和原始输出            | BEH-001–BEH-012、产品边界、技术设计                                   |
+| 每 task 独立浏览器进程              | 已确认 | 多任务必须能够同时等待和操作，不能由共享浏览器或串行控制互相影响                                      | BEH-002、BEH-006、VER-002、VER-006                                    |
+| 宿主显式提供输入                    | 已确认 | Collab 不可能可靠理解所有用户项目；文件与归档内容应由掌握任务上下文的宿主负责                         | BEH-003、BEH-010、产品边界、VER-003、VER-013                          |
+| send 与 wait 分离                   | 已确认 | Pro 可能长时间生成；提交不应占住宿主模型或阻止其他任务继续工作                                        | BEH-003、BEH-004、BEH-006、BEH-011                                    |
+| 一次 wait 只产生一个终态结果        | 已确认 | 让 Agent 反复检查会浪费 token；页面检查应由浏览器层承担，宿主只在完成、到期或真实错误时取得结果       | BEH-004、BEH-011、CLI、VER-014                                        |
+| 生成观察与结果捕获使用独立时长      | 已确认 | 观察窗口只决定何时返回 pending；回复完成后仍需给整轮文件捕获一个独立、有限且可重试的执行窗口          | BEH-004、BEH-012、命令合同、VER-014、VER-015                          |
+| capturing 以完整描述原子冻结为边界  | 已确认 | 网页完成观察不是可恢复的数据边界；response 路径与完整 artifact 集必须同时可见，边界前错误保持 pending | BEH-004、BEH-012、SQLite 合同、VER-011、VER-015                       |
+| `.tar.gz` 默认、`.zip` 可选         | 已确认 | 归档用于避免上传大量分散文件；代码任务偏向 tar，跨平台或任务约定需要 zip，同时不固定协作协议          | BEH-010、输入归档合同、VER-013                                        |
+| 原始回复与产物交给宿主解释          | 已确认 | 固定 response schema、diff 或 receipt 解析会写死协作方式；Pro 和宿主应按任务选择 patch、归档或文字    | BEH-004、BEH-012、产品边界、VER-004、VER-015                          |
+| 全部 sandbox 文件落盘后才 completed | 已确认 | 宿主被唤醒时应拿到可操作的完整结果；生成观察窗口不应截断已开始的文件捕获                              | BEH-004、BEH-012、capturing 状态、VER-011、VER-015                    |
+| close 与 Web archive 分离           | 已确认 | 本地进程生命周期与 Web conversation 生命周期是两种独立副作用，必须由不同显式命令触发                  | BEH-008、BEH-009、VER-008、VER-009                                    |
+| Playwright CLI 浏览器边界           | 已确认 | 固定版本外部 CLI 提供 session、storage state 和页面命令；浏览器易变细节集中在单一边界（REF-001）      | Browser boundary、VER-001–VER-006、VER-008、VER-009、VER-012、VER-015 |
+| 共享只读 storage state              | 已确认 | 共享 seed 只提供启动认证数据；每 task 独立 browser context 承担运行时状态隔离，复制 seed 不增加隔离   | BEH-001、BEH-002、BEH-006、VER-001、VER-002、VER-006                  |
+| SQLite 与正文/文件分离              | 已确认 | 结构化状态需要事务和跨进程恢复；文字与返回文件仍应直接可读、逐 turn 无覆盖                            | State store、Transcript/artifact store、VER-007、VER-011、VER-012     |
 
 ## 参考资料
 
