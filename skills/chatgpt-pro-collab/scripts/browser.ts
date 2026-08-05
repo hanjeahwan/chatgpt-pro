@@ -1897,7 +1897,15 @@ function captureScript(
           throw new Error('page contract drift: recovered completion content changed before capture');
         }
         await page.evaluate(
-          ({ expectedAssistantTurnId, expectedContent, turnSelector, copySelector }) => {
+          ({ expectedConversationId, expectedAssistantTurnId, expectedContent, turnSelector, copySelector }) => {
+            const match = /^\\/c\\/([^/?#]+)\\/?$/.exec(location.pathname);
+            if (
+              location.hostname !== 'chatgpt.com' ||
+              match === null ||
+              match[1] !== expectedConversationId
+            ) {
+              throw new Error('conversation identity does not match the capturing turn');
+            }
             const assistants = [...document.querySelectorAll(turnSelector)].filter((element) => {
               return element.getAttribute('data-turn') === 'assistant' &&
                 element.getAttribute('data-testid') === expectedAssistantTurnId;
@@ -1925,7 +1933,13 @@ function captureScript(
             }
             copy.click();
           },
-          { expectedAssistantTurnId, expectedContent: recoveredContentSnapshot, turnSelector, copySelector },
+          {
+            expectedConversationId,
+            expectedAssistantTurnId,
+            expectedContent: recoveredContentSnapshot,
+            turnSelector,
+            copySelector,
+          },
         );
       } else {
         await copy.click({ force: true, timeout: Math.max(1, captureDeadline - Date.now()) });
