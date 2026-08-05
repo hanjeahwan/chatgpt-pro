@@ -1,6 +1,6 @@
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
@@ -20,6 +20,7 @@ import {
 import { StateStore } from '../skills/chatgpt-pro-collab/scripts/state.ts';
 import { artifactPageFixture, type ArtifactPageOptions } from './support/artifact-page-fixture.ts';
 import { completionPageFixture, type CompletionPageOptions } from './support/completion-page-fixture.ts';
+import { projectSendPageFixture } from './support/project-send-page-fixture.ts';
 import { startPageFixture, type StartPageOptions } from './support/start-page-fixture.ts';
 
 const protocol = 'chatgpt-pro-collab/v1';
@@ -313,6 +314,77 @@ describe('BEH-002 fixed Project and GPT-5.6 Sol Pro start context', () => {
     const failure = await startTaskFailure(fixture);
     expect(failure.code).toBe('PAGE_CONTRACT_DRIFT');
     expect(fixture.invocations.at(-1)?.arguments).toContain('close');
+  });
+
+  it('rejects with SELECTION_UNCONFIRMED when the model selection resets the mode readback', async () => {
+    const fixture = await executableStartFixture({ modelClickResetsMode: true });
+    await writeFile(fixture.paths.seedState, '{}');
+
+    const failure = await startTaskFailure(fixture);
+    expect(failure.code).toBe('SELECTION_UNCONFIRMED');
+    expect(failure.message).toContain('jointly read back');
+    expect(fixture.invocations.at(-1)?.arguments).toContain('close');
+  });
+});
+
+describe('BEH-003 first send stays inside the fixed Project composer', () => {
+  it('submits a first send only inside the Project blank composer and binds the conversation', async () => {
+    const fixture = await executableProjectSendFixture({ initialPathname: '/g/g-p-123/project' });
+
+    const result = await fixture.browser.send('task-a', 'session-a', null, 'exact prompt', []);
+
+    expect(result).toEqual({
+      status: 'submitted',
+      conversationId: 'new-conversation',
+      conversationUrl: 'https://chatgpt.com/g/g-p-123-chatgpt-pro-collab/c/new-conversation',
+    });
+    expect(fixture.events).toEqual(['send-click']);
+  });
+
+  it('rejects a first send whose page is on the home root before the preflight', async () => {
+    const fixture = await executableProjectSendFixture({ initialPathname: '/' });
+
+    const result = await fixture.browser.send('task-a', 'session-a', null, 'exact prompt', []);
+
+    expect(result).toMatchObject({
+      status: 'not-submitted',
+      error: expect.stringContaining('conversation identity does not match the send target'),
+    });
+    expect(fixture.events).toEqual([]);
+  });
+
+  it('rejects a first send that drifts from the Project composer to home before submission', async () => {
+    const fixture = await executableProjectSendFixture({
+      initialPathname: '/g/g-p-123/project',
+      beforeSubmit: (pageFixture) => {
+        pageFixture.setPathname('/');
+      },
+    });
+
+    const result = await fixture.browser.send('task-a', 'session-a', null, 'exact prompt', []);
+
+    expect(result).toMatchObject({
+      status: 'not-submitted',
+      error: expect.stringContaining('conversation identity changed before prompt submission'),
+    });
+    expect(fixture.events).toEqual([]);
+  });
+
+  it('rejects a first send that drifts to an existing conversation before submission', async () => {
+    const fixture = await executableProjectSendFixture({
+      initialPathname: '/g/g-p-123/project',
+      beforeSubmit: (pageFixture) => {
+        pageFixture.setPathname('/c/other-conversation');
+      },
+    });
+
+    const result = await fixture.browser.send('task-a', 'session-a', null, 'exact prompt', []);
+
+    expect(result).toMatchObject({
+      status: 'not-submitted',
+      error: expect.stringContaining('conversation identity changed before prompt submission'),
+    });
+    expect(fixture.events).toEqual([]);
   });
 });
 
@@ -1155,7 +1227,57 @@ async function startTaskFailure(fixture: Awaited<ReturnType<typeof executableSta
   expect(failure).toBeInstanceOf(Error);
   const typed = failure as Error & { readonly code?: string };
   expect(typed.code).toBeDefined();
+  expectNoProjectModifyEvents(fixture.events);
   return typed;
+}
+
+/**
+ * Asserts that a start fixture never touched Project create, options, or modify controls.
+ *
+ * @param events Ordered fixture events.
+ * @throws {Error} If any Project-modifying control event was recorded.
+ */
+function expectNoProjectModifyEvents(events: readonly string[]): void {
+  expect(events).not.toContain('project-create-click');
+  expect(events).not.toContain('project-options-click');
+}
+
+/**
+ * Creates a browser runner that executes the generated send boundary scripts against a
+ * mutable Project composer fixture, allowing interleaved drift between commands.
+ *
+ * @param options Initial pathname and optional state mutation before the submit script runs.
+ * @returns Browser, fixture state mutators, captured invocations, and ordered page events.
+ * @throws {Error} If the fixture directory or generated script cannot be read.
+ */
+async function executableProjectSendFixture(options: {
+  readonly initialPathname: string;
+  readonly beforeSubmit?: (pageFixture: ReturnType<typeof projectSendPageFixture>) => void;
+}) {
+  const root = await mkdtemp(join(tmpdir(), 'collab-project-send-'));
+  const paths = collabPaths(root);
+  await ensureCollabDirectories(paths);
+  const invocations: BrowserCommandInvocation[] = [];
+  const pageFixture = projectSendPageFixture(options.initialPathname);
+  const browser = new PlaywrightBrowser(paths, root, async (invocation) => {
+    invocations.push(invocation);
+    try {
+      if (invocation.arguments.includes('run-code')) {
+        const scriptPath = invocation.arguments[invocation.arguments.indexOf('--filename') + 1] ?? '';
+        if (basename(scriptPath).startsWith('send-')) {
+          options.beforeSubmit?.(pageFixture);
+        }
+        const source = await scriptForInvocation(invocation);
+        const runPageFunction = new Function(`return (${source})`)() as (page: object) => Promise<unknown>;
+        const result = await runPageFunction(pageFixture.page);
+        return output(`### Ran Playwright code\n${JSON.stringify(result)}\n`);
+      }
+      return output('ok');
+    } catch (error) {
+      return output(`### Error\n${error instanceof Error ? error.message : String(error)}\n`);
+    }
+  });
+  return { browser, events: pageFixture.events, fixture: pageFixture, invocations, paths };
 }
 
 /**

@@ -15,6 +15,7 @@ export interface StartPageOptions {
   readonly modelInitiallyChecked?: boolean;
   readonly modeClickApplies?: boolean;
   readonly modelClickApplies?: boolean;
+  readonly modelClickResetsMode?: boolean;
 }
 
 export interface StartPageFixture {
@@ -198,6 +199,7 @@ export function startPageFixture(options: StartPageOptions): StartPageFixture {
     modeRadioPresent: options.modeRadioPresent ?? true,
     modelChecked: options.modelInitiallyChecked ?? false,
     modelClickApplies: options.modelClickApplies ?? true,
+    modelClickResetsMode: options.modelClickResetsMode ?? false,
     modelOpenerCount: options.modelOpenerCount ?? 1,
     modelRadioPresent: options.modelRadioPresent ?? true,
     navigateOnProjectClick: options.navigateOnProjectClick ?? true,
@@ -252,8 +254,19 @@ export function startPageFixture(options: StartPageOptions): StartPageFixture {
 
   const authControls: StartDomNode[] = state.authenticated ? [] : [anchor('Log in', { href: '/auth/login' })];
 
-  const matchedRows: StartDomNode[] = state.projectLoadsRows
+  const projectCreateControl: StartDomNode = node('button', 'New project', {}, [], () => {
+    events.push('project-create-click');
+  });
+  const projectOptionsControls: StartDomNode[] = state.projectLoadsRows
     ? Array.from({ length: state.projectRowCount }, () => {
+        return node('button', 'Open project options for chatgpt-pro-collab', {}, [], () => {
+          events.push('project-options-click');
+        });
+      })
+    : [];
+
+  const matchedRows: StartDomNode[] = state.projectLoadsRows
+    ? Array.from({ length: state.projectRowCount }, (_unused, index) => {
         const row = node('div', '', { role: 'row' });
         const name = node('span', 'chatgpt-pro-collab', {}, [], () => {
           events.push('project-row-click');
@@ -261,7 +274,7 @@ export function startPageFixture(options: StartPageOptions): StartPageFixture {
             state.pathname = '/g/g-p-123/project';
           }
         });
-        setChildren(row, [name, node('button', 'Open project options for chatgpt-pro-collab', {})]);
+        setChildren(row, [name, projectOptionsControls[index]]);
         return row;
       })
     : [];
@@ -370,6 +383,9 @@ export function startPageFixture(options: StartPageOptions): StartPageFixture {
             if (state.modelClickApplies) {
               state.modelChecked = true;
             }
+            if (state.modelClickResetsMode) {
+              state.modeChecked = false;
+            }
             closeMenu();
           }
         },
@@ -398,7 +414,15 @@ export function startPageFixture(options: StartPageOptions): StartPageFixture {
     };
   }
 
-  const rootChildren: StartDomNode[] = [...authControls, ...matchedRows, ...otherRows, main, firstLayer, submenu];
+  const rootChildren: StartDomNode[] = [
+    ...authControls,
+    projectCreateControl,
+    ...matchedRows,
+    ...otherRows,
+    main,
+    firstLayer,
+    submenu,
+  ];
   const allDocumentNodes = (): readonly StartDomNode[] => {
     return rootChildren.flatMap((element) => {
       return [element, ...descendants(element)];

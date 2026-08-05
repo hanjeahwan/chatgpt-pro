@@ -1583,6 +1583,37 @@ function startVerificationScript(contextMarker: string): string {
       return fail('SELECTION_UNCONFIRMED', 'fixed model GPT-5.6 Sol could not be read back as aria-checked=true');
     }
 
+    const jointReadback = async () => {
+      const modeVisible = await ensureModeVisible();
+      if (modeVisible.status === 'drift') return modeVisible;
+      if (modeVisible.status === 'unavailable') {
+        return { status: 'unconfirmed', target: targetMode };
+      }
+      const modelVisible = await ensureModelVisible();
+      if (modelVisible.status === 'drift') return modelVisible;
+      if (modelVisible.status === 'unavailable') {
+        return { status: 'unconfirmed', target: targetModel };
+      }
+      const modeState = await readRadio(targetMode);
+      if (modeState.count !== 1 || !modeState.checked) {
+        return { status: 'unconfirmed', target: targetMode };
+      }
+      const modelState = await readRadio(targetModel);
+      if (modelState.count !== 1 || !modelState.checked) {
+        return { status: 'unconfirmed', target: targetModel };
+      }
+      return { status: 'confirmed' };
+    };
+    const joint = await jointReadback();
+    if (joint.status === 'drift') return fail('PAGE_CONTRACT_DRIFT', joint.reason);
+    if (joint.status === 'unconfirmed') {
+      const target = joint.target === targetMode ? 'mode Pro' : 'model GPT-5.6 Sol';
+      return fail(
+        'SELECTION_UNCONFIRMED',
+        'fixed ' + target + ' was not jointly read back as a unique aria-checked=true menuitemradio after all selections',
+      );
+    }
+
     try {
       await page.waitForFunction((target) => {
         const visible = (element) => {
@@ -1635,11 +1666,29 @@ const SEND_TARGET_OK = `
     const sendTargetOk = (pathname) => {
       const normalized = pathname.replace(/\\/$/, '');
       if (expectedConversationId === null) {
-        return normalized === '' || /^\\/g\\/g-p-[^/]+\\/project$/.test(normalized);
+        return /^\\/g\\/g-p-[^/]+\\/project$/.test(normalized);
       }
       const match = /\\/c\\/([^/?#]+)\\/?$/.exec(pathname);
       return match !== null && !match[1].startsWith('WEB:') && match[1] === expectedConversationId;
     };`;
+
+const PROJECT_COMPOSER_IDENTITY = `
+    await page.waitForFunction((target) => {
+      const visible = (element) => {
+        if (!(element instanceof HTMLElement)) return false;
+        const style = getComputedStyle(element);
+        return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
+      };
+      const urlOk = /^\\/g\\/g-p-[^/]+\\/project$/.test(location.pathname);
+      const main = document.querySelector('main') ?? document.querySelector('[role="main"]');
+      const titleOk = main !== null && [...main.querySelectorAll('h1')].some((element) => {
+        return visible(element) && element.textContent.trim() === target;
+      });
+      const composers = [...document.querySelectorAll('#prompt-textarea')].filter(visible);
+      const composerOk = composers.length === 1 && (composers[0].textContent ?? '').trim() === '';
+      const turnsOk = [...document.querySelectorAll('[data-testid^="conversation-turn-"][data-turn]')].filter(visible).length === 0;
+      return urlOk && titleOk && composerOk && turnsOk;
+    }, 'chatgpt-pro-collab', { timeout: 60000, polling: 250 });`;
 
 /**
  * Builds the pre-upload conversation and composer identity gate.
@@ -1656,6 +1705,8 @@ function sendTargetVerificationScript(expectedConversationId: string | null): st
     });
     if (url.hostname !== 'chatgpt.com' || !sendTargetOk(url.pathname)) {
       throw new Error('conversation identity does not match the send target');
+    }
+    if (expectedConversationId === null) {${PROJECT_COMPOSER_IDENTITY}
     }
     const composer = page.locator('#prompt-textarea');
     const archivedMessage = page.getByText(

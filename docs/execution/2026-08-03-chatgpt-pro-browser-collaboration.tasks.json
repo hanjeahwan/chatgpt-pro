@@ -83,7 +83,7 @@
           "git diff --check",
           "VER-013 host A task_c4fbc6efab2a (tar), host B task_823bbdaa4c97 (zip): one upload item, extraction matched, manifest comparison passed",
           "VER-013 current-HEAD tasks ce881056-79ae-45c3-bcb3-019633cc4459, 2daa2bb6-1c29-4230-8f9c-78fe6a50ca6a: one finite wait each, exact manifest comparison passed",
-          "2026-08-06 sendTargetOk 沿用 conversation identity 合同：bound conversation 接受 project-scoped pathname 并按最后 /c/<id> 段核对，null 首次发送仍接受 / 或 /g/g-p-<id>/project；live task b40073ac-143c-4d21-9f95-5e41eb73c843 归档后二次 send 成功（turn b7fb1cd4-5cfe-4e52-8144-a646b37e8c17），conversation_id 与 conversation_url 不变"
+          "2026-08-06 sendTargetOk 沿用 conversation identity 合同：bound conversation 接受 project-scoped pathname 并按最后 /c/<id> 段核对，null 首次发送只接受 /g/g-p-<id>/project 且 send 预检对固定 chatgpt-pro-collab Project 空白 composer 重新验证（URL、main h1 标题、空白 composer、无 conversation turn），漂移到首页或既有 conversation 在提交前失败且不绑定 conversation；可执行交错测试覆盖预检前首页、预检后提交前漂移首页、漂移既有 conversation；live task b40073ac-143c-4d21-9f95-5e41eb73c843 归档后二次 send 成功（turn b7fb1cd4-5cfe-4e52-8144-a646b37e8c17），conversation_id 与 conversation_url 不变"
         ],
         "reviews": [
           "task_f83d3a0d427b / conversation 019fcdfa-ef5f-7410-a245-6bbaf7be52dd: F1-F5 closed, no independent candidate"
@@ -218,10 +218,11 @@
           "pnpm format:check",
           "pnpm lint",
           "pnpm typecheck",
-          "pnpm test (8 files/111 tests)",
+          "pnpm test (8 files/118 tests)",
           "git diff --check",
-          "pnpm exec vitest --run tests/browser.test.ts: 44 tests passed，含 BEH-002 成功路径与 PROJECT_NOT_FOUND/PROJECT_NOT_UNIQUE/FIXED_TARGET_UNAVAILABLE/SELECTION_UNCONFIRMED/PAGE_CONTRACT_DRIFT 各失败夹具，均已断言关闭会话且无成功 taskId",
-          "VER-001/VER-002 live 2026-08-06: 并发 start 任务 404a8666-741e-413f-929a-bbe284ac77c4 与 a5859c62-1590-48a6-9a1b-4c5e77415cbc 均成功；两任务页面均回读 /g/g-p-6a72a51fc0ac81919292bcd8e256bb56/project、标题 ChatGPT - chatgpt-pro-collab、main h1 精确 Project 标题、唯一空白 #prompt-textarea、turn 数 0，且 GPT-5.6 Sol 与 Pro menuitemradio 各自唯一并 aria-checked=true；named session、浏览器 PID、session 目录、taskId 均不同；并发首次 send 均成功（turn 99741e8c-4a57-4942-8b64-75e439e274e9 / ff897d68-fe76-4acf-87b3-e09851ba5e50），SQLite 绑定不同 conversation id（6a73750b-175c... / 6a73750b-31f4...）及各自 project-scoped conversationUrl；wait 完成并落盘 response.md（README 校验 READY）；共享 seed sha256 3e4b106c38bf33013d364cc2e0c16711e04cba0c486de8531747f96680aba352 前后未变；失败夹具各错误均关闭已打开 session 并保留 failed task 记录，未调用 Project 创建或修改控件",
+          "pnpm exec vitest --run tests/browser.test.ts: 51 tests passed，含 BEH-002 成功路径与 PROJECT_NOT_FOUND/PROJECT_NOT_UNIQUE/FIXED_TARGET_UNAVAILABLE/SELECTION_UNCONFIRMED/PAGE_CONTRACT_DRIFT 各失败夹具；start-page fixture 为 Project create/options 控件记录事件，所有失败夹具经 expectNoProjectModifyEvents 显式断言零 project-create-click/project-options-click；模型选择导致模式复位的确定性夹具经最终联合回读返回 SELECTION_UNCONFIRMED",
+          "VER-001/VER-002 live 2026-08-06: 并发 start 任务 404a8666-741e-413f-929a-bbe284ac77c4 与 a5859c62-1590-48a6-9a1b-4c5e77415cbc 均成功；两任务页面均回读 /g/g-p-6a72a51fc0ac81919292bcd8e256bb56/project、标题 ChatGPT - chatgpt-pro-collab、main h1 精确 Project 标题、唯一空白 #prompt-textarea、turn 数 0，且 GPT-5.6 Sol 与 Pro menuitemradio 各自唯一并 aria-checked=true；named session、浏览器 PID、session 目录、taskId 均不同；并发首次 send 均成功（turn 99741e8c-4a57-4942-8b64-75e439e274e9 / ff897d68-fe76-4acf-87b3-e09851ba5e50），SQLite 绑定不同 conversation id（6a73750b-175c... / 6a73750b-31f4...）及各自 project-scoped conversationUrl；wait 完成并落盘 response.md（README 校验 READY）；共享 seed sha256 3e4b106c38bf33013d364cc2e0c16711e04cba0c486de8531747f96680aba352 前后未变；失败夹具各错误均关闭已打开 session 并保留 failed task 记录；最终联合回读在全部选择动作后重新打开选择控件并同时确认唯一 GPT-5.6 Sol 与唯一 Pro 均 aria-checked=true",
+          "VER-002 live 复审重跑 2026-08-06（Review finding 修复后）：并发 start 6baeb20a-be4f-4fd1-816d-c82e84b9e9c3 与 d7a082c0-de83-4378-8511-b009feedbc9d 均成功，页面身份与唯一 GPT-5.6 Sol/Pro aria-checked=true 回读一致；并发首次 send 均成功（turn af80fbe3-9e45-46c4-930a-69a29b9cd565 / 7d54e563-8982-4cc5-9825-e2551bbe937b）并绑定不同 conversation id（6a737bcd-8f7c... / 6a737bcd-7638...）；seed sha256 不变；任务已 close 无残留进程",
           "spec-tasks diff: specChanged=false, contextChanged=false, no impacted tasks"
         ],
         "reviews": []
