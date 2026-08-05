@@ -1526,13 +1526,12 @@ function observationScript(
     let completionMode = 'normal';
     let completionContent = null;
     let polls = 0;
-    const fingerprint = (content) => {
-      let hash = 2166136261;
-      for (let index = 0; index < content.length; index += 1) {
-        hash ^= content.charCodeAt(index);
-        hash = Math.imul(hash, 16777619);
+    const fingerprint = async (content) => {
+      if (globalThis.crypto?.subtle === undefined || globalThis.TextEncoder === undefined) {
+        throw new Error('page contract drift: Web Crypto SHA-256 is unavailable');
       }
-      return (hash >>> 0).toString(16).padStart(8, '0');
+      const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(content));
+      return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
     };
     while (stableCompletedPolls < 6 && polls < 24 && Date.now() < observationDeadline) {
       polls += 1;
@@ -1709,7 +1708,7 @@ function observationScript(
         turnId: assistantTurnId,
         proofKey: 'chatgpt-pro-collab:completion-proof:' + expectedConversationId + ':' + localTurnId,
         mode: completionMode,
-        fingerprint: fingerprint(completionContent ?? ''),
+        fingerprint: await fingerprint(completionContent ?? ''),
       },
     );
     return JSON.stringify({
@@ -1720,7 +1719,7 @@ function observationScript(
       conversationUrl: completedUrl.origin + '/c/' + completedMatch[1],
       assistantTurnId,
       completionMode,
-      contentFingerprint: fingerprint(completionContent ?? ''),
+      contentFingerprint: await fingerprint(completionContent ?? ''),
     });
   }`;
 }
@@ -1789,13 +1788,12 @@ function captureScript(
         throw new Error('page contract drift: completion proof is invalid');
       }
     }
-    const fingerprint = (content) => {
-      let hash = 2166136261;
-      for (let index = 0; index < content.length; index += 1) {
-        hash ^= content.charCodeAt(index);
-        hash = Math.imul(hash, 16777619);
+    const fingerprint = async (content) => {
+      if (globalThis.crypto?.subtle === undefined || globalThis.TextEncoder === undefined) {
+        throw new Error('page contract drift: Web Crypto SHA-256 is unavailable');
       }
-      return (hash >>> 0).toString(16).padStart(8, '0');
+      const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(content));
+      return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
     };
     const copySelector = '[data-testid="copy-turn-action-button"]';
     const assistantIndices = await page.locator(turnSelector).evaluateAll((elements, targetTurnId) => {
@@ -1824,7 +1822,7 @@ function captureScript(
         throw new Error('page contract drift: recovered completion fingerprint was not retained');
       }
       const currentContent = await assistant.evaluate((element) => element.textContent ?? '');
-      if (fingerprint(currentContent) !== expectedContentFingerprint) {
+      if ((await fingerprint(currentContent)) !== expectedContentFingerprint) {
         throw new Error('page contract drift: recovered completion content changed before capture');
       }
     }

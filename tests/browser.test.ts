@@ -414,7 +414,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
       conversationUrl: 'https://chatgpt.com/c/conversation-a',
       assistantTurnId: 'conversation-turn-2',
       completionMode: 'normal',
-      contentFingerprint: 'ec444f76',
+      contentFingerprint: 'dfe6dcf778199b6c8ce1ec10fb213c3c7ec72525e99f0c8af518b46e539ba80a',
     });
     expect(fixture.reloadCount()).toBe(0);
     expect(
@@ -439,7 +439,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
       conversationUrl: 'https://chatgpt.com/c/conversation-a',
       assistantTurnId: 'conversation-turn-2',
       completionMode: 'normal',
-      contentFingerprint: 'ec444f76',
+      contentFingerprint: 'dfe6dcf778199b6c8ce1ec10fb213c3c7ec72525e99f0c8af518b46e539ba80a',
     });
     expect(fixture.reloadCount()).toBe(1);
     expect(
@@ -484,7 +484,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
       conversationUrl: 'https://chatgpt.com/c/conversation-a',
       assistantTurnId: 'conversation-turn-2',
       completionMode: 'recovered-stuck',
-      contentFingerprint: 'ec444f76',
+      contentFingerprint: 'dfe6dcf778199b6c8ce1ec10fb213c3c7ec72525e99f0c8af518b46e539ba80a',
     });
     await expect(
       fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 5000),
@@ -768,11 +768,11 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     expect(fixture.events).toEqual(['clipboard:install', 'copy', 'clipboard:restore']);
   });
 
-  it('rejects recovered capture when the content fingerprint changed', async () => {
+  it('rejects the reviewer collision pair when recovered content changes before capture', async () => {
     const fixture = await executableBrowserFixture({
       responseHtml: '<p>response</p>',
       behaviorButtonCount: 0,
-      contentText: 'changed content',
+      contentText: 'ak43vzv798',
     });
 
     await expect(
@@ -786,7 +786,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
         new AbortController().signal,
         undefined,
         'recovered-stuck',
-        '00000000',
+        '0a2628977748c14ba2648142c9bcabbfcc96bcce67866fd47a4e04fe219bd876',
       ),
     ).rejects.toMatchObject({ code: 'PLAYWRIGHT_CONTRACT_DRIFT' });
     expect(fixture.events).not.toContain('copy');
