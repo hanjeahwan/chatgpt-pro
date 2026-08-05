@@ -1855,14 +1855,12 @@ function captureScript(
     if (completionMode !== 'recovered-stuck' && await stop.count() > 0 && await stop.first().isVisible()) {
       throw new Error('completion state changed before Copy response capture');
     }
+    let recoveredContentSnapshot;
     if (completionMode === 'recovered-stuck') {
       if (expectedContentFingerprint === null) {
         throw new Error('page contract drift: recovered completion fingerprint was not retained');
       }
-      const currentContent = await assistant.evaluate((element) => element.textContent ?? '');
-      if ((await fingerprint(currentContent)) !== expectedContentFingerprint) {
-        throw new Error('page contract drift: recovered completion content changed before capture');
-      }
+      recoveredContentSnapshot = await assistant.evaluate((element) => element.textContent ?? '');
     }
     await page.evaluate(() => {
       const clipboard = navigator.clipboard;
@@ -1894,7 +1892,44 @@ function captureScript(
     });
     let response;
     try {
-      await copy.click({ force: true, timeout: Math.max(1, captureDeadline - Date.now()) });
+      if (completionMode === 'recovered-stuck') {
+        if ((await fingerprint(recoveredContentSnapshot)) !== expectedContentFingerprint) {
+          throw new Error('page contract drift: recovered completion content changed before capture');
+        }
+        await page.evaluate(
+          ({ expectedAssistantTurnId, expectedContent, turnSelector, copySelector }) => {
+            const assistants = [...document.querySelectorAll(turnSelector)].filter((element) => {
+              return element.getAttribute('data-turn') === 'assistant' &&
+                element.getAttribute('data-testid') === expectedAssistantTurnId;
+            });
+            if (assistants.length !== 1) {
+              throw new Error('page contract drift: observed assistant turn identity changed before Copy');
+            }
+            const target = assistants[0];
+            if ((target.textContent ?? '') !== expectedContent) {
+              throw new Error('page contract drift: recovered completion content changed before Copy');
+            }
+            const copies = [...target.querySelectorAll(copySelector)];
+            const copy = copies[0];
+            const copyStyle = copy instanceof HTMLElement ? getComputedStyle(copy) : null;
+            if (
+              copies.length !== 1 ||
+              !(copy instanceof HTMLElement) ||
+              copy.getClientRects().length === 0 ||
+              copyStyle?.display === 'none' ||
+              copyStyle?.visibility === 'hidden' ||
+              copyStyle?.visibility === 'collapse' ||
+              copy.matches(':disabled')
+            ) {
+              throw new Error('page contract drift: assistant Copy response changed before Copy');
+            }
+            copy.click();
+          },
+          { expectedAssistantTurnId, expectedContent: recoveredContentSnapshot, turnSelector, copySelector },
+        );
+      } else {
+        await copy.click({ force: true, timeout: Math.max(1, captureDeadline - Date.now()) });
+      }
       await page.waitForFunction(() => {
         return globalThis.__chatgptProCollabClipboard?.captured !== undefined;
       }, undefined, { timeout: Math.max(1, captureDeadline - Date.now()), polling: 25 });

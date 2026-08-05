@@ -2,7 +2,9 @@ import { writeFile } from 'node:fs/promises';
 
 export interface ArtifactPageOptions {
   readonly assistantTurnId?: string;
+  readonly captureDigestDelayMs?: number;
   readonly contentText?: string;
+  readonly contentTextAfterFingerprint?: string;
   readonly responseHtml: string;
   readonly behaviorButtonCount: number;
   readonly artifactRows?: readonly string[];
@@ -195,6 +197,22 @@ export function artifactPageFixture(options: ArtifactPageOptions): ArtifactPageF
       }
       if (source.includes('const state = globalThis.__chatgptProCollabClipboard')) {
         events.push('clipboard:restore');
+        return Promise.resolve();
+      }
+      if (source.includes('recovered completion content changed before Copy')) {
+        const finalCheck = argument as {
+          readonly expectedAssistantTurnId: string;
+          readonly expectedContent: string;
+        };
+        const actualAssistantTurnId = options.assistantTurnId ?? 'conversation-turn-2';
+        if (finalCheck.expectedAssistantTurnId !== actualAssistantTurnId) {
+          throw new Error('page contract drift: observed assistant turn identity changed before Copy');
+        }
+        const finalContent = options.contentTextAfterFingerprint ?? options.contentText ?? '';
+        if (finalCheck.expectedContent !== finalContent) {
+          throw new Error('page contract drift: recovered completion content changed before Copy');
+        }
+        events.push('copy');
         return Promise.resolve();
       }
       if (source.includes('globalThis.__chatgptProCollabClipboard.captured')) {

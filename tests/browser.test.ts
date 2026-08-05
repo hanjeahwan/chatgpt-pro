@@ -846,6 +846,106 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     expect(fixture.events).not.toContain('copy');
   });
 
+  it('rechecks recovered content synchronously after a delayed capture digest before Copy', async () => {
+    const fixture = await executableBrowserFixture({
+      responseHtml: '<p>response</p>',
+      behaviorButtonCount: 0,
+      contentText: 'zcl5rbjm02',
+      contentTextAfterFingerprint: 'ak43vzv798',
+      captureDigestDelayMs: 10,
+    });
+
+    await expect(
+      fixture.browser.captureResponse(
+        'task-a',
+        'session-a',
+        'conversation-a',
+        'turn-a',
+        'conversation-turn-2',
+        5000,
+        new AbortController().signal,
+        undefined,
+        'recovered-stuck',
+        '0a2628977748c14ba2648142c9bcabbfcc96bcce67866fd47a4e04fe219bd876',
+      ),
+    ).rejects.toMatchObject({ code: 'PLAYWRIGHT_CONTRACT_DRIFT' });
+    expect(fixture.events).toEqual(['clipboard:install', 'clipboard:restore']);
+  });
+
+  it('copies unchanged recovered content in the synchronous post-digest critical section', async () => {
+    const fixture = await executableBrowserFixture({
+      responseHtml: '<p>response</p>',
+      behaviorButtonCount: 0,
+      contentText: 'zcl5rbjm02',
+      captureDigestDelayMs: 10,
+    });
+
+    await expect(
+      fixture.browser.captureResponse(
+        'task-a',
+        'session-a',
+        'conversation-a',
+        'turn-a',
+        'conversation-turn-2',
+        5000,
+        new AbortController().signal,
+        undefined,
+        'recovered-stuck',
+        '0a2628977748c14ba2648142c9bcabbfcc96bcce67866fd47a4e04fe219bd876',
+      ),
+    ).resolves.toMatchObject({ response: 'fixture response', artifacts: [] });
+    expect(fixture.events).toEqual(['clipboard:install', 'copy', 'clipboard:restore']);
+  });
+
+  it('keeps a service turn pending when recovered content mutates during the capture digest', async () => {
+    const fixture = await executableBrowserFixture({
+      responseHtml: '<p>response</p>',
+      behaviorButtonCount: 0,
+      contentText: 'zcl5rbjm02',
+      contentTextAfterFingerprint: 'ak43vzv798',
+      captureDigestDelayMs: 10,
+    });
+    await ensureTaskDirectories(fixture.paths, 'task-a');
+    const store = new StateStore(fixture.paths.database);
+    store.createTask('task-a', 'session-a');
+    store.beginTurn('task-a', 'turn-a', '/prompt.md', []);
+    store.markSubmissionAttempting('task-a', 'turn-a');
+    store.markTurnPending('task-a', 'turn-a', 'conversation-a', 'https://chatgpt.com/c/conversation-a');
+    store.close();
+    const browser = new Proxy(fixture.browser, {
+      get(target, property) {
+        if (property === 'observeResponse') {
+          return async () => {
+            return {
+              status: 'completed' as const,
+              conversationId: 'conversation-a',
+              conversationUrl: 'https://chatgpt.com/c/conversation-a',
+              assistantTurnId: 'conversation-turn-2',
+              completionMode: 'recovered-stuck' as const,
+              contentFingerprint: '0a2628977748c14ba2648142c9bcabbfcc96bcce67866fd47a4e04fe219bd876',
+            };
+          };
+        }
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const service = new CollabService(fixture.paths, browser);
+
+    await expect(service.wait('task-a', 'turn-a', 5000, 5000)).rejects.toMatchObject({
+      code: 'PLAYWRIGHT_CONTRACT_DRIFT',
+    });
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireTurn('task-a', 'turn-a')).toMatchObject({
+      status: 'pending',
+      responsePath: null,
+      artifactSetRecorded: false,
+    });
+    expect(reopened.listArtifacts('task-a', 'turn-a')).toEqual([]);
+    reopened.close();
+    expect(fixture.events).toEqual(['clipboard:install', 'clipboard:restore']);
+  });
+
   it('rejects an executed Copy response whose occurrence and behavior-button counts differ', async () => {
     const fixture = await executableBrowserFixture({
       responseHtml: '<a href="sandbox:/mnt/data/first.txt">first</a><a href="sandbox:/mnt/data/second.txt">second</a>',
@@ -1173,6 +1273,22 @@ async function executableBrowserFixture(options: ArtifactPageOptions) {
       invocation.onCommandSpawned?.(invocationChildPid + 1000);
       const source = await scriptForInvocation(invocation);
       const runPageFunction = new Function(`return (${source})`)() as (page: object) => Promise<string>;
+      const originalCrypto = globalThis.crypto;
+      if (options.captureDigestDelayMs !== undefined) {
+        Object.defineProperty(globalThis, 'crypto', {
+          configurable: true,
+          value: {
+            subtle: {
+              async digest(_algorithm: string, data: Uint8Array) {
+                await new Promise<void>((resolve) => {
+                  setTimeout(resolve, options.captureDigestDelayMs);
+                });
+                return webcrypto.subtle.digest('SHA-256', new Uint8Array(data));
+              },
+            },
+          },
+        });
+      }
       try {
         const result = await runPageFunction(pageFixture.page);
         return output(`### Ran Playwright code\n${JSON.stringify(result)}\n`);
@@ -1181,6 +1297,10 @@ async function executableBrowserFixture(options: ArtifactPageOptions) {
           throw error;
         }
         return output(`### Error\n${error instanceof Error ? error.message : String(error)}\n`);
+      } finally {
+        if (options.captureDigestDelayMs !== undefined) {
+          Object.defineProperty(globalThis, 'crypto', { configurable: true, value: originalCrypto });
+        }
       }
     } finally {
       invocation.onChildExited?.(invocationChildPid);
