@@ -69,7 +69,7 @@
     {
       "id": "IMP-003",
       "title": "发送显式输入并支持单归档附件",
-      "status": "implemented",
+      "status": "done",
       "covers": ["BEH-003", "BEH-010"],
       "verifies": ["VER-003", "VER-013"],
       "dependsOn": ["IMP-001", "IMP-002"],
@@ -86,7 +86,8 @@
           "2026-08-06 sendTargetOk 沿用 conversation identity 合同：bound conversation 接受 project-scoped pathname 并按最后 /c/<id> 段核对，null 首次发送只接受 /g/g-p-<id>/project 且 send 预检与提交脚本均对固定 chatgpt-pro-collab Project 空白 composer 重新验证（URL、main h1 标题、空白 composer、无 conversation turn）；提交脚本在 send click 前以有界等待复验，页面漂移到首页、既有 conversation 或其他 /g/g-p-<id>/project composer、composer 出现草稿或 conversation turn 时均 not-submitted、零 send-click、不绑定 conversation；可执行交错测试覆盖预检前首页、预检后提交前漂移首页、漂移既有 conversation、漂移另一 Project composer、composer 出现草稿、出现 conversation turn；live task b40073ac-143c-4d21-9f95-5e41eb73c843 归档后二次 send 成功（turn b7fb1cd4-5cfe-4e52-8144-a646b37e8c17），conversation_id 与 conversation_url 不变"
         ],
         "reviews": [
-          "task_f83d3a0d427b / conversation 019fcdfa-ef5f-7410-a245-6bbaf7be52dd: F1-F5 closed, no independent candidate"
+          "task_f83d3a0d427b / conversation 019fcdfa-ef5f-7410-a245-6bbaf7be52dd: F1-F5 closed, no independent candidate",
+          "task_4ec4f0565302 / task_8c0d9c241154 / term_966bbf07-b818-4378-ad95-a0542aa34004: ACCEPTED, P1/P2/P3 CLOSED, no remaining findings"
         ]
       }
     },
@@ -158,7 +159,7 @@
     {
       "id": "IMP-007",
       "title": "分离本地关闭与 Web conversation 归档",
-      "status": "implemented",
+      "status": "done",
       "covers": ["BEH-008", "BEH-009"],
       "verifies": ["VER-008", "VER-009"],
       "dependsOn": ["IMP-001", "IMP-002"],
@@ -178,14 +179,15 @@
         "reviews": [
           "task_f83d3a0d427b / conversation 019fcdfa-ef5f-7410-a245-6bbaf7be52dd: F1-F5 closed, no independent candidate",
           "task_d8758885857a / term_1f28048f-d0f0-44b1-92f0-18251e33850c: P1 repeated-close atomicity",
-          "task_0b1df9dbb32c / ctx_f1f1f4a70d6b: P1 closed, no P1/P2/P3"
+          "task_0b1df9dbb32c / ctx_f1f1f4a70d6b: P1 closed, no P1/P2/P3",
+          "task_4ec4f0565302 / task_8c0d9c241154 / term_966bbf07-b818-4378-ad95-a0542aa34004: ACCEPTED, P1/P2/P3 CLOSED, no remaining findings"
         ]
       }
     },
     {
       "id": "IMP-008",
       "title": "完成中断恢复矩阵与全量运行基线验证",
-      "status": "implemented",
+      "status": "done",
       "covers": ["BEH-004", "BEH-006", "BEH-007", "BEH-012"],
       "verifies": ["VER-007", "VER-010", "VER-011", "VER-012"],
       "dependsOn": ["IMP-001", "IMP-002", "IMP-003", "IMP-004", "IMP-005", "IMP-006", "IMP-007", "IMP-009"],
@@ -202,13 +204,15 @@
           "无 package.json 的临时宿主目录绝对路径 help: exit 0 (VER-010)",
           "spec-tasks diff: specChanged=false, contextChanged=false, no impacted tasks"
         ],
-        "reviews": []
+        "reviews": [
+          "task_4ec4f0565302 / task_8c0d9c241154 / term_966bbf07-b818-4378-ad95-a0542aa34004: ACCEPTED, P1/P2/P3 CLOSED, no remaining findings"
+        ]
       }
     },
     {
       "id": "IMP-009",
       "title": "建立固定 Project 与 GPT-5.6 Sol Pro 启动上下文",
-      "status": "implemented",
+      "status": "done",
       "covers": ["BEH-002"],
       "verifies": ["VER-001", "VER-002"],
       "dependsOn": ["IMP-001"],
@@ -226,7 +230,9 @@
           "VER-002 live 复审重跑 2026-08-06（提交前复验修复后）：并发 start c216d461-121f-4053-93cb-b33c9356fc60 与 fde9eec1-eae0-43c0-83ef-278628a829d4 均成功；并发首次 send 在 send click 前有界复验固定 chatgpt-pro-collab Project 空白 composer 后均成功（turn df948220-881f-4652-bd5e-8624b1d6cafd / 61fca507-4373-4be1-bad4-296b9fc8b87d）并绑定不同 conversation id（6a737d73-d248... / 6a737d73-f238...）；seed sha256 不变；任务已 close 无残留进程",
           "spec-tasks diff: specChanged=false, contextChanged=false, no impacted tasks"
         ],
-        "reviews": []
+        "reviews": [
+          "task_4ec4f0565302 / task_8c0d9c241154 / term_966bbf07-b818-4378-ad95-a0542aa34004: ACCEPTED, P1/P2/P3 CLOSED, no remaining findings"
+        ]
       }
     }
   ]
