@@ -28,7 +28,7 @@
 
 `56d21d9ed42694659bce992b7bf88ed33ad37014` 修复 F3：任务新增 `implemented` 状态，实施依赖只要求前置任务已实施，`done` 与最终交付仍要求 Review 证据；仓库 Skill、WORKFLOW 与任务账本同步采用新合同，不保留旧格式兼容。
 
-`fe6c221706fbfe9a87844b064038927e0fcaf029` 修复 F1/F2：删除观察完成后的过早 `beginCapture`，以单个 `BEGIN IMMEDIATE` 事务冻结 `pending → capturing`、`response_path` 与全部 artifact 行；宿主单调 watchdog 通过 AbortSignal 安全终止 page command 及 gate，deadline 后稳定返回 `CAPTURE_TIMEOUT`，deadline 前的真实浏览器错误保留原码。原子边界前失败保持完整 `pending`，边界后失败保持 `capturing`。
+`fe6c221706fbfe9a87844b064038927e0fcaf029` 修复 F1 及 F2 的 response capture 路径：删除观察完成后的过早 `beginCapture`，以单个 `BEGIN IMMEDIATE` 事务冻结 `pending → capturing`、`response_path` 与全部 artifact 行；宿主单调 watchdog 通过 AbortSignal 安全终止 response capture 的 page command 及 gate。复审随后证明 post-freeze `downloadArtifact` 尚未进入同一 watchdog，F2 与 VER-015 因此重新打开。
 
 ## 3. Live 取证事实
 
@@ -42,23 +42,23 @@
 
 ## 4. VER-001 至 VER-015 判定
 
-| VER     | 判定      | 已取得证据与缺口                                                                                                                                                                                                                                                                                                                |
-| ------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| VER-001 | ❌ 未取得 | 协调员决定不重复交互式登录；既有 seed 的复用和哈希不变不能替代“干净认证目录 → setup 登录 → state-save → 关闭 setup”的 fresh setup 证据。                                                                                                                                                                                        |
-| VER-002 | ⚠️ 部分   | 两个任务的 named session、taskId、session 路径和 conversation 均不同且完成首次发送，但 VER-001 前置未通过，且本轮没有形成可持久复核的不同浏览器 PID 与内存 browser context 证据，因此不能判定通过。                                                                                                                             |
-| VER-003 | ✅ 通过   | 自动化文件访问边界与 live Web 上传共同证明只读取和上传显式 prompt/附件，允许工作区外显式普通文件，未上传未选择项，并返回 turnId。                                                                                                                                                                                               |
-| VER-004 | ⚠️ 部分   | live `response.md` 保留标题、代码块和原始文字，返回文件为空；自动化覆盖 Copy response、重复 wait 和不覆盖旧文件，但本轮 live 记录不足以逐项重放“逐字节比较 + 重复 wait”，故不判定完整 live 通过。                                                                                                                               |
-| VER-005 | ✅ 通过   | 同一 Task A 的第二轮保持 conversation ID，正确引用首轮 marker，两个 turn 目录独立。                                                                                                                                                                                                                                             |
-| VER-006 | ⚠️ 部分   | 两个生成区间有 25 秒重叠，task/session/conversation/transcript 隔离；另一次单边远端长时间 pending 时另一任务仍完成，但 VER-002 前置未通过，不能判定完整通过。                                                                                                                                                                   |
-| VER-007 | ⚠️ 部分   | SQLite、turn 目录、同名 artifact ordinal、关闭后复读和恢复矩阵有自动化覆盖；未取得严格要求的完整 live 流程，包括修改已发送 prompt 后用新 CLI 进程复读全部证据。                                                                                                                                                                 |
-| VER-008 | ⚠️ 部分   | live 两次 close 证明幂等且未重新打开浏览器；本轮没有把“Web 未归档、浏览器 PID 消失、全部本地证据与 seed 保留”汇成同一可复核检查集，故不判定完整通过。                                                                                                                                                                           |
-| VER-009 | ⚠️ 部分   | live archive 成功；最终实现也在专用会话中对同一 canonical ID 完成显式 Unarchive、send 与 wait。专用全链路复验受 ChatGPT 远端生成持续 pending 阻塞，未取得同一本地 task 从 archive 到恢复再到后续 turn 的完整证据。                                                                                                              |
-| VER-010 | ✅ 通过   | `fe6c221706fbfe9a87844b064038927e0fcaf029` 后运行格式、lint、类型、全量测试、CLI help、无宿主 `package.json` 的绝对路径 help；入口和两个 wait 时长参数均检查通过。                                                                                                                                                              |
-| VER-011 | ✅ 通过   | 10 个真实子进程恢复与并发测试覆盖原子 capturing 事务首行插入后 SIGKILL 回滚、事务提交后、response 发布后、artifact 发布未更新状态、部分 artifact 完成及并发 close；重开后分别得到完整 pending 或完整 capturing 集，并能恢复完成。                                                                                               |
-| VER-012 | ✅ 通过   | 最低 Node v22.19.0 与当前 Node 的版本、`node:sqlite`、最小 TypeScript 入口 smoke test，以及固定 Playwright CLI help 均退出 0。                                                                                                                                                                                                  |
-| VER-013 | ❌ 未取得 | live 仅验证了两个已选文件的 `.tar.gz` 解压内容；没有运行两个宿主 Agent、至少 100 个代码文件、xattr 核对以及跨平台提示触发 `.zip` 的完整 forward test。                                                                                                                                                                          |
-| VER-014 | ❌ 未取得 | 自动化测试覆盖终态与内部多次页面检查，但没有取得宿主 Agent 对四种场景各只调用一次 Skill/CLI wait 的进程、页面检查和 stdout/stderr 证据。规格明确禁止用文案或单元测试替代。                                                                                                                                                      |
-| VER-015 | ✅ 通过   | 修复后的 live task 一次 wait 捕获六个唯一 sandbox 文件，重复目标去重、同名不覆盖、HTTPS 排除、文件内容与重复 wait 路径均核对通过；live-compatible fixture 实际执行生成的 capture/download function，覆盖数量、顺序、控件关系与 direct/artifact event；确定性注入另覆盖原子边界前后超时、真实错误保码、重试与 completed 不变量。 |
+| VER     | 判定      | 已取得证据与缺口                                                                                                                                                                                                                          |
+| ------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| VER-001 | ❌ 未取得 | 协调员决定不重复交互式登录；既有 seed 的复用和哈希不变不能替代“干净认证目录 → setup 登录 → state-save → 关闭 setup”的 fresh setup 证据。                                                                                                  |
+| VER-002 | ⚠️ 部分   | 两个任务的 named session、taskId、session 路径和 conversation 均不同且完成首次发送，但 VER-001 前置未通过，且本轮没有形成可持久复核的不同浏览器 PID 与内存 browser context 证据，因此不能判定通过。                                       |
+| VER-003 | ✅ 通过   | 自动化文件访问边界与 live Web 上传共同证明只读取和上传显式 prompt/附件，允许工作区外显式普通文件，未上传未选择项，并返回 turnId。                                                                                                         |
+| VER-004 | ⚠️ 部分   | live `response.md` 保留标题、代码块和原始文字，返回文件为空；自动化覆盖 Copy response、重复 wait 和不覆盖旧文件，但本轮 live 记录不足以逐项重放“逐字节比较 + 重复 wait”，故不判定完整 live 通过。                                         |
+| VER-005 | ✅ 通过   | 同一 Task A 的第二轮保持 conversation ID，正确引用首轮 marker，两个 turn 目录独立。                                                                                                                                                       |
+| VER-006 | ⚠️ 部分   | 两个生成区间有 25 秒重叠，task/session/conversation/transcript 隔离；另一次单边远端长时间 pending 时另一任务仍完成，但 VER-002 前置未通过，不能判定完整通过。                                                                             |
+| VER-007 | ⚠️ 部分   | SQLite、turn 目录、同名 artifact ordinal、关闭后复读和恢复矩阵有自动化覆盖；未取得严格要求的完整 live 流程，包括修改已发送 prompt 后用新 CLI 进程复读全部证据。                                                                           |
+| VER-008 | ⚠️ 部分   | live 两次 close 证明幂等且未重新打开浏览器；本轮没有把“Web 未归档、浏览器 PID 消失、全部本地证据与 seed 保留”汇成同一可复核检查集，故不判定完整通过。                                                                                     |
+| VER-009 | ⚠️ 部分   | live archive 成功；最终实现也在专用会话中对同一 canonical ID 完成显式 Unarchive、send 与 wait。专用全链路复验受 ChatGPT 远端生成持续 pending 阻塞，未取得同一本地 task 从 archive 到恢复再到后续 turn 的完整证据。                        |
+| VER-010 | ✅ 通过   | `fe6c221706fbfe9a87844b064038927e0fcaf029` 后运行格式、lint、类型、全量测试、CLI help、无宿主 `package.json` 的绝对路径 help；入口和两个 wait 时长参数均检查通过。                                                                        |
+| VER-011 | ✅ 通过   | 10 个真实子进程恢复与并发测试覆盖原子 capturing 事务首行插入后 SIGKILL 回滚、事务提交后、response 发布后、artifact 发布未更新状态、部分 artifact 完成及并发 close；重开后分别得到完整 pending 或完整 capturing 集，并能恢复完成。         |
+| VER-012 | ✅ 通过   | 最低 Node v22.19.0 与当前 Node 的版本、`node:sqlite`、最小 TypeScript 入口 smoke test，以及固定 Playwright CLI help 均退出 0。                                                                                                            |
+| VER-013 | ❌ 未取得 | live 仅验证了两个已选文件的 `.tar.gz` 解压内容；没有运行两个宿主 Agent、至少 100 个代码文件、xattr 核对以及跨平台提示触发 `.zip` 的完整 forward test。                                                                                    |
+| VER-014 | ❌ 未取得 | 自动化测试覆盖终态与内部多次页面检查，但没有取得宿主 Agent 对四种场景各只调用一次 Skill/CLI wait 的进程、页面检查和 stdout/stderr 证据。规格明确禁止用文案或单元测试替代。                                                                |
+| VER-015 | ⚠️ 部分   | 六文件 live 主路径和可执行页面 fixture 仍有效；但 Review task `task_8de74c002256` 复现 post-freeze artifact download 永不 settle 时 `wait` 不返回 `CAPTURE_TIMEOUT` 且 operation lease 不释放，因此完整 timeout、终止与恢复合同尚未通过。 |
 
 ## 5. 最终确定性检查
 
@@ -96,7 +96,7 @@
 
 - [x] IMP-001 至 IMP-008 按 `dependsOn` 顺序形成目的单一提交。
 - [x] Live 发现的归档恢复和返回文件 DOM 映射问题已最小修复并复验相关路径。
-- [x] F1/F2 的 Spec 冲突已裁决；原子冻结、宿主 watchdog、pre/post-freeze 状态与重试已实现并复验。
+- [ ] F1 已关闭；F2 的 post-freeze artifact download watchdog、终止、lease 释放与重试仍待修复和复验。
 - [x] 账本写入真实 commit、check 和 live 证据，未填入 review 结果。
 - [x] 明确区分完整通过、部分证据和未取得证据。
 - [ ] VER-001 fresh setup、VER-013 双宿主归档 forward test、VER-014 单次等待宿主调用证据尚未取得。
@@ -105,4 +105,4 @@
 
 ## 8. 最终判断
 
-F1/F2 已按用户裁决修复，F3 实施依赖循环保持有效，F4/F5 的恢复与可执行页面 fixture 矩阵在本次改动后复验；VER-011 与 VER-015 现有证据满足当前 Spec。完整规格仍缺 VER-001、VER-013、VER-014 及若干严格 live 前置或全链路证据，且原 reviewer 尚未复审，因此任务账本保持 `implemented`，不能标记 `done` 或宣称最终验收完成。
+F1、F3、F4、F5 已由原 reviewer 关闭；F2 因 post-freeze artifact download 未受宿主 deadline 约束而仍阻塞，VER-015 只能判定部分。IMP-004、IMP-005、IMP-006 与 IMP-008 已降为 `pending`，等待最小修复、复验和原 reviewer 关闭；完整规格仍缺 VER-001、VER-013、VER-014 及报告列明的其他严格 live 证据，不能标记 `done` 或宣称最终验收完成。
