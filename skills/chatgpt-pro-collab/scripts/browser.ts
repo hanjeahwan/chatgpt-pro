@@ -1672,7 +1672,15 @@ const SEND_TARGET_OK = `
       return match !== null && !match[1].startsWith('WEB:') && match[1] === expectedConversationId;
     };`;
 
-const PROJECT_COMPOSER_IDENTITY = `
+/**
+ * Builds the fixed Project blank-composer identity wait for a first send.
+ *
+ * @param timeoutMs Bounded wait for the fixed identity to settle.
+ * @returns A Playwright page function source fragment.
+ * @throws {Error} This pure source builder does not throw.
+ */
+function projectComposerIdentityWait(timeoutMs: number): string {
+  return `
     await page.waitForFunction((target) => {
       const visible = (element) => {
         if (!(element instanceof HTMLElement)) return false;
@@ -1688,7 +1696,8 @@ const PROJECT_COMPOSER_IDENTITY = `
       const composerOk = composers.length === 1 && (composers[0].textContent ?? '').trim() === '';
       const turnsOk = [...document.querySelectorAll('[data-testid^="conversation-turn-"][data-turn]')].filter(visible).length === 0;
       return urlOk && titleOk && composerOk && turnsOk;
-    }, 'chatgpt-pro-collab', { timeout: 60000, polling: 250 });`;
+    }, 'chatgpt-pro-collab', { timeout: ${JSON.stringify(timeoutMs)}, polling: 250 });`;
+}
 
 /**
  * Builds the pre-upload conversation and composer identity gate.
@@ -1706,7 +1715,7 @@ function sendTargetVerificationScript(expectedConversationId: string | null): st
     if (url.hostname !== 'chatgpt.com' || !sendTargetOk(url.pathname)) {
       throw new Error('conversation identity does not match the send target');
     }
-    if (expectedConversationId === null) {${PROJECT_COMPOSER_IDENTITY}
+    if (expectedConversationId === null) {${projectComposerIdentityWait(60000)}
     }
     const composer = page.locator('#prompt-textarea');
     const archivedMessage = page.getByText(
@@ -1840,6 +1849,12 @@ function sendScript(expectedConversationId: string | null, prompt: string): stri
       });
       if (initialUrl.hostname !== 'chatgpt.com' || !sendTargetOk(initialUrl.pathname)) {
         throw new Error('conversation identity changed before prompt submission');
+      }
+      if (expectedConversationId === null) {
+        try {${projectComposerIdentityWait(5000)}
+        } catch {
+          throw new Error('fixed chatgpt-pro-collab Project blank composer was not re-verified before submission');
+        }
       }
       const composer = page.locator('#prompt-textarea');
       const send = page.locator('[data-testid="send-button"]');

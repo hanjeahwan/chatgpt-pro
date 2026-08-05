@@ -4,6 +4,7 @@ export interface ProjectSendPageFixture {
   setArchived(archived: boolean): void;
   setComposerText(text: string): void;
   setPathname(pathname: string): void;
+  setProjectTitle(title: string): void;
   setUserTurnCount(count: number): void;
 }
 
@@ -250,6 +251,9 @@ export function projectSendPageFixture(initialPathname: string): ProjectSendPage
     },
     setPathname(pathname: string) {
       state.pathname = pathname;
+    },
+    setProjectTitle(projectTitle: string) {
+      title.textContent = projectTitle;
     },
     setUserTurnCount(count: number) {
       state.userTurnCount = count;

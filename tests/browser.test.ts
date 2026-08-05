@@ -386,6 +386,58 @@ describe('BEH-003 first send stays inside the fixed Project composer', () => {
     });
     expect(fixture.events).toEqual([]);
   });
+
+  it('rejects a first send that drifts to another Project blank composer before submission', async () => {
+    const fixture = await executableProjectSendFixture({
+      initialPathname: '/g/g-p-123/project',
+      beforeSubmit: (pageFixture) => {
+        pageFixture.setPathname('/g/g-p-999-other-project/project');
+        pageFixture.setProjectTitle('other-project');
+      },
+    });
+
+    const result = await fixture.browser.send('task-a', 'session-a', null, 'exact prompt', []);
+
+    expect(result).toMatchObject({
+      status: 'not-submitted',
+      error: expect.stringContaining('chatgpt-pro-collab Project blank composer was not re-verified'),
+    });
+    expect(fixture.events).toEqual([]);
+  });
+
+  it('rejects a first send whose Project composer gains a draft before submission', async () => {
+    const fixture = await executableProjectSendFixture({
+      initialPathname: '/g/g-p-123/project',
+      beforeSubmit: (pageFixture) => {
+        pageFixture.setComposerText('stale draft');
+      },
+    });
+
+    const result = await fixture.browser.send('task-a', 'session-a', null, 'exact prompt', []);
+
+    expect(result).toMatchObject({
+      status: 'not-submitted',
+      error: expect.stringContaining('chatgpt-pro-collab'),
+    });
+    expect(fixture.events).toEqual([]);
+  });
+
+  it('rejects a first send whose Project composer gains conversation turns before submission', async () => {
+    const fixture = await executableProjectSendFixture({
+      initialPathname: '/g/g-p-123/project',
+      beforeSubmit: (pageFixture) => {
+        pageFixture.setUserTurnCount(1);
+      },
+    });
+
+    const result = await fixture.browser.send('task-a', 'session-a', null, 'exact prompt', []);
+
+    expect(result).toMatchObject({
+      status: 'not-submitted',
+      error: expect.stringContaining('chatgpt-pro-collab'),
+    });
+    expect(fixture.events).toEqual([]);
+  });
 });
 
 describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
