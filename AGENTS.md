@@ -19,17 +19,6 @@
 - 文档引用 Skill 时，只说明适用场景和本仓库的额外约束；不得重复 Skill 已覆盖的命令、步骤或通用指令。
 - 规范性指令只记录会改变执行者选择、动作或放行判断的约束；沿用既有默认行为或不采取额外动作时省略。
 
-执行流程的权威职责如下：
-
-| 内容                             | 权威位置                                         |
-| -------------------------------- | ------------------------------------------------ |
-| 规格执行的角色、协作身份和 Gate  | `WORKFLOW.md`                                    |
-| 当前状态检测和阶段路由           | `execute-spec-workflow` Skill                    |
-| 各阶段动作、失败分支和完成条件   | `execute-spec-workflow/references/*.md`          |
-| IMP 拆分、依赖、状态和证据语义   | `plan-spec-implementation` Skill                 |
-| 任务账本机器 schema 与 Gate 校验 | `plan-spec-implementation/scripts/spec-tasks.ts` |
-| Spike 创建、执行与模板           | `create-spike` Skill                             |
-
 ## Agent 任务协作路由
 
 根据用户请求匹配任务场景：
