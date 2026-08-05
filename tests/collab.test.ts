@@ -39,6 +39,7 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     }
     expect(repeated.responsePath).toBe(waited.responsePath);
     expect(await readFile(waited.responsePath, 'utf8')).toBe(`response for ${firstTask.taskId}`);
+    expect(fixture.browser.expectedAssistantTurnIds[0]).toBe(`conversation-turn-${firstTask.taskId}`);
 
     await writeFile(promptPath, 'second prompt');
     const secondTurn = await fixture.service.send(firstTask.taskId, promptPath, []);
@@ -748,6 +749,7 @@ class FakeBrowser implements CollabBrowser {
   readonly closed: string[] = [];
   readonly archived: string[] = [];
   readonly expectedConversationIds: Array<string | null> = [];
+  readonly expectedAssistantTurnIds: Array<string | null> = [];
   readonly responseArtifacts: Array<{ readonly sourceUrl: string; readonly label: string }> = [];
   readonly downloadedArtifacts: string[] = [];
   nextDownloadFailureSourceUrl: string | null = null;
@@ -863,7 +865,6 @@ class FakeBrowser implements CollabBrowser {
    * @param taskId Task identifier.
    * @param _sessionName Unused named session.
    * @param expectedConversationId Database-bound identity.
-   * @param _localTurnId Unused local turn identity.
    * @param _observationWindowMs Unused finite observation budget.
    * @param observer Task-lease child-process observer.
    * @returns Fake copied response and unchanged conversation.
@@ -873,7 +874,6 @@ class FakeBrowser implements CollabBrowser {
     taskId: string,
     _sessionName: string,
     expectedConversationId: string,
-    _localTurnId: string,
     _observationWindowMs: number,
     observer?: BrowserOperationObserver,
   ) {
@@ -890,9 +890,7 @@ class FakeBrowser implements CollabBrowser {
       status: 'completed' as const,
       conversationId: expectedConversationId,
       conversationUrl: `https://chatgpt.com/c/${expectedConversationId}`,
-      assistantTurnId: 'conversation-turn-2',
-      completionMode: 'normal' as const,
-      contentFingerprint: 'fixture-fingerprint',
+      assistantTurnId: `conversation-turn-${taskId}`,
     };
   }
 
@@ -902,8 +900,7 @@ class FakeBrowser implements CollabBrowser {
    * @param taskId Task identifier.
    * @param _sessionName Unused named session.
    * @param expectedConversationId Database-bound identity.
-   * @param _localTurnId Unused local turn identity.
-   * @param _expectedAssistantTurnId Unused observed assistant identity.
+   * @param expectedAssistantTurnId Assistant identity observed for a pending turn, or null on capturing retry.
    * @param _captureTimeoutMs Unused finite capture budget.
    * @param signal Host cancellation used by capture timeout tests.
    * @param observer Task-lease child-process observer.
@@ -914,13 +911,13 @@ class FakeBrowser implements CollabBrowser {
     taskId: string,
     _sessionName: string,
     expectedConversationId: string,
-    _localTurnId: string,
-    _expectedAssistantTurnId: string | null,
+    expectedAssistantTurnId: string | null,
     _captureTimeoutMs: number,
     signal: AbortSignal,
     observer?: BrowserOperationObserver,
   ) {
     this.observe(observer);
+    this.expectedAssistantTurnIds.push(expectedAssistantTurnId);
     this.activeCaptures += 1;
     this.maxConcurrentCaptures = Math.max(this.maxConcurrentCaptures, this.activeCaptures);
     try {

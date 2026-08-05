@@ -1,4 +1,3 @@
-import { webcrypto } from 'node:crypto';
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -20,7 +19,7 @@ import {
 } from '../skills/chatgpt-pro-collab/scripts/session.ts';
 import { StateStore } from '../skills/chatgpt-pro-collab/scripts/state.ts';
 import { artifactPageFixture, type ArtifactPageOptions } from './support/artifact-page-fixture.ts';
-import { observationPageFixture, type ObservationPageOptions } from './support/observation-page-fixture.ts';
+import { completionPageFixture, type CompletionPageOptions } from './support/completion-page-fixture.ts';
 
 const protocol = 'chatgpt-pro-collab/v1';
 
@@ -342,9 +341,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
         status: 'completed',
         conversationId: 'conversation-a',
         conversationUrl: 'https://chatgpt.com/c/conversation-a',
-        assistantTurnId: 'conversation-turn-2',
-        completionMode: 'normal',
-        contentFingerprint: 'fixture-fingerprint',
+        assistantTurnId: 'conversation-turn-t1',
       }),
       pageResult({
         protocol,
@@ -357,14 +354,13 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
       }),
     ]);
 
-    const observed = await fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 5000);
+    const observed = await fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 5000);
     const controller = new AbortController();
     const captured = await fixture.browser.captureResponse(
       'task-a',
       'session-a',
       'conversation-a',
-      'turn-a',
-      'conversation-turn-2',
+      observed.status === 'completed' ? observed.assistantTurnId : null,
       5000,
       controller.signal,
     );
@@ -379,15 +375,12 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     });
     expect(fixture.invocations[1]?.signal).toBe(controller.signal);
     expect(observationSource).toContain('stableCompletedPolls < 6');
-    expect(observationSource).toContain('stallGraceMs');
-    expect(observationSource).toContain('performance.timeOrigin + performance.now()');
-    expect(observationSource).toContain('localTurnId');
-    expect(observationSource).toContain("sessionStorage.getItem(key) === '1'");
-    expect(observationSource).toContain("page.reload({ waitUntil: 'domcontentloaded', timeout: remaining })");
-    expect(observationSource).toContain('target assistant turn changed while recovering stuck completion indicator');
     expect(observationSource).toContain("kind: 'observe', status: 'pending'");
-    expect(observationSource).not.toContain('stop.click');
+    expect(observationSource).toContain('assistantTurnId');
+    expect(observationSource).not.toContain('sessionStorage');
+    expect(observationSource).not.toContain('page.reload');
     expect(captureSource).toContain('[data-testid="copy-turn-action-button"]');
+    expect(captureSource).toContain('expectedAssistantTurnId');
     expect(captureSource).toContain('navigator.clipboard');
     expect(captureSource).toContain("item.types.includes('text/html')");
     expect(captureSource).toContain("sourceUrl?.startsWith('sandbox:')");
@@ -395,8 +388,6 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     expect(captureSource).toContain('Copy response omitted text/plain or text/html');
     expect(captureSource).toContain("name: 'Stop answering', exact: true");
     expect(captureSource).toContain('copy.click({ force: true, timeout: Math.max(1, captureDeadline - Date.now()) })');
-    expect(captureSource).toContain("location.hostname !== 'chatgpt.com'");
-    expect(captureSource).toContain('match[1] !== expectedConversationId');
     expect(captureSource).toContain('const capturedUrl = await page.evaluate');
     expect(captureSource).toContain('capturedMatch[1] !== expectedConversationId');
     expect(captureSource).not.toContain('pbpaste');
@@ -406,322 +397,25 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     expectPageFunctionSyntax(captureSource);
   });
 
-  it('keeps the unchanged normal completion path free of reloads', async () => {
-    const fixture = await executableObservationBrowserFixture({ stopVisibleBeforeReload: false });
+  it('executes the normal completion condition and returns the stable assistant identity', async () => {
+    const fixture = await executableCompletionFixture({ assistantTurnId: 'conversation-turn-t1', stopVisible: false });
 
-    await expect(
-      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 5000),
-    ).resolves.toEqual({
+    await expect(fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 5000)).resolves.toEqual({
       status: 'completed',
       conversationId: 'conversation-a',
       conversationUrl: 'https://chatgpt.com/c/conversation-a',
-      assistantTurnId: 'conversation-turn-2',
-      completionMode: 'normal',
-      contentFingerprint: 'dfe6dcf778199b6c8ce1ec10fb213c3c7ec72525e99f0c8af518b46e539ba80a',
+      assistantTurnId: 'conversation-turn-t1',
     });
-    expect(fixture.reloadCount()).toBe(0);
-    expect(
-      fixture.events.filter((event) => {
-        return event.startsWith('poll:');
-      }),
-    ).toHaveLength(6);
+    expect(fixture.events).toHaveLength(6);
   });
 
-  it('reloads one stable target with a stuck Stop indicator and then requires normal completion', async () => {
-    const fixture = await executableObservationBrowserFixture({
-      stopVisibleBeforeReload: true,
-      stopVisibleAfterReload: false,
-      pageClockStepMs: 6_000,
+  it('returns pending without reload when Stop remains visible', async () => {
+    const fixture = await executableCompletionFixture({ stopVisible: true });
+
+    await expect(fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 5000)).resolves.toEqual({
+      status: 'pending',
     });
-
-    await expect(
-      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 5000),
-    ).resolves.toEqual({
-      status: 'completed',
-      conversationId: 'conversation-a',
-      conversationUrl: 'https://chatgpt.com/c/conversation-a',
-      assistantTurnId: 'conversation-turn-2',
-      completionMode: 'normal',
-      contentFingerprint: 'dfe6dcf778199b6c8ce1ec10fb213c3c7ec72525e99f0c8af518b46e539ba80a',
-    });
-    expect(fixture.reloadCount()).toBe(1);
-    expect(
-      fixture.events.filter((event) => {
-        return event === 'reload';
-      }),
-    ).toHaveLength(1);
-    expect(
-      fixture.events.filter((event) => {
-        return event.includes('completion-reload:');
-      }),
-    ).toHaveLength(1);
-    expect(fixture.events.slice(fixture.events.indexOf('reload') + 1)).toContain('stop:false');
-  });
-
-  it('does not reload while the target assistant content is still changing', async () => {
-    const fixture = await executableObservationBrowserFixture({
-      contentBeforeReloadByPoll: Array.from({ length: 24 }, (_value, index) => {
-        return `streaming-${index}`;
-      }),
-      stopVisibleBeforeReload: true,
-    });
-
-    await expect(
-      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 5000),
-    ).resolves.toEqual({ status: 'pending' });
-    expect(fixture.reloadCount()).toBe(0);
-  });
-
-  it('reloads a persistently stuck target at most once across later observations and stays pending', async () => {
-    const fixture = await executableObservationBrowserFixture({
-      stopVisibleBeforeReload: true,
-      stopVisibleAfterReload: true,
-      pageClockStepMs: 6_000,
-    });
-
-    await expect(
-      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 5000),
-    ).resolves.toEqual({
-      status: 'completed',
-      conversationId: 'conversation-a',
-      conversationUrl: 'https://chatgpt.com/c/conversation-a',
-      assistantTurnId: 'conversation-turn-2',
-      completionMode: 'recovered-stuck',
-      contentFingerprint: 'dfe6dcf778199b6c8ce1ec10fb213c3c7ec72525e99f0c8af518b46e539ba80a',
-    });
-    await expect(
-      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 5000),
-    ).resolves.toEqual({ status: 'pending' });
-    expect(fixture.reloadCount()).toBe(1);
-    expect(
-      fixture.events.filter((event) => {
-        return event.includes('completion-reload:');
-      }),
-    ).toHaveLength(1);
-  });
-
-  it('resets the recovered stability clock when post-reload content changes', async () => {
-    const fixture = await executableObservationBrowserFixture({
-      stopVisibleBeforeReload: true,
-      stopVisibleAfterReload: true,
-      pageClockStepMs: 6_000,
-      contentAfterReloadByPoll: Array.from({ length: 24 }, (_value, index) => {
-        return `recovered-${index}`;
-      }),
-    });
-
-    await expect(
-      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 5000),
-    ).resolves.toEqual({ status: 'pending' });
-    expect(fixture.reloadCount()).toBe(1);
-  });
-
-  it('does not reuse a reload marker across local semantic turns', async () => {
-    const fixture = await executableObservationBrowserFixture({
-      stopVisibleBeforeReload: true,
-      stopVisibleAfterReload: true,
-      pageClockStepMs: 6_000,
-    });
-
-    await expect(
-      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 5000),
-    ).resolves.toMatchObject({
-      status: 'completed',
-      completionMode: 'recovered-stuck',
-      assistantTurnId: 'conversation-turn-2',
-    });
-    await expect(
-      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-b', 5000),
-    ).resolves.toMatchObject({
-      status: 'completed',
-      completionMode: 'recovered-stuck',
-      assistantTurnId: 'conversation-turn-2',
-    });
-    expect(fixture.reloadCount()).toBe(2);
-  });
-
-  it('keeps observing a normal-generation pause for less than the 30 second stall grace', async () => {
-    const fixture = await executableObservationBrowserFixture({
-      stopVisibleBeforeReload: true,
-      pageClockStepMs: 1_000,
-    });
-
-    await expect(
-      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 5000),
-    ).resolves.toEqual({ status: 'pending' });
-    expect(fixture.reloadCount()).toBe(0);
-  });
-
-  it('returns pending without proof when observation SHA-256 never settles', async () => {
-    const fixture = await executableObservationBrowserFixture({
-      stopVisibleBeforeReload: false,
-      digestBehavior: 'never',
-    });
-
-    await expect(
-      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 50),
-    ).resolves.toEqual({ status: 'pending' });
-    expect(
-      fixture.events.some((event) => {
-        return event.includes('completion-target:');
-      }),
-    ).toBe(false);
-    expect(
-      fixture.events.some((event) => {
-        return event.includes('completion-proof:');
-      }),
-    ).toBe(false);
-  });
-
-  it('fails closed on observation SHA-256 rejection without proof', async () => {
-    const fixture = await executableObservationBrowserFixture({
-      stopVisibleBeforeReload: false,
-      digestBehavior: 'reject',
-    });
-
-    await expect(
-      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 5000),
-    ).rejects.toMatchObject({ code: 'PLAYWRIGHT_CONTRACT_DRIFT' });
-    expect(
-      fixture.events.some((event) => {
-        return event.includes('completion-target:');
-      }),
-    ).toBe(false);
-    expect(
-      fixture.events.some((event) => {
-        return event.includes('completion-proof:');
-      }),
-    ).toBe(false);
-  });
-
-  it('uses one successful observation SHA-256 digest and does not issue a second call', async () => {
-    const fixture = await executableObservationBrowserFixture({
-      stopVisibleBeforeReload: false,
-      digestBehavior: 'second-reject',
-    });
-
-    await expect(
-      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 5000),
-    ).resolves.toMatchObject({ status: 'completed', completionMode: 'normal' });
-  });
-
-  it('keeps the pre-reload target bound across a delayed successful reload and next observation', async () => {
-    const fixture = await executableObservationBrowserFixture({
-      stopVisibleBeforeReload: true,
-      stopVisibleAfterReload: false,
-      pageClockStepMs: 6_000,
-      reloadDelayMs: 10,
-      assistantTurnIdAfterReloadAfterPolls: 12,
-    });
-
-    await expect(
-      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 100),
-    ).resolves.toMatchObject({
-      status: 'completed',
-      assistantTurnId: 'conversation-turn-2',
-    });
-    await expect(
-      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 100),
-    ).resolves.toEqual({ status: 'pending' });
-    expect(fixture.reloadCount()).toBe(1);
-    expect(fixture.reloadTimeouts()[0]).toBeLessThanOrEqual(100);
-    expect(
-      fixture.events.some((event) => {
-        return event.startsWith('storage:chatgpt-pro-collab:completion-target-binding:');
-      }),
-    ).toBe(true);
-  });
-
-  it('does not cross the observation deadline during a slow reload and retries the bound target', async () => {
-    const fixture = await executableObservationBrowserFixture({
-      stopVisibleBeforeReload: true,
-      stopVisibleAfterReload: true,
-      pageClockStepMs: 6_000,
-      reloadDelayMs: 20,
-    });
-
-    await expect(
-      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 5),
-    ).rejects.toMatchObject({ code: 'PLAYWRIGHT_CONTRACT_DRIFT' });
-    await expect(
-      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 5),
-    ).rejects.toMatchObject({ code: 'PLAYWRIGHT_CONTRACT_DRIFT' });
-    expect(fixture.reloadCount()).toBe(2);
-    expect(fixture.reloadTimeouts()[0]).toBeLessThanOrEqual(5);
-    expect(fixture.reloadTimeouts()[1]).toBeLessThanOrEqual(5);
-  });
-
-  it('bounds reload by the observation deadline and rolls back a rejected attempt marker', async () => {
-    const fixture = await executableObservationBrowserFixture({
-      stopVisibleBeforeReload: true,
-      stopVisibleAfterReload: true,
-      pageClockStepMs: 6_000,
-      reloadRejectCount: 1,
-    });
-
-    await expect(
-      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 5000),
-    ).rejects.toMatchObject({ code: 'PLAYWRIGHT_CONTRACT_DRIFT' });
-    await expect(
-      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 5000),
-    ).resolves.toMatchObject({
-      status: 'completed',
-      completionMode: 'recovered-stuck',
-      assistantTurnId: 'conversation-turn-2',
-    });
-    expect(fixture.reloadCount()).toBe(2);
-    expect(fixture.reloadTimeouts()[0]).toBeLessThanOrEqual(5000);
-  });
-
-  it.each([
-    {
-      label: 'canonical conversation',
-      options: {
-        stopVisibleBeforeReload: true,
-        conversationIdAfterReload: 'conversation-b',
-        pageClockStepMs: 6_000,
-      },
-      message: 'conversation identity changed while recovering stuck completion indicator',
-    },
-    {
-      label: 'target assistant turn',
-      options: {
-        stopVisibleBeforeReload: true,
-        assistantTurnIdAfterReload: 'conversation-turn-99',
-        pageClockStepMs: 6_000,
-      },
-      message: 'target assistant turn changed while recovering stuck completion indicator',
-    },
-  ])('rejects a changed $label after stuck-indicator reload', async ({ options, message }) => {
-    const fixture = await executableObservationBrowserFixture(options);
-
-    await expect(
-      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'turn-a', 5000),
-    ).rejects.toMatchObject({
-      code: 'PLAYWRIGHT_CONTRACT_DRIFT',
-      message: expect.stringContaining(message),
-    });
-    expect(fixture.reloadCount()).toBe(1);
-  });
-
-  it('rejects capture when the observed assistant turn is replaced before the capture command', async () => {
-    const fixture = await executableBrowserFixture({
-      assistantTurnId: 'conversation-turn-2',
-      responseHtml: '<p>response</p>',
-      behaviorButtonCount: 0,
-    });
-
-    await expect(
-      fixture.browser.captureResponse(
-        'task-a',
-        'session-a',
-        'conversation-a',
-        'turn-a',
-        'conversation-turn-1',
-        5000,
-        new AbortController().signal,
-      ),
-    ).rejects.toMatchObject({ code: 'PLAYWRIGHT_CONTRACT_DRIFT' });
+    expect(fixture.events).toHaveLength(10);
   });
 
   it('maps one recorded sandbox target to an exact download event and task-owned save path', async () => {
@@ -803,6 +497,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
       responseHtml: `<p>files</p><a href="${first}">first</a><a href="${first}">again</a><a href="${second}">second</a>`,
       responsePlain: 'clipboard occurrence response',
       behaviorButtonCount: 3,
+      includeLaterTurn: true,
     });
 
     await expect(
@@ -810,8 +505,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
         'task-a',
         'session-a',
         'conversation-a',
-        'turn-a',
-        'conversation-turn-2',
+        'conversation-turn-t1',
         5000,
         new AbortController().signal,
       ),
@@ -832,11 +526,11 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     expect(fixture.globalsRestored()).toBe(true);
   });
 
-  it('rejects the reviewer collision pair when recovered content changes before capture', async () => {
+  it('rejects a missing observed assistant instead of capturing a later assistant', async () => {
     const fixture = await executableBrowserFixture({
-      responseHtml: '<p>response</p>',
+      responseHtml: '<p>later response</p>',
       behaviorButtonCount: 0,
-      contentText: 'ak43vzv798',
+      includeLaterTurn: true,
     });
 
     await expect(
@@ -844,225 +538,12 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
         'task-a',
         'session-a',
         'conversation-a',
-        'turn-a',
-        'conversation-turn-2',
+        'conversation-turn-missing',
         5000,
         new AbortController().signal,
-        undefined,
-        'recovered-stuck',
-        '0a2628977748c14ba2648142c9bcabbfcc96bcce67866fd47a4e04fe219bd876',
       ),
     ).rejects.toMatchObject({ code: 'PLAYWRIGHT_CONTRACT_DRIFT' });
-    expect(fixture.events).not.toContain('copy');
-    expect(fixture.events).not.toContain('clipboard:write');
-    expect(fixture.globalsRestored()).toBe(true);
-  });
-
-  it('rechecks recovered content synchronously after a delayed capture digest before Copy', async () => {
-    const fixture = await executableBrowserFixture({
-      responseHtml: '<p>response</p>',
-      behaviorButtonCount: 0,
-      contentText: 'zcl5rbjm02',
-      contentTextAfterFingerprint: 'ak43vzv798',
-      captureDigestDelayMs: 10,
-    });
-
-    await expect(
-      fixture.browser.captureResponse(
-        'task-a',
-        'session-a',
-        'conversation-a',
-        'turn-a',
-        'conversation-turn-2',
-        5000,
-        new AbortController().signal,
-        undefined,
-        'recovered-stuck',
-        '0a2628977748c14ba2648142c9bcabbfcc96bcce67866fd47a4e04fe219bd876',
-      ),
-    ).rejects.toMatchObject({ code: 'PLAYWRIGHT_CONTRACT_DRIFT' });
-    expect(fixture.events).toEqual(['clipboard:install', 'clipboard:restore']);
-    expect(fixture.globalsRestored()).toBe(true);
-  });
-
-  it('copies unchanged recovered content in the synchronous post-digest critical section', async () => {
-    const fixture = await executableBrowserFixture({
-      responseHtml: '<p>response</p>',
-      responsePlain: 'clipboard recovered response',
-      behaviorButtonCount: 0,
-      contentText: 'zcl5rbjm02',
-      captureDigestDelayMs: 10,
-    });
-
-    await expect(
-      fixture.browser.captureResponse(
-        'task-a',
-        'session-a',
-        'conversation-a',
-        'turn-a',
-        'conversation-turn-2',
-        5000,
-        new AbortController().signal,
-        undefined,
-        'recovered-stuck',
-        '0a2628977748c14ba2648142c9bcabbfcc96bcce67866fd47a4e04fe219bd876',
-      ),
-    ).resolves.toMatchObject({ response: 'clipboard recovered response', artifacts: [] });
-    expect(fixture.events).toEqual([
-      'clipboard:install',
-      'copy',
-      'clipboard:write',
-      'clipboard:read',
-      'clipboard:restore',
-    ]);
-    expect(fixture.globalsRestored()).toBe(true);
-  });
-
-  it('captures recovered content on the canonical conversation URL with a trailing slash', async () => {
-    const fixture = await executableBrowserFixture({
-      responseHtml: '<p>trailing slash html</p>',
-      responsePlain: 'trailing slash plain',
-      behaviorButtonCount: 0,
-      contentText: 'zcl5rbjm02',
-      pathnameAfterFingerprint: '/c/conversation-a/',
-      captureDigestDelayMs: 10,
-    });
-
-    await expect(
-      fixture.browser.captureResponse(
-        'task-a',
-        'session-a',
-        'conversation-a',
-        'turn-a',
-        'conversation-turn-2',
-        5000,
-        new AbortController().signal,
-        undefined,
-        'recovered-stuck',
-        '0a2628977748c14ba2648142c9bcabbfcc96bcce67866fd47a4e04fe219bd876',
-      ),
-    ).resolves.toMatchObject({ response: 'trailing slash plain', responseHtml: '<p>trailing slash html</p>' });
-    expect(fixture.events).toEqual([
-      'clipboard:install',
-      'copy',
-      'clipboard:write',
-      'clipboard:read',
-      'clipboard:restore',
-    ]);
-    expect(fixture.globalsRestored()).toBe(true);
-  });
-
-  it.each([
-    {
-      label: 'conversation id changes',
-      finalLocation: { conversationIdAfterFingerprint: 'conversation-b' },
-    },
-    {
-      label: 'hostname changes',
-      finalLocation: { hostnameAfterFingerprint: 'example.com' },
-    },
-    {
-      label: 'pathname is not canonical',
-      finalLocation: { pathnameAfterFingerprint: '/c/conversation-a/extra' },
-    },
-  ])('keeps a service turn pending when $label during the recovered capture digest', async ({ finalLocation }) => {
-    const fixture = await executableBrowserFixture({
-      responseHtml: '<p>response</p>',
-      behaviorButtonCount: 0,
-      contentText: 'zcl5rbjm02',
-      contentTextAfterFingerprint: 'zcl5rbjm02',
-      captureDigestDelayMs: 10,
-      ...finalLocation,
-    });
-    await ensureTaskDirectories(fixture.paths, 'task-a');
-    const store = new StateStore(fixture.paths.database);
-    store.createTask('task-a', 'session-a');
-    store.beginTurn('task-a', 'turn-a', '/prompt.md', []);
-    store.markSubmissionAttempting('task-a', 'turn-a');
-    store.markTurnPending('task-a', 'turn-a', 'conversation-a', 'https://chatgpt.com/c/conversation-a');
-    store.close();
-    const browser = new Proxy(fixture.browser, {
-      get(target, property) {
-        if (property === 'observeResponse') {
-          return async () => {
-            return {
-              status: 'completed' as const,
-              conversationId: 'conversation-a',
-              conversationUrl: 'https://chatgpt.com/c/conversation-a',
-              assistantTurnId: 'conversation-turn-2',
-              completionMode: 'recovered-stuck' as const,
-              contentFingerprint: '0a2628977748c14ba2648142c9bcabbfcc96bcce67866fd47a4e04fe219bd876',
-            };
-          };
-        }
-        const value = Reflect.get(target, property, target) as unknown;
-        return typeof value === 'function' ? value.bind(target) : value;
-      },
-    });
-    const service = new CollabService(fixture.paths, browser);
-
-    await expect(service.wait('task-a', 'turn-a', 5000, 5000)).rejects.toMatchObject({
-      code: 'PLAYWRIGHT_CONTRACT_DRIFT',
-    });
-    const reopened = new StateStore(fixture.paths.database);
-    expect(reopened.requireTurn('task-a', 'turn-a')).toMatchObject({
-      status: 'pending',
-      responsePath: null,
-      artifactSetRecorded: false,
-    });
-    expect(reopened.listArtifacts('task-a', 'turn-a')).toEqual([]);
-    reopened.close();
-    expect(fixture.events).toEqual(['clipboard:install', 'clipboard:restore']);
-    expect(fixture.globalsRestored()).toBe(true);
-  });
-
-  it('keeps a service turn pending when recovered content mutates during the capture digest', async () => {
-    const fixture = await executableBrowserFixture({
-      responseHtml: '<p>response</p>',
-      behaviorButtonCount: 0,
-      contentText: 'zcl5rbjm02',
-      contentTextAfterFingerprint: 'ak43vzv798',
-      captureDigestDelayMs: 10,
-    });
-    await ensureTaskDirectories(fixture.paths, 'task-a');
-    const store = new StateStore(fixture.paths.database);
-    store.createTask('task-a', 'session-a');
-    store.beginTurn('task-a', 'turn-a', '/prompt.md', []);
-    store.markSubmissionAttempting('task-a', 'turn-a');
-    store.markTurnPending('task-a', 'turn-a', 'conversation-a', 'https://chatgpt.com/c/conversation-a');
-    store.close();
-    const browser = new Proxy(fixture.browser, {
-      get(target, property) {
-        if (property === 'observeResponse') {
-          return async () => {
-            return {
-              status: 'completed' as const,
-              conversationId: 'conversation-a',
-              conversationUrl: 'https://chatgpt.com/c/conversation-a',
-              assistantTurnId: 'conversation-turn-2',
-              completionMode: 'recovered-stuck' as const,
-              contentFingerprint: '0a2628977748c14ba2648142c9bcabbfcc96bcce67866fd47a4e04fe219bd876',
-            };
-          };
-        }
-        const value = Reflect.get(target, property, target) as unknown;
-        return typeof value === 'function' ? value.bind(target) : value;
-      },
-    });
-    const service = new CollabService(fixture.paths, browser);
-
-    await expect(service.wait('task-a', 'turn-a', 5000, 5000)).rejects.toMatchObject({
-      code: 'PLAYWRIGHT_CONTRACT_DRIFT',
-    });
-    const reopened = new StateStore(fixture.paths.database);
-    expect(reopened.requireTurn('task-a', 'turn-a')).toMatchObject({
-      status: 'pending',
-      responsePath: null,
-      artifactSetRecorded: false,
-    });
-    expect(reopened.listArtifacts('task-a', 'turn-a')).toEqual([]);
-    reopened.close();
-    expect(fixture.events).toEqual(['clipboard:install', 'clipboard:restore']);
+    expect(fixture.events).toEqual([]);
     expect(fixture.globalsRestored()).toBe(true);
   });
 
@@ -1077,12 +558,12 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
         'task-a',
         'session-a',
         'conversation-a',
-        'turn-a',
-        'conversation-turn-2',
+        null,
         5000,
         new AbortController().signal,
       ),
     ).rejects.toMatchObject({ code: 'PLAYWRIGHT_CONTRACT_DRIFT' });
+    expect(fixture.globalsRestored()).toBe(true);
   });
 
   it.each([
@@ -1393,22 +874,6 @@ async function executableBrowserFixture(options: ArtifactPageOptions) {
       invocation.onCommandSpawned?.(invocationChildPid + 1000);
       const source = await scriptForInvocation(invocation);
       const runPageFunction = new Function(`return (${source})`)() as (page: object) => Promise<string>;
-      const originalCrypto = globalThis.crypto;
-      if (options.captureDigestDelayMs !== undefined) {
-        Object.defineProperty(globalThis, 'crypto', {
-          configurable: true,
-          value: {
-            subtle: {
-              async digest(_algorithm: string, data: Uint8Array) {
-                await new Promise<void>((resolve) => {
-                  setTimeout(resolve, options.captureDigestDelayMs);
-                });
-                return webcrypto.subtle.digest('SHA-256', new Uint8Array(data));
-              },
-            },
-          },
-        });
-      }
       try {
         const result = await runPageFunction(pageFixture.page);
         return output(`### Ran Playwright code\n${JSON.stringify(result)}\n`);
@@ -1417,10 +882,6 @@ async function executableBrowserFixture(options: ArtifactPageOptions) {
           throw error;
         }
         return output(`### Error\n${error instanceof Error ? error.message : String(error)}\n`);
-      } finally {
-        if (options.captureDigestDelayMs !== undefined) {
-          Object.defineProperty(globalThis, 'crypto', { configurable: true, value: originalCrypto });
-        }
       }
     } finally {
       invocation.onChildExited?.(invocationChildPid);
@@ -1439,80 +900,31 @@ async function executableBrowserFixture(options: ArtifactPageOptions) {
 }
 
 /**
- * Creates a browser runner that executes generated completion observation against a page fixture.
+ * Creates a browser runner that executes normal completion observation against a page fixture.
  *
- * @param options Target identity, content, Copy, and Stop state before and after reload.
- * @returns Browser, captured invocations, ordered page events, and reload counter.
+ * @param options Assistant identity and Stop visibility.
+ * @returns Browser and ordered observation events.
  * @throws {Error} If the fixture directory or generated script cannot be read.
  */
-async function executableObservationBrowserFixture(options: ObservationPageOptions) {
-  const root = await mkdtemp(join(tmpdir(), 'collab-observation-browser-'));
+async function executableCompletionFixture(options: CompletionPageOptions) {
+  const root = await mkdtemp(join(tmpdir(), 'collab-completion-browser-'));
   const paths = collabPaths(root);
   await ensureCollabDirectories(paths);
-  const invocations: BrowserCommandInvocation[] = [];
-  const pageFixture = observationPageFixture(options);
-  let childPid = 9500;
+  const pageFixture = completionPageFixture(options);
   const browser = new PlaywrightBrowser(paths, root, async (invocation) => {
-    invocations.push(invocation);
-    const invocationChildPid = childPid;
-    childPid += 1;
-    invocation.onChildSpawned?.(invocationChildPid);
+    invocation.beforeCommandRelease?.();
+    invocation.onCommandStarted?.();
+    invocation.onCommandSpawned?.(10_000);
+    invocation.onChildSpawned?.(9000);
     try {
-      invocation.beforeCommandRelease?.();
-      invocation.onCommandStarted?.();
-      invocation.onCommandSpawned?.(invocationChildPid + 1000);
       const source = await scriptForInvocation(invocation);
       const runPageFunction = new Function(`return (${source})`)() as (page: object) => Promise<string>;
-      if (globalThis.crypto === undefined) {
-        Object.defineProperty(globalThis, 'crypto', { configurable: true, value: webcrypto });
-      }
-      let digestCalls = 0;
-      if (options.digestBehavior !== undefined) {
-        Object.defineProperty(globalThis, 'crypto', {
-          configurable: true,
-          value: {
-            subtle: {
-              digest: async (_algorithm: string, data: Uint8Array) => {
-                digestCalls += 1;
-                if (options.digestBehavior === 'never') {
-                  return new Promise<ArrayBuffer>(() => {});
-                }
-                if (
-                  options.digestBehavior === 'reject' ||
-                  (options.digestBehavior === 'second-reject' && digestCalls > 1)
-                ) {
-                  throw new Error('fixture digest rejected');
-                }
-                return webcrypto.subtle.digest('SHA-256', new Uint8Array(data));
-              },
-            },
-          },
-        });
-      }
-      try {
-        const result = await runPageFunction(pageFixture.page);
-        return output(`### Ran Playwright code\n${JSON.stringify(result)}\n`);
-      } catch (error) {
-        return output(`### Error\n${error instanceof Error ? error.message : String(error)}\n`);
-      }
+      return output(`### Ran Playwright code\n${JSON.stringify(await runPageFunction(pageFixture.page))}\n`);
     } finally {
-      if (options.digestBehavior !== undefined) {
-        Object.defineProperty(globalThis, 'crypto', { configurable: true, value: webcrypto });
-      }
-      invocation.onChildExited?.(invocationChildPid);
+      invocation.onChildExited?.(9000);
     }
   });
-  return {
-    browser,
-    events: pageFixture.events,
-    invocations,
-    reloadCount() {
-      return pageFixture.reloadCount();
-    },
-    reloadTimeouts() {
-      return pageFixture.reloadTimeouts();
-    },
-  };
+  return { browser, events: pageFixture.events };
 }
 
 /**

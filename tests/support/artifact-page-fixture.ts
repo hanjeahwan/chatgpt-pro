@@ -2,15 +2,10 @@ import { writeFile } from 'node:fs/promises';
 
 export interface ArtifactPageOptions {
   readonly assistantTurnId?: string;
-  readonly captureDigestDelayMs?: number;
-  readonly contentText?: string;
-  readonly contentTextAfterFingerprint?: string;
-  readonly conversationIdAfterFingerprint?: string;
-  readonly hostnameAfterFingerprint?: string;
-  readonly pathnameAfterFingerprint?: string;
-  readonly responsePlain?: string;
   readonly responseHtml: string;
+  readonly responsePlain?: string;
   readonly behaviorButtonCount: number;
+  readonly includeLaterTurn?: boolean;
   readonly artifactRows?: readonly string[];
   readonly unrelatedRowControls?: boolean;
   readonly downloadEvent?: 'success' | 'timeout';
@@ -39,63 +34,6 @@ interface FixtureElement {
   setAttribute(name: string, value: string): void;
 }
 
-/** Minimal visible HTMLElement used to execute the recovered Copy critical section. */
-class FixtureHtmlElement implements FixtureElement {
-  readonly parentElement = null;
-  readonly textContent = '';
-  readonly #clickAction: () => void;
-
-  /**
-   * Creates one visible, enabled Copy control.
-   *
-   * @param clickAction Synchronous click side effect recorded by the fixture.
-   */
-  constructor(clickAction: () => void) {
-    this.#clickAction = clickAction;
-  }
-
-  /** @returns No ancestor relationship for the standalone Copy control. */
-  closest(): null {
-    return null;
-  }
-
-  /**
-   * Reads one stable Copy control attribute.
-   *
-   * @param name Requested attribute name.
-   * @returns The stable Copy test id or null for unsupported attributes.
-   */
-  getAttribute(name: string): string | null {
-    return name === 'data-testid' ? 'copy-turn-action-button' : null;
-  }
-
-  /** @returns A non-empty client rect collection, making this control visible. */
-  getClientRects(): readonly object[] {
-    return [{}];
-  }
-
-  /** @returns False because the fixture Copy control is enabled. */
-  matches(): boolean {
-    return false;
-  }
-
-  /** Executes the synchronous click side effect. */
-  click(): void {
-    this.#clickAction();
-  }
-
-  /** @returns No descendants for the standalone Copy control. */
-  querySelectorAll(): readonly FixtureElement[] {
-    return [];
-  }
-
-  /** Standalone fixture controls do not retain mutable attributes. */
-  removeAttribute(): void {}
-
-  /** Standalone fixture controls do not retain mutable attributes. */
-  setAttribute(): void {}
-}
-
 /**
  * Creates a live-compatible page boundary for executing generated capture and download functions.
  *
@@ -105,17 +43,8 @@ class FixtureHtmlElement implements FixtureElement {
  */
 export function artifactPageFixture(options: ArtifactPageOptions): ArtifactPageFixture {
   const events: string[] = [];
-  const storage = new Map<string, string>();
   const attributes = new WeakMap<object, Map<string, string>>();
-  const globals = globalThis as unknown as Record<string, unknown>;
-  const trackedGlobalNames = [
-    '__chatgptProCollabClipboard',
-    'document',
-    'getComputedStyle',
-    'HTMLElement',
-    'location',
-    'navigator',
-  ] as const;
+  const trackedGlobalNames = ['__chatgptProCollabClipboard', 'navigator'] as const;
   const initialGlobalDescriptors = new Map(
     trackedGlobalNames.map((name) => {
       return [name, Object.getOwnPropertyDescriptor(globalThis, name)];
@@ -123,17 +52,10 @@ export function artifactPageFixture(options: ArtifactPageOptions): ArtifactPageF
   );
   const originalClipboardWrite = async (_items: readonly unknown[]) => {};
   const originalClipboardWriteText = async (_text: string) => {};
-  const clipboard = {
-    write: originalClipboardWrite,
-    writeText: originalClipboardWriteText,
-  };
-  const navigator = { clipboard };
+  const clipboard = { write: originalClipboardWrite, writeText: originalClipboardWriteText };
   let pendingClipboardWrite: Promise<void> | undefined;
-
   const triggerCopy = (): Promise<void> => {
     events.push('copy');
-    const plain = options.responsePlain ?? 'fixture response';
-    const html = options.responseHtml;
     pendingClipboardWrite = clipboard
       .write([
         {
@@ -141,7 +63,7 @@ export function artifactPageFixture(options: ArtifactPageOptions): ArtifactPageF
           async getType(type: string) {
             return {
               async text() {
-                return type === 'text/plain' ? plain : html;
+                return type === 'text/plain' ? (options.responsePlain ?? 'fixture response') : options.responseHtml;
               },
             };
           },
@@ -152,23 +74,7 @@ export function artifactPageFixture(options: ArtifactPageOptions): ArtifactPageF
       });
     return pendingClipboardWrite;
   };
-  const assistantElement = fixtureElement(attributes, {
-    behaviorButtonCount: options.behaviorButtonCount,
-    dataTestId: options.assistantTurnId ?? 'conversation-turn-2',
-    dataTurn: 'assistant',
-    innerText: options.contentText,
-  });
-  const finalAssistantElement = fixtureElement(attributes, {
-    dataTestId: options.assistantTurnId ?? 'conversation-turn-2',
-    dataTurn: 'assistant',
-    innerText: options.contentTextAfterFingerprint ?? options.contentText,
-  });
-  const copyElement = new FixtureHtmlElement(() => {
-    void triggerCopy();
-  });
-  finalAssistantElement.querySelectorAll = (selector: string) => {
-    return selector === '[data-testid="copy-turn-action-button"]' ? [copyElement] : [];
-  };
+  const assistantElement = fixtureElement(attributes, { behaviorButtonCount: options.behaviorButtonCount });
   let resolveDownload: ((download: object) => void) | undefined;
   let rejectDownload: ((error: Error) => void) | undefined;
 
@@ -272,8 +178,19 @@ export function artifactPageFixture(options: ArtifactPageOptions): ArtifactPageF
     },
   };
 
-  const turns = [fixtureElement(attributes, { dataTurn: 'user', dataTestId: 'conversation-turn-1' }), assistantElement];
-  const finalTurns = [turns[0] as FixtureElement, finalAssistantElement];
+  const turns = [
+    fixtureElement(attributes, { dataTestId: 'conversation-turn-user-1', dataTurn: 'user' }),
+    fixtureElement(attributes, {
+      dataTestId: options.assistantTurnId ?? 'conversation-turn-t1',
+      dataTurn: 'assistant',
+    }),
+    ...(options.includeLaterTurn === true
+      ? [
+          fixtureElement(attributes, { dataTestId: 'conversation-turn-user-2', dataTurn: 'user' }),
+          fixtureElement(attributes, { dataTestId: 'conversation-turn-t2', dataTurn: 'assistant' }),
+        ]
+      : []),
+  ];
   const turnLocator = {
     last() {
       return visibleControl(() => {
@@ -281,7 +198,7 @@ export function artifactPageFixture(options: ArtifactPageOptions): ArtifactPageF
       });
     },
     nth(index: number) {
-      return index === 1 ? assistant : locatorCollection([]);
+      return turns[index]?.getAttribute('data-turn') === 'assistant' ? assistant : locatorCollection([]);
     },
     evaluateAll(callback: unknown, argument?: unknown) {
       return Promise.resolve(invoke(callback, turns, argument));
@@ -291,32 +208,6 @@ export function artifactPageFixture(options: ArtifactPageOptions): ArtifactPageF
   const page = {
     evaluate(callback: unknown, argument?: unknown) {
       const source = String(callback);
-      if (source.includes('document.querySelectorAll(turnSelector)')) {
-        const document = {
-          querySelectorAll(selector: string) {
-            return selector === '[data-testid^="conversation-turn-"][data-turn]' ? finalTurns : [];
-          },
-        };
-        return Promise.resolve(
-          withGlobals(
-            {
-              document,
-              getComputedStyle() {
-                return { display: 'block', visibility: 'visible' };
-              },
-              HTMLElement: FixtureHtmlElement,
-              location: {
-                hostname: options.hostnameAfterFingerprint ?? 'chatgpt.com',
-                pathname:
-                  options.pathnameAfterFingerprint ??
-                  `/c/${options.conversationIdAfterFingerprint ?? 'conversation-a'}`,
-              },
-            },
-            callback,
-            argument,
-          ),
-        );
-      }
       if (source.includes('location.hostname')) {
         return Promise.resolve({
           hostname: 'chatgpt.com',
@@ -326,10 +217,10 @@ export function artifactPageFixture(options: ArtifactPageOptions): ArtifactPageF
       }
       if (source.includes('const clipboard = navigator.clipboard')) {
         events.push('clipboard:install');
-        return Promise.resolve(withGlobals({ navigator }, callback, argument));
+        return Promise.resolve(withGlobal('navigator', { clipboard }, callback, argument));
       }
       if (source.includes('const state = globalThis.__chatgptProCollabClipboard')) {
-        const result = withGlobals({ navigator }, callback, argument);
+        const result = withGlobal('navigator', { clipboard }, callback, argument);
         events.push('clipboard:restore');
         return Promise.resolve(result);
       }
@@ -337,17 +228,6 @@ export function artifactPageFixture(options: ArtifactPageOptions): ArtifactPageF
         const result = invoke(callback, argument);
         events.push('clipboard:read');
         return Promise.resolve(result);
-      }
-      if (source.includes('sessionStorage.getItem')) {
-        const sessionStorage = {
-          getItem(key: string) {
-            return storage.get(key) ?? (key.includes(':completion-target:') ? 'conversation-turn-2' : null);
-          },
-          setItem(key: string, value: string) {
-            storage.set(key, value);
-          },
-        };
-        return Promise.resolve(withGlobal('sessionStorage', sessionStorage, callback, argument));
       }
       if (source.includes('new DOMParser')) {
         return Promise.resolve(withFixtureDomParser(callback, argument));
@@ -396,8 +276,7 @@ export function artifactPageFixture(options: ArtifactPageOptions): ArtifactPageF
           );
         }) &&
         clipboard.write === originalClipboardWrite &&
-        clipboard.writeText === originalClipboardWriteText &&
-        globals.__chatgptProCollabClipboard === undefined
+        clipboard.writeText === originalClipboardWriteText
       );
     },
   };
@@ -417,8 +296,8 @@ function fixtureElement(
     readonly ariaLabel?: string;
     readonly assistantElement?: FixtureElement;
     readonly behaviorButtonCount?: number;
-    readonly dataTurn?: string;
     readonly dataTestId?: string;
+    readonly dataTurn?: string;
     readonly innerText?: string;
     readonly parentElement?: FixtureElement;
     readonly unrelatedRowControls?: boolean;
@@ -574,49 +453,31 @@ function invoke(callback: unknown, ...arguments_: readonly unknown[]): unknown {
 }
 
 /**
- * Installs one browser global while executing a generated page callback.
+ * Installs one temporary global while executing a generated page callback.
  *
  * @param name Global property name.
- * @param value Temporary fixture implementation.
- * @param callback Generated callback.
+ * @param value Temporary value.
+ * @param callback Generated page callback.
  * @param argument Callback argument.
- * @returns Callback result.
- * @throws {TypeError} If the generated callback is not callable.
+ * @returns The generated callback result.
+ * @throws {TypeError} If the callback is not callable.
  */
 function withGlobal(name: string, value: unknown, callback: unknown, argument: unknown): unknown {
-  return withGlobals({ [name]: value }, callback, argument);
-}
-
-/**
- * Installs the browser globals needed to execute one generated page callback.
- *
- * @param values Browser global names and fixture values.
- * @param callback Generated page callback.
- * @param argument Callback argument supplied by the Playwright-shaped fixture.
- * @returns The callback result.
- * @throws {TypeError} If the generated callback is not callable.
- */
-function withGlobals(values: Readonly<Record<string, unknown>>, callback: unknown, argument: unknown): unknown {
-  const previous = new Map<string, PropertyDescriptor | undefined>();
-  for (const [name, value] of Object.entries(values)) {
-    previous.set(name, Object.getOwnPropertyDescriptor(globalThis, name));
-    Object.defineProperty(globalThis, name, { configurable: true, writable: true, value });
-  }
+  const previous = Object.getOwnPropertyDescriptor(globalThis, name);
+  Object.defineProperty(globalThis, name, { configurable: true, writable: true, value });
   try {
     return invoke(callback, argument);
   } finally {
-    for (const [name, descriptor] of previous) {
-      if (descriptor === undefined) {
-        Reflect.deleteProperty(globalThis, name);
-      } else {
-        Object.defineProperty(globalThis, name, descriptor);
-      }
+    if (previous === undefined) {
+      Reflect.deleteProperty(globalThis, name);
+    } else {
+      Object.defineProperty(globalThis, name, previous);
     }
   }
 }
 
 /**
- * Compares two global property descriptors by the fields used by this fixture.
+ * Compares descriptor fields that can be changed by this fixture.
  *
  * @param actual Descriptor after a generated callback settles.
  * @param expected Descriptor captured before the callback.
