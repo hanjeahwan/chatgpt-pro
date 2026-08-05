@@ -1,12 +1,12 @@
 {
   "spec": "docs/specs/2026-08-03-chatgpt-pro-browser-collaboration.md",
-  "specDigest": "sha256:fced6c6e0c22585f86efe654cf7e709de8be5ef359569c82b89d2850cdb3e826",
+  "specDigest": "sha256:f1823ecc40e9765b026d21455c51d096c3345a0e45fc139e4980cdde9bebe61a",
   "contextDigest": "sha256:0316e4802e853cf1befe79bd07978e42455352bc11f981cf1f468c3f71a2dfbc",
   "sourceDigests": {
     "BEH-001": "sha256:81fc722eeffe25bb65e2eecd66fa5632133c4fa1cd9fc193ee60814d1fb3b0ae",
     "BEH-002": "sha256:a6b90a57305e58f15ae9b0d5868fe3182950dfd2743a0b335e00ffde43be7e43",
     "BEH-003": "sha256:3a33a5375fe8d0f24241e22a298ddce5dca588b827a649be9743ffb1edf10fd0",
-    "BEH-004": "sha256:050fb9c1f0424b981ca9ff5046ac327e56561ae0ac9c5acab9e121310a128571",
+    "BEH-004": "sha256:995df00b007c2b3dc8bfa470b4caa24d92267b456be1941a66e8a80083659067",
     "BEH-005": "sha256:3a92560c8d7f89bef76669ba25c88c31182da0ea2a22052184252c32414d1bc3",
     "BEH-006": "sha256:42e460ac18db205b5071bba3fa4757244153e186168bd0038cda5cd332b16648",
     "BEH-007": "sha256:06557b88fb956877901122ac16e98134aba1cbe59c709a3e919dbbe494e132fe",
@@ -18,7 +18,7 @@
     "VER-001": "sha256:c05d8ecd99ba7277afc64f21d661ae5ca77f4542a50ba50b8534789b0817db63",
     "VER-002": "sha256:55e0c5659c76a100be65c593db9c78352f69bfe112966e638c15e54df6d82489",
     "VER-003": "sha256:7707532a8944369bb139c708146758ef058c9da5d03ecf55befb871eb31ef7ed",
-    "VER-004": "sha256:0a9f37c57919cdd27b9a18b02737a87ca249cafa223fd36e18e7dba50eafdd7b",
+    "VER-004": "sha256:d4a319ba1fd7fd058e8e3c4392ff3d7816961570e6d2e6688c1d9eb1f33329ea",
     "VER-005": "sha256:5b723ada9786cd3d392edffec5f5fa356489ad9f61d0379b925bcc889c8d6368",
     "VER-006": "sha256:fa0e9fcceb838cd692b2feac9ed537e654047668832243f3f589ac1cb9c1eaca",
     "VER-007": "sha256:8d53c9eb45049b4cb12c69d304a12b925da0c1e09a029e66b54e5a80d6305073",
@@ -123,7 +123,8 @@
           "43b0a193667856aaa695e5fd39fa018732222a39",
           "0120378d800ce4bfb19068fa320bc52c0f08a571",
           "8175136100a3716b189b7efb552467cf71849250",
-          "435d72d766ea273d5fdf67ab5f1e7a285970d114"
+          "435d72d766ea273d5fdf67ab5f1e7a285970d114",
+          "126c15d23ab25d2a81c211967c7120693b846807"
         ],
         "checks": [
           "pnpm exec vitest --run tests/browser.test.ts: 42 tests passed with executable page functions covering deadline-bounded SHA-256 digest never-settles/reject/one-call paths, durable pre-reload target binding, post-reload recovered-stuck completion proof/fingerprint, content-change stability reset, delayed reload and subsequent observation, T1 observation to T2 capture rejection, local-turn recovery-key isolation, 30-second stall grace, bounded reload timeout, rejected-reload marker rollback, normal/pending/identity paths",
@@ -133,7 +134,11 @@
           "pnpm typecheck",
           "pnpm test: 8 test files and 108 tests passed",
           "git diff --check",
-          "VER-004 remains partial: Host A task 7f62f36c-8748-43ad-af4f-7fd84b52715d turn adfb2d4e-2f0e-479b-85ed-adba0f88a0ed was not re-waited after this fix; no live pass claimed"
+          "VER-004 remains partial: Host A task 7f62f36c-8748-43ad-af4f-7fd84b52715d turn adfb2d4e-2f0e-479b-85ed-adba0f88a0ed was not re-waited after this fix; no live pass claimed",
+          "Reviewer task_6f770806c7b7 found that recovered capture could hash snapshot A, then copy changed same-turn text B after the asynchronous digest; no accepted/closed evidence exists yet",
+          "126c15d23ab25d2a81c211967c7120693b846807 re-locates the unique bound assistant, compares its canonical text byte-for-byte with the pre-digest snapshot, rechecks the unique visible Copy, and clicks it in one synchronous page critical section; clipboard interception is restored on every failure before freezeCapture",
+          "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts: 71 tests passed, including delayed capture digest mutation rejection with no Copy, unchanged recovered capture, and pending/no-response/no-artifact service invariants",
+          "pnpm format:check, pnpm lint, pnpm typecheck, pnpm test (8 files/111 tests), and git diff --check passed after 126c15d23ab25d2a81c211967c7120693b846807"
         ],
         "reviews": []
       }
@@ -266,7 +271,8 @@
           "43b0a193667856aaa695e5fd39fa018732222a39",
           "0120378d800ce4bfb19068fa320bc52c0f08a571",
           "8175136100a3716b189b7efb552467cf71849250",
-          "435d72d766ea273d5fdf67ab5f1e7a285970d114"
+          "435d72d766ea273d5fdf67ab5f1e7a285970d114",
+          "126c15d23ab25d2a81c211967c7120693b846807"
         ],
         "checks": [
           "pnpm format:check",
@@ -276,7 +282,9 @@
           "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts: 68 tests passed",
           "node .agents/skills/plan-spec-implementation/scripts/spec-tasks.ts diff after digest reconciliation: specChanged=false, contextChanged=false, no impacted tasks",
           "VER-011 was not rerun because this fix changes only browser completion observation/capture identity and reload recovery, not SQLite schema, state transitions, or recovery subprocess code",
-          "VER-004 live recovery and independent Review remain outstanding; no review evidence copied; this fix has no live wait evidence"
+          "VER-004 live recovery and independent Review remain outstanding; no review evidence copied; this fix has no live wait evidence",
+          "Reviewer task_6f770806c7b7 reopened the same completion-recovery thread because asynchronous recovered-capture digest allowed same-turn text to change before Copy; 126c15d23ab25d2a81c211967c7120693b846807 adds the synchronous final text/identity/Copy critical section",
+          "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts: 71 tests passed; pnpm format:check, pnpm lint, pnpm typecheck, pnpm test (8 files/111 tests), and git diff --check passed; no live or review closure claimed"
         ],
         "reviews": []
       }
