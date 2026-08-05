@@ -1,12 +1,12 @@
 {
   "spec": "docs/specs/2026-08-03-chatgpt-pro-browser-collaboration.md",
-  "specDigest": "sha256:3cc0918efb364f7a72f81fcb3e234318ed3cf7edc79ffd58b287e2da26d9efa8",
-  "contextDigest": "sha256:b4d090d520578eb9d314415521fd93762f34fc40518e64282be94540216ea779",
+  "specDigest": "sha256:9866219c7aa7c871ed4ea0a76f4f126657a62dcf57d1ab161ee06f8eb8db8fbe",
+  "contextDigest": "sha256:c07faced2d0de56f973045c8ee7190ddd370213c8b9f4ddd38eb533841444fd3",
   "sourceDigests": {
     "BEH-001": "sha256:81fc722eeffe25bb65e2eecd66fa5632133c4fa1cd9fc193ee60814d1fb3b0ae",
     "BEH-002": "sha256:a6b90a57305e58f15ae9b0d5868fe3182950dfd2743a0b335e00ffde43be7e43",
     "BEH-003": "sha256:3a33a5375fe8d0f24241e22a298ddce5dca588b827a649be9743ffb1edf10fd0",
-    "BEH-004": "sha256:7f7fc8b1d7442563316c286ba459d51c0a93e2a4aaeb300d96fd050063989028",
+    "BEH-004": "sha256:57aa4a1310a76e62da385d391f9b42845383a6609be5dd9fd2615c48723e2d67",
     "BEH-005": "sha256:3a92560c8d7f89bef76669ba25c88c31182da0ea2a22052184252c32414d1bc3",
     "BEH-006": "sha256:42e460ac18db205b5071bba3fa4757244153e186168bd0038cda5cd332b16648",
     "BEH-007": "sha256:06557b88fb956877901122ac16e98134aba1cbe59c709a3e919dbbe494e132fe",
@@ -18,7 +18,7 @@
     "VER-001": "sha256:c05d8ecd99ba7277afc64f21d661ae5ca77f4542a50ba50b8534789b0817db63",
     "VER-002": "sha256:55e0c5659c76a100be65c593db9c78352f69bfe112966e638c15e54df6d82489",
     "VER-003": "sha256:7707532a8944369bb139c708146758ef058c9da5d03ecf55befb871eb31ef7ed",
-    "VER-004": "sha256:b9d8f2aeed95a0e40ee304334f6395e41c6c595af7632c9d6920aff798f1d8e9",
+    "VER-004": "sha256:0a9f37c57919cdd27b9a18b02737a87ca249cafa223fd36e18e7dba50eafdd7b",
     "VER-005": "sha256:5b723ada9786cd3d392edffec5f5fa356489ad9f61d0379b925bcc889c8d6368",
     "VER-006": "sha256:fa0e9fcceb838cd692b2feac9ed537e654047668832243f3f589ac1cb9c1eaca",
     "VER-007": "sha256:8d53c9eb45049b4cb12c69d304a12b925da0c1e09a029e66b54e5a80d6305073",
@@ -116,9 +116,13 @@
       "dependsOn": ["IMP-001", "IMP-002", "IMP-003"],
       "scope": ["CLI", "Browser boundary", "Transcript/artifact store"],
       "evidence": {
-        "commits": ["8957de64082a53596eb4988d683dbcd2cf09ecfa", "321928bd20895c3f6a10daef92bedcfcc63f6348"],
+        "commits": [
+          "8957de64082a53596eb4988d683dbcd2cf09ecfa",
+          "321928bd20895c3f6a10daef92bedcfcc63f6348",
+          "2c176443222e8cd5adee196bca4d4cef42ae2792"
+        ],
         "checks": [
-          "pnpm exec vitest --run tests/browser.test.ts: 37 tests passed with executable page functions covering durable pre-reload target binding across delayed reload and subsequent observation, T1 observation to T2 capture rejection, local-turn recovery-key isolation, 30-second stall grace, bounded reload timeout, rejected-reload marker rollback, normal/pending/identity paths",
+          "pnpm exec vitest --run tests/browser.test.ts: 39 tests passed with executable page functions covering durable pre-reload target binding, post-reload recovered-stuck completion proof/fingerprint, content-change stability reset, delayed reload and subsequent observation, T1 observation to T2 capture rejection, local-turn recovery-key isolation, 30-second stall grace, bounded reload timeout, rejected-reload marker rollback, normal/pending/identity paths",
           "pnpm exec vitest --run tests/collab.test.ts: 26 tests passed",
           "pnpm format:check",
           "pnpm lint",
@@ -251,13 +255,17 @@
       "dependsOn": ["IMP-001", "IMP-002", "IMP-003", "IMP-004", "IMP-005", "IMP-006", "IMP-007"],
       "scope": ["CLI", "State store", "Transcript/artifact store", "Test suite"],
       "evidence": {
-        "commits": ["8957de64082a53596eb4988d683dbcd2cf09ecfa", "321928bd20895c3f6a10daef92bedcfcc63f6348"],
+        "commits": [
+          "8957de64082a53596eb4988d683dbcd2cf09ecfa",
+          "321928bd20895c3f6a10daef92bedcfcc63f6348",
+          "2c176443222e8cd5adee196bca4d4cef42ae2792"
+        ],
         "checks": [
           "pnpm format:check",
           "pnpm lint",
           "pnpm typecheck",
           "pnpm test: 8 test files and 101 tests passed",
-          "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts: 63 tests passed",
+          "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts: 65 tests passed",
           "node .agents/skills/plan-spec-implementation/scripts/spec-tasks.ts diff after digest reconciliation: specChanged=false, contextChanged=false, no impacted tasks",
           "VER-011 was not rerun because this fix changes only browser completion observation/capture identity and reload recovery, not SQLite schema, state transitions, or recovery subprocess code",
           "VER-004 live recovery and independent Review remain outstanding; no review evidence copied; this fix has no live wait evidence"
