@@ -20,8 +20,7 @@ describe('BEH-002, BEH-005, and BEH-007 state gates', () => {
     store.markSubmissionAttempting('task-a', 'turn-a');
     store.markTurnPending('task-a', 'turn-a', 'conversation-a', 'https://chatgpt.com/c/conversation-a');
     const responsePath = join(root, 'response.md');
-    store.beginCapture('task-a', 'turn-a', responsePath);
-    store.reconcileArtifactSet('task-a', 'turn-a', []);
+    store.freezeCapture('task-a', 'turn-a', responsePath, []);
     await writeFile(responsePath, 'response');
     store.completeTurn('task-a', 'turn-a', responsePath);
     store.beginTurn('task-a', 'turn-b', '/other.md', []);
@@ -41,8 +40,7 @@ describe('BEH-002, BEH-005, and BEH-007 state gates', () => {
     store.markSubmissionAttempting('task-a', 'turn-a');
     store.markTurnPending('task-a', 'turn-a', 'conversation-a', 'https://chatgpt.com/c/conversation-a');
     const responsePath = join(root, 'response.md');
-    store.beginCapture('task-a', 'turn-a', responsePath);
-    store.reconcileArtifactSet('task-a', 'turn-a', [
+    store.freezeCapture('task-a', 'turn-a', responsePath, [
       { sourceUrl: 'sandbox:/mnt/data/first.txt', label: 'first.txt' },
       { sourceUrl: 'sandbox:/mnt/data/second.txt', label: 'second.txt' },
     ]);
@@ -60,7 +58,7 @@ describe('BEH-002, BEH-005, and BEH-007 state gates', () => {
       return store.beginTurn('task-a', 'turn-b', '/other.md', []);
     }).toThrowError(/unfinished turn/);
     expect(() => {
-      return store.reconcileArtifactSet('task-a', 'turn-a', [
+      return store.verifyArtifactSet('task-a', 'turn-a', [
         { sourceUrl: 'sandbox:/mnt/data/changed.txt', label: 'changed.txt' },
       ]);
     }).toThrowError(/artifact set changed/);

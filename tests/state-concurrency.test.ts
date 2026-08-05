@@ -11,6 +11,39 @@ import { StateStore } from '../skills/chatgpt-pro-collab/scripts/state.ts';
 const execFileAsync = promisify(execFile);
 
 describe('VER-011 SQLite cross-process concurrency', () => {
+  it('rolls back a subprocess killed after the first artifact insert in the capture transaction', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-capture-transaction-'));
+    const databasePath = join(root, 'state.sqlite');
+    const readyPath = join(root, 'freeze-ready');
+    const workerPath = join(import.meta.dirname, 'support', 'capture-recovery-worker.ts');
+    const worker = spawn(process.execPath, [workerPath, 'interrupt-freeze', databasePath, root, readyPath], {
+      stdio: 'ignore',
+    });
+    const workerCompletion = waitForExit(worker);
+    await waitForPath(readyPath);
+
+    worker.kill('SIGKILL');
+    await workerCompletion;
+    const reopened = new StateStore(databasePath);
+    expect(reopened.requireTurn('task-a', 'turn-a')).toMatchObject({
+      status: 'pending',
+      responsePath: null,
+      artifactSetRecorded: false,
+    });
+    expect(reopened.listArtifacts('task-a', 'turn-a')).toEqual([]);
+    reopened.freezeCapture('task-a', 'turn-a', join(root, 'response.md'), [
+      { sourceUrl: 'sandbox:/mnt/data/first.txt', label: 'first.txt' },
+      { sourceUrl: 'sandbox:/mnt/data/second.txt', label: 'second.txt' },
+    ]);
+    expect(reopened.requireTurn('task-a', 'turn-a')).toMatchObject({
+      status: 'capturing',
+      responsePath: join(root, 'response.md'),
+      artifactSetRecorded: true,
+    });
+    expect(reopened.listArtifacts('task-a', 'turn-a')).toHaveLength(2);
+    reopened.close();
+  });
+
   it.each(['capturing-frozen', 'response-published', 'artifact-published', 'partial-artifacts'] as const)(
     'recovers after a real subprocess is killed at %s',
     async (checkpoint) => {

@@ -7,7 +7,9 @@ type Checkpoint = 'capturing-frozen' | 'response-published' | 'artifact-publishe
 
 const [mode, databasePath, root, ...parameters] = process.argv.slice(2);
 if (mode === undefined || databasePath === undefined || root === undefined) {
-  throw new Error('usage: capture-recovery-worker <prepare|recover|close> <databasePath> <root> [...]');
+  throw new Error(
+    'usage: capture-recovery-worker <interrupt-freeze|prepare|recover|close> <databasePath> <root> [...]',
+  );
 }
 
 const taskId = 'task-a';
@@ -15,7 +17,36 @@ const turnId = 'turn-a';
 const responsePath = join(root, 'response.md');
 const sourceUrls = ['sandbox:/mnt/data/first.txt', 'sandbox:/mnt/data/second.txt'];
 
-if (mode === 'prepare') {
+if (mode === 'interrupt-freeze') {
+  const [readyPath] = parameters;
+  if (readyPath === undefined) {
+    throw new Error('interrupt-freeze requires a ready path');
+  }
+  const store = new StateStore(databasePath);
+  store.createTask(taskId, 'session-a');
+  store.beginTurn(taskId, turnId, '/prompt.md', []);
+  store.markSubmissionAttempting(taskId, turnId);
+  store.markTurnPending(taskId, turnId, 'conversation-a', 'https://chatgpt.com/c/conversation-a');
+  const artifacts = sourceUrls.map((sourceUrl) => {
+    return { sourceUrl, label: sourceUrl.slice(sourceUrl.lastIndexOf('/') + 1) };
+  });
+  Object.defineProperty(artifacts, 'entries', {
+    value: function* interruptedEntries() {
+      const first = artifacts[0];
+      if (first === undefined) {
+        throw new Error('freeze fixture requires a first artifact');
+      }
+      yield [0, first] as const;
+      writeFileSync(readyPath, String(process.pid), { flag: 'wx' });
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60_000);
+      const second = artifacts[1];
+      if (second !== undefined) {
+        yield [1, second] as const;
+      }
+    },
+  });
+  store.freezeCapture(taskId, turnId, responsePath, artifacts);
+} else if (mode === 'prepare') {
   const [checkpointValue, readyPath] = parameters;
   if (!isCheckpoint(checkpointValue) || readyPath === undefined) {
     throw new Error('prepare requires a checkpoint and ready path');
@@ -25,10 +56,10 @@ if (mode === 'prepare') {
   store.beginTurn(taskId, turnId, '/prompt.md', []);
   store.markSubmissionAttempting(taskId, turnId);
   store.markTurnPending(taskId, turnId, 'conversation-a', 'https://chatgpt.com/c/conversation-a');
-  store.beginCapture(taskId, turnId, responsePath);
-  store.reconcileArtifactSet(
+  store.freezeCapture(
     taskId,
     turnId,
+    responsePath,
     sourceUrls.map((sourceUrl) => {
       return { sourceUrl, label: sourceUrl.slice(sourceUrl.lastIndexOf('/') + 1) };
     }),

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { runBrowserCommand } from '../skills/chatgpt-pro-collab/scripts/browser.ts';
+import { BrowserCommandAbortedError, runBrowserCommand } from '../skills/chatgpt-pro-collab/scripts/browser.ts';
 
 describe('browser command side-effect gate', () => {
   it('does not launch the guarded command until the parent releases it', async () => {
@@ -84,6 +84,35 @@ describe('browser command side-effect gate', () => {
 
     expect(released).toBe(true);
     expect(commandNotSpawned).toBe(true);
+  });
+
+  it('aborts and reaps both the command gate and a never-ending guarded command', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-command-abort-'));
+    const controller = new AbortController();
+    let gatePid: number | undefined;
+    let commandPid: number | undefined;
+
+    await expect(
+      runBrowserCommand({
+        executable: process.execPath,
+        arguments: ['-e', 'setInterval(() => {}, 1000)'],
+        cwd: root,
+        environment: process.env,
+        signal: controller.signal,
+        onChildSpawned(pid) {
+          gatePid = pid;
+        },
+        onCommandSpawned(pid) {
+          commandPid = pid;
+          controller.abort();
+        },
+      }),
+    ).rejects.toBeInstanceOf(BrowserCommandAbortedError);
+
+    if (gatePid === undefined || commandPid === undefined) {
+      throw new Error('abort test did not observe both process identifiers');
+    }
+    await Promise.all([waitForPidExit(gatePid), waitForPidExit(commandPid)]);
   });
 
   it('cannot create a browser side effect when the parent dies before child attachment', async () => {

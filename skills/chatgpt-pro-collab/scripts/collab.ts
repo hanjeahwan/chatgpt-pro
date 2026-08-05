@@ -30,6 +30,8 @@ import {
 } from './session.ts';
 import { StateError, StateStore } from './state.ts';
 
+const CAPTURE_ABORT_SETTLE_MS = 250;
+
 export interface CollabBrowser {
   setup(): Promise<string>;
   startTask(taskId: string, sessionName: string, seedStatePath: string): Promise<BrowserSessionInfo>;
@@ -54,6 +56,7 @@ export interface CollabBrowser {
     sessionName: string,
     expectedConversationId: string,
     captureTimeoutMs: number,
+    signal: AbortSignal,
     observer?: BrowserOperationObserver,
   ): Promise<BrowserCaptureResult>;
   downloadArtifact(
@@ -303,11 +306,13 @@ export class CollabService {
           if (task.conversationId === null || task.conversationUrl === null) {
             throw new CollabError('TRANSCRIPT_INCONSISTENT', `capturable task has no conversation: ${taskId}`);
           }
+          const conversationId = task.conversationId;
           if (turn.status === 'capturing' && captureDeadline === null) {
             captureDeadline = performance.now() + captureTimeoutMs;
           }
 
           let targetResponsePath = turn.responsePath;
+          const captureWasPending = turn.status === 'pending';
           if (turn.status === 'pending') {
             const remainingObservationMs = remainingMilliseconds(observationDeadline);
             if (remainingObservationMs === 0) {
@@ -327,29 +332,38 @@ export class CollabService {
             }
             assertConversation(taskId, task.conversationId, task.conversationUrl, observed);
             targetResponsePath = responsePath(this.#paths, taskId, turnId);
-            store.beginCapture(taskId, turnId, targetResponsePath);
             captureDeadline = performance.now() + captureTimeoutMs;
           }
 
           if (targetResponsePath === null || captureDeadline === null) {
             throw new CollabError('TRANSCRIPT_INCONSISTENT', `capturing turn has no response deadline: ${turnId}`);
           }
-          const remainingCaptureMs = remainingMilliseconds(captureDeadline);
-          if (remainingCaptureMs === 0) {
-            throw new CollabError('CAPTURE_TIMEOUT', `response capture timed out: ${turnId}`);
-          }
-          const captured = await this.#browser.captureResponse(
-            taskId,
-            task.playwrightSession,
-            task.conversationId,
-            remainingCaptureMs,
-            observer,
+          const captured = await captureResponseWithinDeadline(
+            captureDeadline,
+            turnId,
+            (remainingCaptureMs, signal) => {
+              return this.#browser.captureResponse(
+                taskId,
+                task.playwrightSession,
+                conversationId,
+                remainingCaptureMs,
+                signal,
+                observer,
+              );
+            },
           );
-          assertConversation(taskId, task.conversationId, task.conversationUrl, captured);
+          assertConversation(taskId, conversationId, task.conversationUrl, captured);
           if (remainingMilliseconds(captureDeadline) === 0) {
             throw new CollabError('CAPTURE_TIMEOUT', `response capture timed out: ${turnId}`);
           }
-          store.reconcileArtifactSet(taskId, turnId, captured.artifacts);
+          if (captureWasPending) {
+            store.freezeCapture(taskId, turnId, targetResponsePath, captured.artifacts);
+          } else {
+            store.verifyArtifactSet(taskId, turnId, captured.artifacts);
+          }
+          if (remainingMilliseconds(captureDeadline) === 0) {
+            throw new CollabError('CAPTURE_TIMEOUT', `response capture timed out: ${turnId}`);
+          }
           await publishOrVerifyResponse(targetResponsePath, captured.response);
           const artifactPaths = await this.#captureArtifacts(
             store,
@@ -649,6 +663,102 @@ function requirePositiveMilliseconds(name: string, value: number): void {
  */
 function remainingMilliseconds(deadline: number): number {
   return Math.max(0, Math.ceil(deadline - performance.now()));
+}
+
+type CaptureOutcome<T> =
+  | { readonly kind: 'completed'; readonly value: T; readonly settledAt: number }
+  | { readonly kind: 'failed'; readonly error: unknown; readonly settledAt: number };
+
+/**
+ * Runs response capture behind a host monotonic watchdog and aborts its browser command at expiry.
+ *
+ * @param deadline Shared monotonic capture deadline for this wait call.
+ * @param turnId Turn identifier used in the stable timeout diagnostic.
+ * @param operation Browser capture started with the remaining budget and host cancellation signal.
+ * @returns The browser capture result when it settles before the deadline.
+ * @throws {CollabError} With `CAPTURE_TIMEOUT` after deadline expiry, including delayed failures.
+ * @throws {Error} The original browser error when it settles before the deadline.
+ */
+async function captureResponseWithinDeadline<T>(
+  deadline: number,
+  turnId: string,
+  operation: (remainingCaptureMs: number, signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const remainingCaptureMs = remainingMilliseconds(deadline);
+  if (remainingCaptureMs === 0) {
+    throw captureTimeout(turnId);
+  }
+
+  const controller = new AbortController();
+  const outcome = Promise.resolve()
+    .then(() => {
+      return operation(remainingCaptureMs, controller.signal);
+    })
+    .then(
+      (value): CaptureOutcome<T> => {
+        return { kind: 'completed', value, settledAt: performance.now() };
+      },
+      (error: unknown): CaptureOutcome<T> => {
+        return { kind: 'failed', error, settledAt: performance.now() };
+      },
+    );
+  let deadlineTimer: NodeJS.Timeout | undefined;
+  const deadlineReached = new Promise<{ readonly kind: 'deadline' }>((resolve) => {
+    deadlineTimer = setTimeout(() => {
+      controller.abort();
+      resolve({ kind: 'deadline' });
+    }, remainingCaptureMs);
+  });
+  const result = await Promise.race([outcome, deadlineReached]);
+  if (deadlineTimer !== undefined) {
+    clearTimeout(deadlineTimer);
+  }
+
+  if (result.kind === 'deadline') {
+    await waitForCaptureTermination(outcome);
+    throw captureTimeout(turnId);
+  }
+  if (result.settledAt >= deadline) {
+    controller.abort();
+    throw captureTimeout(turnId);
+  }
+  if (result.kind === 'failed') {
+    throw result.error;
+  }
+  return result.value;
+}
+
+/**
+ * Gives an aborted browser boundary time to reap its gate and guarded command before lease release.
+ *
+ * @param outcome Non-rejecting browser operation outcome.
+ * @returns Nothing when the operation settles or the bounded cleanup allowance expires.
+ * @throws {Error} Timers do not ordinarily throw.
+ */
+async function waitForCaptureTermination<T>(outcome: Promise<CaptureOutcome<T>>): Promise<void> {
+  let cleanupTimer: NodeJS.Timeout | undefined;
+  await Promise.race([
+    outcome.then(() => {
+      return undefined;
+    }),
+    new Promise<void>((resolve) => {
+      cleanupTimer = setTimeout(resolve, CAPTURE_ABORT_SETTLE_MS);
+    }),
+  ]);
+  if (cleanupTimer !== undefined) {
+    clearTimeout(cleanupTimer);
+  }
+}
+
+/**
+ * Constructs the single response-capture timeout used before and after the atomic boundary.
+ *
+ * @param turnId Turn whose shared capture deadline expired.
+ * @returns Stable capture timeout error.
+ * @throws {Error} This pure constructor helper only allocates an error.
+ */
+function captureTimeout(turnId: string): CollabError {
+  return new CollabError('CAPTURE_TIMEOUT', `response capture timed out: ${turnId}`);
 }
 
 /**

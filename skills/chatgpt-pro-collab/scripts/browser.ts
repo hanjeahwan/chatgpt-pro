@@ -14,6 +14,7 @@ const BROWSER_COMMAND_GATE_PATH = fileURLToPath(new URL('./browser-command-gate.
 const COMMAND_PID_NOTIFICATION_FAILED_EXIT_CODE = 70;
 const COMMAND_SPAWN_FAILED_EXIT_CODE = 127;
 const COMMAND_STOPPED_BEFORE_SPAWN_EXIT_CODE = 128;
+const COMMAND_ABORT_GRACE_MS = 100;
 
 export interface BrowserCommandInvocation {
   readonly executable: string;
@@ -26,6 +27,7 @@ export interface BrowserCommandInvocation {
   readonly onCommandStarted?: () => void;
   readonly onCommandNotSpawned?: () => void;
   readonly beforeCommandRelease?: () => void;
+  readonly signal?: AbortSignal;
 }
 
 export interface BrowserCommandOutput {
@@ -34,6 +36,18 @@ export interface BrowserCommandOutput {
 }
 
 export type BrowserCommandRunner = (invocation: BrowserCommandInvocation) => Promise<BrowserCommandOutput>;
+
+export class BrowserCommandAbortedError extends Error {
+  /**
+   * Identifies a host-requested command termination without conflating it with a browser failure.
+   *
+   * @throws {Error} This constructor only performs ordinary error allocation.
+   */
+  constructor() {
+    super('browser command aborted by host deadline');
+    this.name = 'BrowserCommandAbortedError';
+  }
+}
 
 export interface BrowserOperationObserver {
   childSpawned(pid: number): void;
@@ -524,6 +538,7 @@ export class PlaywrightBrowser {
    * @param sessionName Owning Playwright named session.
    * @param expectedConversationId Database-bound conversation identity.
    * @param captureTimeoutMs Remaining finite capture budget.
+   * @param signal Host cancellation used to terminate the command at the monotonic deadline.
    * @param observer Task-lease child-process observer.
    * @returns Exact `text/plain`, matching `text/html`, and re-observed conversation identity.
    * @throws {BrowserError} If the response changed, a clipboard type is absent, or selectors drift.
@@ -534,6 +549,7 @@ export class PlaywrightBrowser {
     sessionName: string,
     expectedConversationId: string,
     captureTimeoutMs: number,
+    signal: AbortSignal,
     observer?: BrowserOperationObserver,
   ): Promise<BrowserCaptureResult> {
     this.#artifactControlsRefreshed.delete(taskId);
@@ -545,6 +561,7 @@ export class PlaywrightBrowser {
       'copy completed response',
       'capture',
       observer,
+      signal,
     );
     if (
       result.response === undefined ||
@@ -682,6 +699,7 @@ export class PlaywrightBrowser {
    * @param beforeCommandRelease Called after the gate is durably observed and immediately before command release.
    * @param onCommandStarted Called after a command PID or equivalent conservative start evidence is observed.
    * @param onCommandNotSpawned Called only when the gate proves the guarded command did not spawn.
+   * @param signal Host cancellation that safely terminates the gate and guarded command.
    * @returns Captured stdout and stderr.
    * @throws {BrowserError} If `npx` exits unsuccessfully or cannot start.
    */
@@ -694,6 +712,7 @@ export class PlaywrightBrowser {
     beforeCommandRelease?: () => void,
     onCommandStarted?: () => void,
     onCommandNotSpawned?: () => void,
+    signal?: AbortSignal,
   ): Promise<BrowserCommandOutput> {
     const outputDirectory = join(taskDirectory(this.#paths, taskId), 'playwright');
     try {
@@ -740,6 +759,7 @@ export class PlaywrightBrowser {
                 beforeCommandRelease();
               },
             }),
+        ...(signal === undefined ? {} : { signal }),
       });
     } catch (error) {
       throw new BrowserError('BROWSER_COMMAND_FAILED', operation, errorMessage(error));
@@ -756,6 +776,7 @@ export class PlaywrightBrowser {
    * @param operation Concrete operation for failures.
    * @param expectedKind Required result kind.
    * @param observer Task-lease child-process observer.
+   * @param signal Host cancellation for this page command.
    * @returns The decoded page result.
    * @throws {BrowserError} If the command or protocol result fails.
    * @throws {Error} If the script file cannot be written.
@@ -768,9 +789,20 @@ export class PlaywrightBrowser {
     operation: string,
     expectedKind: T['kind'],
     observer?: BrowserOperationObserver,
+    signal?: AbortSignal,
   ): Promise<T> {
     const scriptPath = await savePlaywrightScript(this.#paths, taskId, action, source);
-    const output = await this.#invoke(sessionName, taskId, ['run-code', '--filename', scriptPath], operation, observer);
+    const output = await this.#invoke(
+      sessionName,
+      taskId,
+      ['run-code', '--filename', scriptPath],
+      operation,
+      observer,
+      undefined,
+      undefined,
+      undefined,
+      signal,
+    );
     return parseProtocolResult<T>(output.stdout, expectedKind);
   }
 
@@ -807,6 +839,10 @@ export class PlaywrightBrowser {
  */
 export function runBrowserCommand(invocation: BrowserCommandInvocation): Promise<BrowserCommandOutput> {
   return new Promise((resolve, reject) => {
+    if (invocation.signal?.aborted === true) {
+      reject(new BrowserCommandAbortedError());
+      return;
+    }
     const child = spawn(process.execPath, [BROWSER_COMMAND_GATE_PATH, invocation.executable, ...invocation.arguments], {
       cwd: invocation.cwd,
       env: invocation.environment,
@@ -818,8 +854,11 @@ export function runBrowserCommand(invocation: BrowserCommandInvocation): Promise
     let childObserved = false;
     let settled = false;
     let commandSpawnObserved = false;
+    let commandPid: number | undefined;
     let commandObserverError: unknown;
     let commandEventBuffer = '';
+    let aborting = false;
+    let forcedAbort: NodeJS.Timeout | undefined;
     const commandEvents = child.stdio[3];
 
     if (!(commandEvents instanceof Readable)) {
@@ -828,11 +867,19 @@ export function runBrowserCommand(invocation: BrowserCommandInvocation): Promise
       return;
     }
 
+    const cleanupAbort = (): void => {
+      invocation.signal?.removeEventListener('abort', abortCommand);
+      if (forcedAbort !== undefined) {
+        clearTimeout(forcedAbort);
+        forcedAbort = undefined;
+      }
+    };
     const rejectOnce = (error: unknown): void => {
       if (settled) {
         return;
       }
       settled = true;
+      cleanupAbort();
       reject(error);
     };
     const detachObservedChild = (): void => {
@@ -842,6 +889,27 @@ export function runBrowserCommand(invocation: BrowserCommandInvocation): Promise
       childObserved = false;
       invocation.onChildExited?.(childPid);
     };
+    const abortCommand = (): void => {
+      if (settled || aborting) {
+        return;
+      }
+      aborting = true;
+      child.kill('SIGTERM');
+      forcedAbort = setTimeout(() => {
+        try {
+          if (commandPid !== undefined) {
+            killIfAlive(commandPid, 'SIGKILL');
+          }
+        } catch (error) {
+          commandObserverError ??= error;
+        }
+        child.kill('SIGKILL');
+      }, COMMAND_ABORT_GRACE_MS);
+    };
+    invocation.signal?.addEventListener('abort', abortCommand, { once: true });
+    if (abortRequested(invocation.signal)) {
+      abortCommand();
+    }
 
     child.stdout.on('data', (chunk: Buffer) => {
       stdout.push(chunk);
@@ -858,16 +926,17 @@ export function runBrowserCommand(invocation: BrowserCommandInvocation): Promise
       if (lineEnd < 0 || commandSpawnObserved) {
         return;
       }
-      const childCommandPid = Number(commandEventBuffer.slice(0, lineEnd));
-      if (!Number.isSafeInteger(childCommandPid) || childCommandPid <= 0) {
+      const reportedCommandPid = Number(commandEventBuffer.slice(0, lineEnd));
+      if (!Number.isSafeInteger(reportedCommandPid) || reportedCommandPid <= 0) {
         commandObserverError = new Error('browser command gate reported an invalid command PID');
         child.kill('SIGTERM');
         return;
       }
+      commandPid = reportedCommandPid;
       commandSpawnObserved = true;
       try {
         invocation.onCommandStarted?.();
-        invocation.onCommandSpawned?.(childCommandPid);
+        invocation.onCommandSpawned?.(reportedCommandPid);
       } catch (error) {
         commandObserverError = error;
         child.kill('SIGTERM');
@@ -880,7 +949,7 @@ export function runBrowserCommand(invocation: BrowserCommandInvocation): Promise
         rejectOnce(detachError);
         return;
       }
-      rejectOnce(error);
+      rejectOnce(aborting ? new BrowserCommandAbortedError() : error);
     });
     child.on('close', (code, signal) => {
       if (settled) {
@@ -919,12 +988,17 @@ export function runBrowserCommand(invocation: BrowserCommandInvocation): Promise
         rejectOnce(commandObserverError);
         return;
       }
+      if (aborting) {
+        rejectOnce(new BrowserCommandAbortedError());
+        return;
+      }
       if (code === 0) {
         if (!commandSpawnObserved) {
           rejectOnce(new Error('browser command gate exited without a command PID'));
           return;
         }
         settled = true;
+        cleanupAbort();
         resolve(output);
         return;
       }
@@ -957,6 +1031,35 @@ export function runBrowserCommand(invocation: BrowserCommandInvocation): Promise
       }
     }
   });
+}
+
+/**
+ * Sends a best-effort signal to a guarded command during forced deadline cleanup.
+ *
+ * @param pid Positive process identifier reported by the command gate.
+ * @param signal Termination signal selected by the host watchdog.
+ * @returns Nothing after the signal succeeds or the process is already absent.
+ * @throws {Error} Permission and invalid-signal failures are re-thrown.
+ */
+function killIfAlive(pid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(pid, signal);
+  } catch (error) {
+    if (!(error instanceof Error) || !('code' in error) || error.code !== 'ESRCH') {
+      throw error;
+    }
+  }
+}
+
+/**
+ * Reads cancellation state without relying on TypeScript's stale control-flow narrowing.
+ *
+ * @param signal Optional host cancellation signal.
+ * @returns Whether cancellation has been requested at the time of this call.
+ * @throws {Error} Reading AbortSignal state does not throw.
+ */
+function abortRequested(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true;
 }
 
 /**

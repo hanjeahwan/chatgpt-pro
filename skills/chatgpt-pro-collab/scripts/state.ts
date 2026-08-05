@@ -592,53 +592,26 @@ export class StateStore {
   }
 
   /**
-   * Persists the response path and capture state before files are published.
+   * Atomically freezes the response path and complete ordered artifact set before file publication.
    *
    * @param taskId Owning task identifier.
-   * @param turnId Pending turn whose completed assistant response was observed.
+   * @param turnId Pending turn whose complete browser capture was obtained.
    * @param responsePath Deterministic immutable response transcript path.
-   * @returns The updated capturing turn.
-   * @throws {StateError} If the turn is not pending.
-   * @throws {Error} If SQLite cannot commit the transition.
+   * @param artifacts Ordered unique logical artifact targets.
+   * @returns The updated capturing turn after all rows commit together.
+   * @throws {StateError} If the turn is not pending or artifact sources are duplicated.
+   * @throws {Error} If SQLite cannot commit the complete capture boundary.
    */
-  beginCapture(taskId: string, turnId: string, responsePath: string): TurnRecord {
+  freezeCapture(
+    taskId: string,
+    turnId: string,
+    responsePath: string,
+    artifacts: readonly ArtifactDescription[],
+  ): TurnRecord {
     return this.#transaction(() => {
       const turn = this.requireTurn(taskId, turnId);
       if (turn.status !== 'pending') {
         throw new StateError('TURN_STATE_CONFLICT', `turn is ${turn.status}, expected pending: ${turnId}`);
-      }
-
-      const now = new Date().toISOString();
-      this.#database
-        .prepare(
-          `UPDATE turn
-           SET status = 'capturing', response_path = ?, error = NULL, updated_at = ?
-           WHERE task_id = ? AND id = ?`,
-        )
-        .run(responsePath, now, taskId, turnId);
-      return this.requireTurn(taskId, turnId);
-    });
-  }
-
-  /**
-   * Freezes or verifies the ordered unique artifact set discovered from Copy response HTML.
-   *
-   * @param taskId Owning task identifier.
-   * @param turnId Capturing turn identifier.
-   * @param artifacts Ordered unique logical artifact targets.
-   * @returns The stable ordered artifact rows.
-   * @throws {StateError} If sources are duplicated or differ from an earlier capture.
-   * @throws {Error} If SQLite cannot commit the artifact set atomically.
-   */
-  reconcileArtifactSet(
-    taskId: string,
-    turnId: string,
-    artifacts: readonly ArtifactDescription[],
-  ): readonly ArtifactRecord[] {
-    return this.#transaction(() => {
-      const turn = this.requireTurn(taskId, turnId);
-      if (turn.status !== 'capturing') {
-        throw new StateError('TURN_STATE_CONFLICT', `turn is ${turn.status}, expected capturing: ${turnId}`);
       }
       const sourceUrls = artifacts.map((artifact) => {
         return artifact.sourceUrl;
@@ -647,19 +620,8 @@ export class StateStore {
         throw new StateError('ARTIFACT_CONFLICT', `artifact source URLs must be unique: ${turnId}`);
       }
       const existing = this.listArtifacts(taskId, turnId);
-      if (turn.artifactSetRecorded) {
-        if (
-          existing.length !== artifacts.length ||
-          existing.some((artifact, index) => {
-            return artifact.sourceUrl !== artifacts[index]?.sourceUrl;
-          })
-        ) {
-          throw new StateError('ARTIFACT_SET_INCONSISTENT', `artifact set changed while capturing: ${turnId}`);
-        }
-        return existing;
-      }
-      if (existing.length !== 0) {
-        throw new StateError('ARTIFACT_SET_INCONSISTENT', `uncommitted artifact rows already exist: ${turnId}`);
+      if (turn.responsePath !== null || turn.artifactSetRecorded || existing.length !== 0) {
+        throw new StateError('ARTIFACT_SET_INCONSISTENT', `pending turn has a partial capture boundary: ${turnId}`);
       }
 
       const now = new Date().toISOString();
@@ -674,12 +636,45 @@ export class StateStore {
       }
       this.#database
         .prepare(
-          `UPDATE turn SET artifact_set_recorded = 1, updated_at = ?
+          `UPDATE turn
+           SET status = 'capturing', response_path = ?, artifact_set_recorded = 1,
+               error = NULL, updated_at = ?
            WHERE task_id = ? AND id = ?`,
         )
-        .run(now, taskId, turnId);
-      return this.listArtifacts(taskId, turnId);
+        .run(responsePath, now, taskId, turnId);
+      return this.requireTurn(taskId, turnId);
     });
+  }
+
+  /**
+   * Verifies a recaptured ordered artifact set against the frozen capture boundary.
+   *
+   * @param taskId Owning task identifier.
+   * @param turnId Capturing turn identifier.
+   * @param artifacts Ordered unique logical artifact targets recaptured from the page.
+   * @returns The unchanged stable ordered artifact rows.
+   * @throws {StateError} If the turn is not fully frozen or the source order changed.
+   * @throws {Error} If SQLite cannot read the capture boundary.
+   */
+  verifyArtifactSet(
+    taskId: string,
+    turnId: string,
+    artifacts: readonly ArtifactDescription[],
+  ): readonly ArtifactRecord[] {
+    const turn = this.requireTurn(taskId, turnId);
+    if (turn.status !== 'capturing' || turn.responsePath === null || !turn.artifactSetRecorded) {
+      throw new StateError('TURN_STATE_CONFLICT', `turn has no complete capture boundary: ${turnId}`);
+    }
+    const existing = this.listArtifacts(taskId, turnId);
+    if (
+      existing.length !== artifacts.length ||
+      existing.some((artifact, index) => {
+        return artifact.sourceUrl !== artifacts[index]?.sourceUrl;
+      })
+    ) {
+      throw new StateError('ARTIFACT_SET_INCONSISTENT', `artifact set changed while capturing: ${turnId}`);
+    }
+    return existing;
   }
 
   /**

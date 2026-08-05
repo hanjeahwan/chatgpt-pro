@@ -354,7 +354,14 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     ]);
 
     const observed = await fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 5000);
-    const captured = await fixture.browser.captureResponse('task-a', 'session-a', 'conversation-a', 5000);
+    const controller = new AbortController();
+    const captured = await fixture.browser.captureResponse(
+      'task-a',
+      'session-a',
+      'conversation-a',
+      5000,
+      controller.signal,
+    );
     const observationSource = await scriptForInvocation(fixture.invocations[0]);
     const captureSource = await scriptForInvocation(fixture.invocations[1]);
 
@@ -364,6 +371,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
       responseHtml: '<p>full response</p>',
       artifacts: [{ sourceUrl: 'sandbox:/mnt/data/result.txt', label: 'result.txt' }],
     });
+    expect(fixture.invocations[1]?.signal).toBe(controller.signal);
     expect(observationSource).toContain('stableCompletedPolls < 6');
     expect(observationSource).toContain("kind: 'observe', status: 'pending'");
     expect(captureSource).toContain('[data-testid="copy-turn-action-button"]');
@@ -459,15 +467,15 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
       behaviorButtonCount: 3,
     });
 
-    await expect(fixture.browser.captureResponse('task-a', 'session-a', 'conversation-a', 5000)).resolves.toMatchObject(
-      {
-        response: 'fixture response',
-        artifacts: [
-          { sourceUrl: first, label: 'first' },
-          { sourceUrl: second, label: 'second' },
-        ],
-      },
-    );
+    await expect(
+      fixture.browser.captureResponse('task-a', 'session-a', 'conversation-a', 5000, new AbortController().signal),
+    ).resolves.toMatchObject({
+      response: 'fixture response',
+      artifacts: [
+        { sourceUrl: first, label: 'first' },
+        { sourceUrl: second, label: 'second' },
+      ],
+    });
     expect(fixture.events).toEqual(['clipboard:install', 'copy', 'clipboard:restore']);
   });
 
@@ -477,9 +485,9 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
       behaviorButtonCount: 1,
     });
 
-    await expect(fixture.browser.captureResponse('task-a', 'session-a', 'conversation-a', 5000)).rejects.toMatchObject({
-      code: 'PLAYWRIGHT_CONTRACT_DRIFT',
-    });
+    await expect(
+      fixture.browser.captureResponse('task-a', 'session-a', 'conversation-a', 5000, new AbortController().signal),
+    ).rejects.toMatchObject({ code: 'PLAYWRIGHT_CONTRACT_DRIFT' });
   });
 
   it.each([
@@ -596,8 +604,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     store.beginTurn('task-a', 'turn-a', '/prompt.md', []);
     store.markSubmissionAttempting('task-a', 'turn-a');
     store.markTurnPending('task-a', 'turn-a', 'conversation-a', 'https://chatgpt.com/c/conversation-a');
-    store.beginCapture('task-a', 'turn-a', targetResponsePath);
-    store.reconcileArtifactSet('task-a', 'turn-a', [{ sourceUrl, label: 'result' }]);
+    store.freezeCapture('task-a', 'turn-a', targetResponsePath, [{ sourceUrl, label: 'result' }]);
     store.close();
     const service = new CollabService(fixture.paths, fixture.browser);
 
@@ -632,8 +639,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     store.beginTurn('task-a', 'turn-a', '/prompt.md', []);
     store.markSubmissionAttempting('task-a', 'turn-a');
     store.markTurnPending('task-a', 'turn-a', 'conversation-a', 'https://chatgpt.com/c/conversation-a');
-    store.beginCapture('task-a', 'turn-a', targetResponsePath);
-    store.reconcileArtifactSet('task-a', 'turn-a', [
+    store.freezeCapture('task-a', 'turn-a', targetResponsePath, [
       { sourceUrl: first, label: 'first' },
       { sourceUrl: second, label: 'second' },
     ]);

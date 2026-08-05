@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-import type { BrowserOperationObserver } from '../skills/chatgpt-pro-collab/scripts/browser.ts';
+import { BrowserError, type BrowserOperationObserver } from '../skills/chatgpt-pro-collab/scripts/browser.ts';
 import { CollabService, runCli, type CliIo, type CollabBrowser } from '../skills/chatgpt-pro-collab/scripts/collab.ts';
 import { collabPaths, ensureCollabDirectories } from '../skills/chatgpt-pro-collab/scripts/session.ts';
 import { StateStore } from '../skills/chatgpt-pro-collab/scripts/state.ts';
@@ -199,7 +199,7 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     });
   });
 
-  it('keeps a timed-out capture resumable with a fresh capture timeout', async () => {
+  it('keeps a pre-freeze timeout pending and re-observes with a fresh capture timeout', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
     const task = await fixture.service.start();
@@ -212,12 +212,82 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
       code: 'CAPTURE_TIMEOUT',
     });
     const store = new StateStore(fixture.paths.database);
-    expect(store.requireTurn(task.taskId, turn.turnId).status).toBe('capturing');
+    expect(store.requireTurn(task.taskId, turn.turnId)).toMatchObject({
+      status: 'pending',
+      responsePath: null,
+      artifactSetRecorded: false,
+    });
+    expect(store.listArtifacts(task.taskId, turn.turnId)).toEqual([]);
+    expect(store.getTaskOperation(task.taskId)).toBeNull();
     store.close();
+    expect(fixture.browser.captureAbortCount).toBe(1);
+    expect(fixture.browser.observeResponseCalls).toBe(1);
     fixture.browser.captureDelayMs = 0;
     await expect(fixture.service.wait(task.taskId, turn.turnId, 1, 20_000)).resolves.toMatchObject({
       status: 'completed',
     });
+    expect(fixture.browser.observeResponseCalls).toBe(2);
+  });
+
+  it('maps a delayed browser failure after a 1ms deadline to CAPTURE_TIMEOUT', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.service.start();
+    const promptPath = join(fixture.root, 'prompt.md');
+    await writeFile(promptPath, 'delayed capture failure');
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+    fixture.browser.captureDelayMs = 10;
+    fixture.browser.nextCaptureFailureTaskId = task.taskId;
+
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 20_000, 1)).rejects.toMatchObject({
+      code: 'CAPTURE_TIMEOUT',
+    });
+    const store = new StateStore(fixture.paths.database);
+    expect(store.requireTurn(task.taskId, turn.turnId)).toMatchObject({ status: 'pending', responsePath: null });
+    expect(store.listArtifacts(task.taskId, turn.turnId)).toEqual([]);
+    expect(store.getTaskOperation(task.taskId)).toBeNull();
+    store.close();
+  });
+
+  it('aborts a capture that never resolves and releases its task lease', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.service.start();
+    const promptPath = join(fixture.root, 'prompt.md');
+    await writeFile(promptPath, 'never resolving capture');
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+    fixture.browser.captureNeverSettles = true;
+
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 20_000, 1)).rejects.toMatchObject({
+      code: 'CAPTURE_TIMEOUT',
+    });
+    const store = new StateStore(fixture.paths.database);
+    expect(store.requireTurn(task.taskId, turn.turnId)).toMatchObject({ status: 'pending', responsePath: null });
+    expect(store.getTaskOperation(task.taskId)).toBeNull();
+    store.close();
+    expect(fixture.browser.captureAbortCount).toBe(1);
+    fixture.browser.captureNeverSettles = false;
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 20_000, 20_000)).resolves.toMatchObject({
+      status: 'completed',
+    });
+  });
+
+  it('preserves a real browser error that settles before the capture deadline', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.service.start();
+    const promptPath = join(fixture.root, 'prompt.md');
+    await writeFile(promptPath, 'immediate capture failure');
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+    fixture.browser.nextCaptureFailureTaskId = task.taskId;
+
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 20_000, 20_000)).rejects.toMatchObject({
+      code: 'INJECTED_BROWSER_FAILURE',
+    });
+    const store = new StateStore(fixture.paths.database);
+    expect(store.requireTurn(task.taskId, turn.turnId)).toMatchObject({ status: 'pending', responsePath: null });
+    expect(store.listArtifacts(task.taskId, turn.turnId)).toEqual([]);
+    store.close();
   });
 
   it('publishes every ordered artifact without same-name collisions and reuses completed files', async () => {
@@ -311,7 +381,7 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     expect(secondResult).toMatchObject({ status: 'fulfilled', value: { status: 'completed' } });
     expect(fixture.browser.maxConcurrentCaptures).toBe(2);
     const store = new StateStore(fixture.paths.database);
-    expect(store.requireTurn(firstTask.taskId, firstTurn.turnId).status).toBe('capturing');
+    expect(store.requireTurn(firstTask.taskId, firstTurn.turnId).status).toBe('pending');
     expect(store.requireTurn(secondTask.taskId, secondTurn.turnId).status).toBe('completed');
     expect(store.requireTask(secondTask.taskId).status).toBe('active');
     store.close();
@@ -377,6 +447,7 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
       code: 'CAPTURE_TIMEOUT',
     });
     const interruptedStore = new StateStore(fixture.paths.database);
+    expect(interruptedStore.requireTurn(task.taskId, turn.turnId).status).toBe('capturing');
     const interruptedArtifact = interruptedStore.requireArtifact(task.taskId, turn.turnId, 1);
     expect(interruptedArtifact).toMatchObject({ status: 'pending', localPath: expect.any(String) });
     interruptedStore.close();
@@ -575,6 +646,9 @@ class FakeBrowser implements CollabBrowser {
   pendingWaitPolls = 0;
   waitPollDelayMs = 0;
   captureDelayMs = 0;
+  captureNeverSettles = false;
+  captureAbortCount = 0;
+  observeResponseCalls = 0;
   downloadDelayMs = 0;
   activeCaptures = 0;
   maxConcurrentCaptures = 0;
@@ -688,6 +762,7 @@ class FakeBrowser implements CollabBrowser {
     observer?: BrowserOperationObserver,
   ) {
     this.observe(observer);
+    this.observeResponseCalls += 1;
     if (this.pendingWaitPolls > 0) {
       this.pendingWaitPolls -= 1;
       await new Promise<void>((resolve) => {
@@ -709,6 +784,7 @@ class FakeBrowser implements CollabBrowser {
    * @param _sessionName Unused named session.
    * @param expectedConversationId Database-bound identity.
    * @param _captureTimeoutMs Unused finite capture budget.
+   * @param signal Host cancellation used by capture timeout tests.
    * @param observer Task-lease child-process observer.
    * @returns Fake plain text, HTML, and unchanged conversation.
    * @throws {Error} This fake capture does not throw.
@@ -718,20 +794,26 @@ class FakeBrowser implements CollabBrowser {
     _sessionName: string,
     expectedConversationId: string,
     _captureTimeoutMs: number,
+    signal: AbortSignal,
     observer?: BrowserOperationObserver,
   ) {
     this.observe(observer);
     this.activeCaptures += 1;
     this.maxConcurrentCaptures = Math.max(this.maxConcurrentCaptures, this.activeCaptures);
     try {
+      if (this.captureNeverSettles) {
+        await waitForCaptureSignal(signal, () => {
+          this.captureAbortCount += 1;
+        });
+      }
       if (this.captureDelayMs > 0) {
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, this.captureDelayMs);
+        await abortableCaptureDelay(this.captureDelayMs, signal, () => {
+          this.captureAbortCount += 1;
         });
       }
       if (this.nextCaptureFailureTaskId === taskId) {
         this.nextCaptureFailureTaskId = null;
-        throw new Error(`injected capture failure for ${taskId}`);
+        throw new BrowserError('INJECTED_BROWSER_FAILURE', 'capture response', `injected failure for ${taskId}`);
       }
       return {
         response: `response for ${taskId}`,
@@ -837,6 +919,63 @@ class FakeBrowser implements CollabBrowser {
     observer.childExited(pid);
     this.observedOperations += 1;
   }
+}
+
+/**
+ * Holds a fake capture until the host watchdog aborts it.
+ *
+ * @param signal Required host cancellation signal.
+ * @param onAbort Test audit invoked exactly once on cancellation.
+ * @returns A promise that only rejects when capture is aborted.
+ * @throws {Error} If the service omits cancellation or the host aborts capture.
+ */
+function waitForCaptureSignal(signal: AbortSignal | undefined, onAbort: () => void): Promise<void> {
+  if (signal === undefined) {
+    throw new Error('capture watchdog signal was not supplied');
+  }
+  return new Promise((_resolve, reject) => {
+    const abort = (): void => {
+      onAbort();
+      reject(new Error('fake capture aborted'));
+    };
+    if (signal.aborted) {
+      abort();
+      return;
+    }
+    signal.addEventListener('abort', abort, { once: true });
+  });
+}
+
+/**
+ * Delays a fake capture while allowing the host watchdog to cancel it safely.
+ *
+ * @param milliseconds Finite deterministic delay.
+ * @param signal Optional host cancellation signal.
+ * @param onAbort Test audit invoked exactly once on cancellation.
+ * @returns Nothing after delay completion.
+ * @throws {Error} When the host aborts before the delay completes.
+ */
+function abortableCaptureDelay(
+  milliseconds: number,
+  signal: AbortSignal | undefined,
+  onAbort: () => void,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const abort = (): void => {
+      clearTimeout(timer);
+      onAbort();
+      reject(new Error('fake capture delay aborted'));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', abort);
+      resolve();
+    }, milliseconds);
+    if (signal?.aborted === true) {
+      abort();
+      return;
+    }
+    signal?.addEventListener('abort', abort, { once: true });
+  });
 }
 
 /**

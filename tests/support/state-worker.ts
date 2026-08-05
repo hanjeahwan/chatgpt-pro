@@ -15,8 +15,7 @@ store.beginTurn(taskId, turnId, `/prompt-${suffix}.md`, [`/attachment-${suffix}`
 store.markSubmissionAttempting(taskId, turnId);
 store.markTurnPending(taskId, turnId, `conversation-${suffix}`, `https://chatgpt.com/c/conversation-${suffix}`);
 const responsePath = join(dirname(databasePath), `${taskId}-${turnId}.md`);
-store.beginCapture(taskId, turnId, responsePath);
-store.reconcileArtifactSet(taskId, turnId, []);
+store.freezeCapture(taskId, turnId, responsePath, []);
 writeFileSync(responsePath, `response-${suffix}`, { flag: 'wx' });
 store.completeTurn(taskId, turnId, responsePath);
 store.closeTask(taskId);
