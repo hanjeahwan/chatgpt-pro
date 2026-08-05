@@ -177,6 +177,18 @@ export function artifactPageFixture(options: ArtifactPageOptions): ArtifactPageF
       return query.name === 'Download file' ? rowDownloadButtons : locatorCollection([]);
     },
   };
+  const laterAssistant = {
+    ...assistant,
+    locator(selector: string) {
+      if (selector === '[data-testid="copy-turn-action-button"]') {
+        return visibleControl(() => {
+          events.push('copy:later');
+          return Promise.resolve();
+        });
+      }
+      return assistant.locator(selector);
+    },
+  };
 
   const turns = [
     fixtureElement(attributes, { dataTestId: 'conversation-turn-user-1', dataTurn: 'user' }),
@@ -198,7 +210,10 @@ export function artifactPageFixture(options: ArtifactPageOptions): ArtifactPageF
       });
     },
     nth(index: number) {
-      return turns[index]?.getAttribute('data-turn') === 'assistant' ? assistant : locatorCollection([]);
+      if (index === 1) {
+        return assistant;
+      }
+      return index === 3 ? laterAssistant : locatorCollection([]);
     },
     evaluateAll(callback: unknown, argument?: unknown) {
       return Promise.resolve(invoke(callback, turns, argument));
