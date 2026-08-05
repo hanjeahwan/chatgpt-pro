@@ -1,97 +1,44 @@
 ---
 name: create-architectural-decision-record
-description: Create an Architectural Decision Record (ADR) document for AI-optimized decision documentation.
+description: Create a repository-local Architectural Decision Record (ADR) when the user wants to document a cross-spec or long-lived architecture decision, its context, alternatives, consequences, and implementation constraints.
 ---
 
 # Create Architectural Decision Record
 
-Create an ADR document for `[Decision Title]` using structured formatting optimized for AI consumption and human readability.
+Create one ADR from facts in the conversation and repository. Keep product behavior in its Spec; use the ADR only for a cross-spec or long-lived architecture decision.
 
-## Inputs
+## 1. Validate Inputs
 
-- **Decision Title**: `[Decision Title]`
-- **Context**: `[Decision Context]`
-- **Decision**: `[Selected Decision]`
-- **Alternatives**: `[Alternatives Considered]`
+Confirm the decision title, context, selected decision, and considered alternatives from the conversation and repository sources. If a required fact is unknown or conflicting, ask for that fact before writing; do not invent it.
 
-## Input Validation
+## 2. Allocate the ADR Path
 
-If any of the required inputs are not provided or cannot be determined from the conversation history, ask the user to provide the missing information before proceeding with ADR generation.
+1. Resolve the repository root from the current worktree.
+2. Create `<repository-root>/docs/adr/` when it does not exist.
+3. Inspect existing `adr-NNNN-*.md` files, choose the next number after the highest existing number, and increment again if the target path already exists.
+4. Build a lowercase hyphenated title slug and write `docs/adr/adr-NNNN-<title-slug>.md` relative to the repository root.
 
-## Requirements
+Never resolve the destination as the filesystem-root path `/docs/adr/`.
 
-- Use precise, unambiguous language
-- Follow standardized ADR format with front matter
-- Include both positive and negative consequences
-- Document alternatives with rejection rationale
-- Structure for machine parsing and human reference
-- Use coded bullet points (3-4 letter codes + 3-digit numbers) for multi-item sections
+## 3. Write the ADR
 
-The ADR must be saved in the `/docs/adr/` directory using the naming convention: `adr-NNNN-[title-slug].md`, where NNNN is the next sequential 4-digit number (e.g., `adr-0001-database-selection.md`).
+Use [ADR template](assets/adr-template.md) as the output structure. Replace every template token with verified content and remove optional fields or sections that are genuinely not applicable instead of leaving empty values.
 
-## Required Documentation Structure
+- Record the date and use one status: `Proposed`, `Accepted`, `Rejected`, `Superseded`, or `Deprecated`.
+- State the decision and why it was selected.
+- Include at least one positive and one negative consequence.
+- Describe each considered alternative and its rejection reason.
+- Use unique three-letter, three-digit IDs for multi-item sections.
+- Link the Spec, ADR, source, or external reference that supports a factual dependency.
 
-The documentation file must follow the template below, ensuring that all sections are filled out appropriately. The front matter for the markdown should be structured correctly as per the example following:
+## 4. Validate the Result
 
-```md
----
-title: 'ADR-NNNN: [Decision Title]'
-status: 'Proposed'
-date: 'YYYY-MM-DD'
-tags: ['architecture', 'decision']
-supersedes: ''
-superseded_by: ''
----
+Before reporting completion:
 
-# ADR-NNNN: [Decision Title]
+- confirm the path is inside the current repository;
+- confirm no `{{...}}` template tokens remain;
+- confirm the decision, alternatives, consequences, and references agree with the verified inputs;
+- confirm coded item IDs are unique;
+- run the repository's applicable Markdown check and `git diff --check -- <adr-path>`.
 
-## Status
-
-**Proposed** | accepted | rejected | superseded | deprecated
-
-## Context
-
-[Problem statement, technical constraints, business requirements, and environmental factors requiring this decision.]
-
-## Decision
-
-[Chosen solution with clear rationale for selection.]
-
-## Consequences
-
-### Positive
-
-- **POS-001**: [Beneficial outcomes and advantages]
-- **POS-002**: [Performance, maintainability, scalability improvements]
-- **POS-003**: [Alignment with architectural principles]
-
-### Negative
-
-- **NEG-001**: [Trade-offs, limitations, drawbacks]
-- **NEG-002**: [Technical debt or complexity introduced]
-- **NEG-003**: [Risks and future challenges]
-
-## Alternatives Considered
-
-### [Alternative 1 Name]
-
-- **ALT-001**: **Description**: [Brief technical description]
-- **ALT-002**: **Rejection Reason**: [Why this option was not selected]
-
-### [Alternative 2 Name]
-
-- **ALT-003**: **Description**: [Brief technical description]
-- **ALT-004**: **Rejection Reason**: [Why this option was not selected]
-
-## Implementation Notes
-
-- **IMP-001**: [Key implementation considerations]
-- **IMP-002**: [Migration or rollout strategy if applicable]
-- **IMP-003**: [Monitoring and success criteria]
-
-## References
-
-- **REF-001**: [Related ADRs]
-- **REF-002**: [External documentation]
-- **REF-003**: [Standards or frameworks referenced]
-```
+Report the created repository-relative path and any fact that remains unverified.
