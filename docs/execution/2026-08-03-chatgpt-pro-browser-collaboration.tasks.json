@@ -115,7 +115,7 @@
     {
       "id": "IMP-004",
       "title": "实现单次 wait 的内部观察与原始文字捕获",
-      "status": "implemented",
+      "status": "done",
       "covers": ["BEH-004", "BEH-011"],
       "verifies": ["VER-004", "VER-014"],
       "dependsOn": ["IMP-001", "IMP-002", "IMP-003"],
@@ -159,7 +159,10 @@
           "ae34b659535db798b0b2b76f56fdc3c9873ea6cf makes the exact-T1 fixture return a distinguishable later-assistant locator, so implicit T2 selection cannot accidentally satisfy the regression",
           "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts: 54 tests passed; pnpm format:check, pnpm lint, pnpm typecheck, pnpm test (8 files/94 tests), and git diff --check passed",
           "Independent Review task_3e0f0281cad7, dispatch ctx_d6b7437bcbe7, reviewer terminal term_c6bb7bb1-bc9e-449a-8207-d68ee996766d, worker_done msg_fc9f4e6c9a9f: ACCEPTED/CLOSED reviewed HEAD eeb27d4dccc8951f59c5bfc8c83d1d5d2cd2a539 with no P1/P2/P3",
-          "Current reconciliation: implemented; the new Review and VER-014 are complete, but current VER-004 remains partial because the preserved normal-path live run predates the related BEH/VER and implementation change, so no post-change live run proves the restored end-to-end contract"
+          "VER-004 current-HEAD normal live task c043880e-0df0-4512-a342-0ec7a907dbb6 turn cff5b7c9-6f58-41b4-bb55-76ca41645012 completed one finite wait with artifactPaths=[]; response.md is 8617 bytes, 1141 words, SHA-256 c412308f65bec14a1ed36f3273f984ff8959c3703873c306a843938109bb5ce1, and contains the requested long prose, TypeScript/JSON fences, and marker",
+          "VER-004 page-local validation found exact target conversation-turn-2, one visible Copy, no visible Stop, and text/html present; a navigator.clipboard write/writeText override captured 8617 bytes without OS clipboard access and byte-equaled response.md, then restored the page clipboard methods",
+          "VER-004 repeat wait returned the identical response path and empty artifact list; response inode 4461724, byte size 8617, mtime 1785932557, and SHA-256 c412308f65bec14a1ed36f3273f984ff8959c3703873c306a843938109bb5ce1 were unchanged",
+          "Current reconciliation: done because VER-004 and VER-014, implementation/full checks, and independent Review task_3e0f0281cad7 are complete"
         ],
         "reviews": [
           "Independent Review task_3e0f0281cad7, dispatch ctx_d6b7437bcbe7, reviewer terminal term_c6bb7bb1-bc9e-449a-8207-d68ee996766d, closure worker_done msg_fc9f4e6c9a9f: ACCEPTED/CLOSED reviewed HEAD eeb27d4dccc8951f59c5bfc8c83d1d5d2cd2a539 with no P1/P2/P3"
@@ -209,7 +212,7 @@
     {
       "id": "IMP-006",
       "title": "完成同会话多轮与跨任务真实并发",
-      "status": "implemented",
+      "status": "done",
       "covers": ["BEH-005", "BEH-006"],
       "verifies": ["VER-005", "VER-006"],
       "dependsOn": ["IMP-003", "IMP-004", "IMP-005"],
@@ -229,7 +232,11 @@
           "live 2026-08-05: retry9 task turns overlapped from 17:50:18Z to 17:50:43Z with distinct task/session/conversation/transcript ownership; task A completed a second turn in the same conversation",
           "pnpm exec vitest --run tests/collab.test.ts: 23 tests passed after atomic capture-boundary changes, including cross-task wait concurrency",
           "pnpm exec vitest --run tests/collab.test.ts: 25 tests passed; a timed-out artifact wait releases its task operation lease and a new lease can be acquired before retry",
-          "Final Review reconciliation: remains implemented because VER-005 passed but VER-006 is partial"
+          "VER-006 current-HEAD tasks c043880e-0df0-4512-a342-0ec7a907dbb6 and 39f72602-b03a-4875-a2b0-101fe49f41ba started at the same timestamp with distinct PIDs 49489/49488, named sessions, context markers, conversations, task/session roots, prompts, and transcripts; turns were submitted 1ms apart and concurrent waits began together",
+          "The normal turn cff5b7c9-6f58-41b4-bb55-76ca41645012 completed at 2026-08-05T12:22:37.645Z while the other task's wait remained active and later returned pending; no prompt/response marker crossed session roots, proving overlap and ownership isolation without serializing on the long task",
+          "VER-006 real failure/retry matrix: turn 6b3e90f0-246b-4a4f-a85e-6b979a49227a returned CAPTURE_TIMEOUT with captureTimeoutMs=1, stayed pending with null response, artifact_set_recorded=0 and all lease/PID fields clear, then completed a new finite wait with response VER006_CAPTURE_TIMEOUT_RETRY and artifactPaths=[]; independent control turn 499ef8a5-4fa9-4b86-a19d-b5474ceab24b completed as VER006_CONTROL_COMPLETED",
+          "External pending tasks 39f72602-b03a-4875-a2b0-101fe49f41ba and af0194e1-ec54-44c2-b236-76458932e0d0 remain active with null response/artifact and clear operation leases; they are retained as honest pending-window audit and are not used as completed evidence",
+          "Current reconciliation: done because VER-005 and VER-006, implementation checks, and root Review evidence are complete"
         ],
         "reviews": [
           "Root Review task_f83d3a0d427b; reviewer conversation/session 019fcdfa-ef5f-7410-a245-6bbaf7be52dd remained the same across initial carrier terminal term_bbb86a6a-edf1-4303-9b32-a690e443e75b and resumed carrier terminal term_7d1b0d8c-5693-4670-8a3f-488148223680; final closure status msg_19d1aefb2cb6 and worker_done msg_e00d44341bfe: F1-F5 all closed, no independent candidate"
