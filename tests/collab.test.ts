@@ -232,7 +232,7 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     expect(fixture.browser.captureAbortCount).toBe(1);
     expect(fixture.browser.observeResponseCalls).toBe(1);
     fixture.browser.captureDelayMs = 0;
-    await expect(fixture.service.wait(task.taskId, turn.turnId, 1, 20_000)).resolves.toMatchObject({
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 50, 20_000)).resolves.toMatchObject({
       status: 'completed',
     });
     expect(fixture.browser.observeResponseCalls).toBe(2);
