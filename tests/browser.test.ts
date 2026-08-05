@@ -20,6 +20,7 @@ import {
 import { StateStore } from '../skills/chatgpt-pro-collab/scripts/state.ts';
 import { artifactPageFixture, type ArtifactPageOptions } from './support/artifact-page-fixture.ts';
 import { completionPageFixture, type CompletionPageOptions } from './support/completion-page-fixture.ts';
+import { startPageFixture, type StartPageOptions } from './support/start-page-fixture.ts';
 
 const protocol = 'chatgpt-pro-collab/v1';
 
@@ -60,14 +61,19 @@ describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
     const fixture = await browserFixture([
       output('### Browser `session-a` opened with pid 4123.'),
       output('state loaded'),
-      output('navigated'),
-      pageResult({ protocol, kind: 'start', url: 'https://chatgpt.com/', contextMarker: 'context-a' }),
+      output('navigated to projects'),
+      pageResult({ protocol, kind: 'start', url: 'https://chatgpt.com/g/g-p-123/project', contextMarker: 'context-a' }),
     ]);
     await writeFile(fixture.paths.seedState, '{}');
 
     const result = await fixture.browser.startTask('task-a', 'session-a', fixture.paths.seedState);
 
-    expect(result).toEqual({ pid: 4123, url: 'https://chatgpt.com/', contextMarker: 'context-a', persistent: false });
+    expect(result).toEqual({
+      pid: 4123,
+      url: 'https://chatgpt.com/g/g-p-123/project',
+      contextMarker: 'context-a',
+      persistent: false,
+    });
     expect(fixture.invocations[0]?.arguments).toEqual([
       '-y',
       '@playwright/cli@0.1.17',
@@ -88,6 +94,7 @@ describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
       }),
     ).not.toContain('--persistent');
     expect(fixture.invocations[1]?.arguments).toContain(fixture.paths.seedState);
+    expect(fixture.invocations[2]?.arguments.slice(4)).toEqual(['goto', 'https://chatgpt.com/projects']);
     expect(
       fixture.invocations.flatMap((invocation) => {
         return invocation.arguments;
@@ -95,17 +102,47 @@ describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
     ).not.toContain('state-save');
     const startSource = await lastScript(fixture.invocations);
     expect(startSource).toContain('await page.evaluate((marker) =>');
-    expect(startSource).toContain('hostname: location.hostname');
+    expect(startSource).toContain('role="row"');
+    expect(startSource).toContain('role="menuitemradio"');
+    expect(startSource).toContain('chatgpt-pro-collab');
+    expect(startSource).toContain('GPT-5.6 Sol');
     expect(startSource).not.toContain('new URL(page.url())');
-    expect(startSource).not.toContain("\n    sessionStorage.setItem('chatgpt-pro-collab-context-id', contextMarker);");
+    expect(startSource).not.toContain('new conversation root was not observed');
     expectPageFunctionSyntax(startSource);
+  });
+
+  it('maps a typed start failure envelope to its error code and closes the session', async () => {
+    const fixture = await browserFixture([
+      output('### Browser `session-a` opened with pid 4123.'),
+      output('state loaded'),
+      output('navigated to projects'),
+      pageResult({
+        protocol,
+        kind: 'start-failed',
+        errorCode: 'PROJECT_NOT_UNIQUE',
+        message: 'more than one Project exactly named chatgpt-pro-collab was found',
+      }),
+      output("Browser 'session-a' closed"),
+    ]);
+    await writeFile(fixture.paths.seedState, '{}');
+
+    const failure = await fixture.browser
+      .startTask('task-a', 'session-a', fixture.paths.seedState)
+      .catch((error: unknown) => {
+        return error;
+      });
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toContain('more than one Project exactly named chatgpt-pro-collab');
+    const typed = failure as { readonly code?: string };
+    expect(typed.code).toBe('PROJECT_NOT_UNIQUE');
+    expect(fixture.invocations.at(-1)?.arguments).toContain('close');
   });
 
   it('preserves page-script errors and closes a failed start session', async () => {
     const fixture = await browserFixture([
       output('### Browser `session-a` opened with pid 4123.'),
       output('state loaded'),
-      output('navigated'),
+      output('navigated to projects'),
       output('### Error\nReferenceError: sessionStorage is not defined'),
       output("Browser 'session-a' closed"),
     ]);
@@ -114,6 +151,167 @@ describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
     await expect(fixture.browser.startTask('task-a', 'session-a', fixture.paths.seedState)).rejects.toThrow(
       /sessionStorage is not defined/,
     );
+    expect(fixture.invocations.at(-1)?.arguments).toContain('close');
+  });
+});
+
+describe('BEH-002 fixed Project and GPT-5.6 Sol Pro start context', () => {
+  it('succeeds only in the unique Project blank composer after model and mode readback', async () => {
+    const fixture = await executableStartFixture({});
+    await writeFile(fixture.paths.seedState, '{}');
+
+    const result = await fixture.browser.startTask('task-a', 'session-a', fixture.paths.seedState);
+
+    expect(result.url).toBe('https://chatgpt.com/g/g-p-123/project');
+    expect(result.contextMarker).toBeTruthy();
+    expect(fixture.events).toEqual([
+      'project-row-click',
+      'selector-click',
+      'mode-click',
+      'selector-click',
+      'opener-click',
+      'model-click',
+      'selector-click',
+      'opener-click',
+      'selector-click',
+    ]);
+    expect(
+      fixture.invocations.map((invocation) => {
+        return invocation.arguments.slice(4);
+      }),
+    ).toEqual([
+      ['open', 'about:blank', '--browser=chrome', '--headed'],
+      ['state-load', fixture.paths.seedState],
+      ['goto', 'https://chatgpt.com/projects'],
+      ['run-code', '--filename', expect.any(String)],
+    ]);
+  });
+
+  it('confirms already selected targets by readback without clicking', async () => {
+    const fixture = await executableStartFixture({ modeInitiallyChecked: true, modelInitiallyChecked: true });
+    await writeFile(fixture.paths.seedState, '{}');
+
+    const result = await fixture.browser.startTask('task-a', 'session-a', fixture.paths.seedState);
+
+    expect(result.contextMarker).toBeTruthy();
+    expect(fixture.events).toEqual(['project-row-click', 'selector-click', 'opener-click', 'selector-click']);
+  });
+
+  it('rejects with PROJECT_NOT_FOUND when the target Project row is absent', async () => {
+    const fixture = await executableStartFixture({ projectRowCount: 0, otherRowCount: 1 });
+    await writeFile(fixture.paths.seedState, '{}');
+
+    const failure = await startTaskFailure(fixture);
+    expect(failure.message).toContain('chatgpt-pro-collab');
+    expect(failure.code).toBe('PROJECT_NOT_FOUND');
+    expect(fixture.invocations.at(-1)?.arguments).toContain('close');
+  });
+
+  it('rejects with PROJECT_NOT_FOUND when the projects directory never renders rows', async () => {
+    const fixture = await executableStartFixture({ projectLoadsRows: false });
+    await writeFile(fixture.paths.seedState, '{}');
+
+    const failure = await startTaskFailure(fixture);
+    expect(failure.code).toBe('PROJECT_NOT_FOUND');
+    expect(fixture.invocations.at(-1)?.arguments).toContain('close');
+  });
+
+  it('rejects with PROJECT_NOT_UNIQUE when two rows match the target name', async () => {
+    const fixture = await executableStartFixture({ projectRowCount: 2 });
+    await writeFile(fixture.paths.seedState, '{}');
+
+    const failure = await startTaskFailure(fixture);
+    expect(failure.code).toBe('PROJECT_NOT_UNIQUE');
+    expect(fixture.invocations.at(-1)?.arguments).toContain('close');
+  });
+
+  it('rejects with FIXED_TARGET_UNAVAILABLE when the fixed mode radio is missing', async () => {
+    const fixture = await executableStartFixture({ modeRadioPresent: false });
+    await writeFile(fixture.paths.seedState, '{}');
+
+    const failure = await startTaskFailure(fixture);
+    expect(failure.code).toBe('FIXED_TARGET_UNAVAILABLE');
+    expect(fixture.invocations.at(-1)?.arguments).toContain('close');
+  });
+
+  it('rejects with FIXED_TARGET_UNAVAILABLE when the fixed model radio is missing', async () => {
+    const fixture = await executableStartFixture({ modelRadioPresent: false });
+    await writeFile(fixture.paths.seedState, '{}');
+
+    const failure = await startTaskFailure(fixture);
+    expect(failure.code).toBe('FIXED_TARGET_UNAVAILABLE');
+    expect(fixture.invocations.at(-1)?.arguments).toContain('close');
+  });
+
+  it('rejects with SELECTION_UNCONFIRMED when the mode click cannot be read back', async () => {
+    const fixture = await executableStartFixture({ modeClickApplies: false });
+    await writeFile(fixture.paths.seedState, '{}');
+
+    const failure = await startTaskFailure(fixture);
+    expect(failure.code).toBe('SELECTION_UNCONFIRMED');
+    expect(fixture.invocations.at(-1)?.arguments).toContain('close');
+  });
+
+  it('rejects with SELECTION_UNCONFIRMED when the model click cannot be read back', async () => {
+    const fixture = await executableStartFixture({ modelClickApplies: false });
+    await writeFile(fixture.paths.seedState, '{}');
+
+    const failure = await startTaskFailure(fixture);
+    expect(failure.code).toBe('SELECTION_UNCONFIRMED');
+    expect(fixture.invocations.at(-1)?.arguments).toContain('close');
+  });
+
+  it('rejects with PAGE_CONTRACT_DRIFT when the Project title heading is missing in the main area', async () => {
+    const fixture = await executableStartFixture({ mainTitleCount: 0 });
+    await writeFile(fixture.paths.seedState, '{}');
+
+    const failure = await startTaskFailure(fixture);
+    expect(failure.code).toBe('PAGE_CONTRACT_DRIFT');
+    expect(fixture.invocations.at(-1)?.arguments).toContain('close');
+  });
+
+  it('rejects with PAGE_CONTRACT_DRIFT when an existing conversation is open', async () => {
+    const fixture = await executableStartFixture({ existingTurns: true });
+    await writeFile(fixture.paths.seedState, '{}');
+
+    const failure = await startTaskFailure(fixture);
+    expect(failure.code).toBe('PAGE_CONTRACT_DRIFT');
+    expect(fixture.invocations.at(-1)?.arguments).toContain('close');
+  });
+
+  it('rejects with PAGE_CONTRACT_DRIFT when navigation does not reach the project path', async () => {
+    const fixture = await executableStartFixture({ navigateOnProjectClick: false });
+    await writeFile(fixture.paths.seedState, '{}');
+
+    const failure = await startTaskFailure(fixture);
+    expect(failure.code).toBe('PAGE_CONTRACT_DRIFT');
+    expect(fixture.invocations.at(-1)?.arguments).toContain('close');
+  });
+
+  it('rejects with PAGE_CONTRACT_DRIFT when the composer selector control is missing', async () => {
+    const fixture = await executableStartFixture({ selectorControlCount: 0 });
+    await writeFile(fixture.paths.seedState, '{}');
+
+    const failure = await startTaskFailure(fixture);
+    expect(failure.code).toBe('PAGE_CONTRACT_DRIFT');
+    expect(fixture.invocations.at(-1)?.arguments).toContain('close');
+  });
+
+  it('rejects with PAGE_CONTRACT_DRIFT when the model submenu opener is missing', async () => {
+    const fixture = await executableStartFixture({ modelOpenerCount: 0 });
+    await writeFile(fixture.paths.seedState, '{}');
+
+    const failure = await startTaskFailure(fixture);
+    expect(failure.code).toBe('PAGE_CONTRACT_DRIFT');
+    expect(fixture.invocations.at(-1)?.arguments).toContain('close');
+  });
+
+  it('rejects with PAGE_CONTRACT_DRIFT when the authenticated page is not observed', async () => {
+    const fixture = await executableStartFixture({ authenticated: false });
+    await writeFile(fixture.paths.seedState, '{}');
+
+    const failure = await startTaskFailure(fixture);
+    expect(failure.code).toBe('PAGE_CONTRACT_DRIFT');
     expect(fixture.invocations.at(-1)?.arguments).toContain('close');
   });
 });
@@ -156,6 +354,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     expect(sendSource).toContain('exact prompt');
     expect(sendSource).toContain('const expectedConversationId = null');
     expect(sendSource).toContain("!match[1].startsWith('WEB:')");
+    expect(sendSource).toContain('const conversationIdOf = (pathname) => {');
     expect(sendSource.indexOf('clicked = true')).toBeLessThan(sendSource.indexOf('await send.click()'));
     expect(sendSource).not.toContain('new URL(page.url())');
     expectPageFunctionSyntax(sendSource);
@@ -389,7 +588,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     expect(captureSource).toContain("name: 'Stop answering', exact: true");
     expect(captureSource).toContain('copy.click({ force: true, timeout: Math.max(1, captureDeadline - Date.now()) })');
     expect(captureSource).toContain('const capturedUrl = await page.evaluate');
-    expect(captureSource).toContain('capturedMatch[1] !== expectedConversationId');
+    expect(captureSource).toContain('conversationIdOf(capturedUrl.pathname) !== expectedConversationId');
     expect(captureSource).not.toContain('pbpaste');
     expect(captureSource).not.toContain('osascript');
     expect(captureSource).not.toContain('new URL(page.url())');
@@ -847,6 +1046,76 @@ async function browserFixture(outputs: readonly (BrowserCommandOutput | Error)[]
     return Promise.resolve(next);
   });
   return { browser, invocations, paths };
+}
+
+/**
+ * Creates a browser runner that executes the generated start verification function against
+ * a live-compatible Projects and model/mode menu fixture.
+ *
+ * @param options Project, composer, and menu structure exposed to the generated function.
+ * @returns Browser, fixture root, captured invocations, and ordered page events.
+ * @throws {Error} If the fixture directory or generated script cannot be read.
+ */
+async function executableStartFixture(options: StartPageOptions) {
+  const root = await mkdtemp(join(tmpdir(), 'collab-start-browser-'));
+  const paths = collabPaths(root);
+  await ensureCollabDirectories(paths);
+  const invocations: BrowserCommandInvocation[] = [];
+  const pageFixture = startPageFixture(options);
+  let childPid = 7000;
+  const browser = new PlaywrightBrowser(paths, root, async (invocation) => {
+    invocations.push(invocation);
+    const invocationChildPid = childPid;
+    childPid += 1;
+    invocation.onChildSpawned?.(invocationChildPid);
+    try {
+      invocation.beforeCommandRelease?.();
+      invocation.onCommandStarted?.();
+      invocation.onCommandSpawned?.(invocationChildPid + 1000);
+      if (invocation.arguments.includes('run-code')) {
+        const source = await scriptForInvocation(invocation);
+        const runPageFunction = new Function(`return (${source})`)() as (page: object) => Promise<unknown>;
+        const result = await runPageFunction(pageFixture.page);
+        return output(`### Ran Playwright code\n${JSON.stringify(result)}\n`);
+      }
+      if (invocation.arguments.includes('open')) {
+        const sessionName = (invocation.arguments[2] ?? 'session').replace(/^-s=/u, '');
+        return output(`### Browser \`${sessionName}\` opened with pid ${invocationChildPid}.`);
+      }
+      return output('ok');
+    } finally {
+      invocation.onChildExited?.(invocationChildPid);
+    }
+  });
+  return {
+    browser,
+    events: pageFixture.events,
+    invocations,
+    paths,
+    root,
+  };
+}
+
+/**
+ * Runs one start task and returns its typed failure without throwing.
+ *
+ * @param fixture Executable start fixture.
+ * @returns The rejected error with its machine code.
+ * @throws {Error} If the start unexpectedly succeeds.
+ */
+async function startTaskFailure(fixture: Awaited<ReturnType<typeof executableStartFixture>>) {
+  const failure = await fixture.browser
+    .startTask('task-a', 'session-a', fixture.paths.seedState)
+    .then(() => {
+      throw new Error('start unexpectedly succeeded');
+    })
+    .catch((error: unknown) => {
+      return error;
+    });
+  expect(failure).toBeInstanceOf(Error);
+  const typed = failure as Error & { readonly code?: string };
+  expect(typed.code).toBeDefined();
+  return typed;
 }
 
 /**

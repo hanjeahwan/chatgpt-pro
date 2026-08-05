@@ -183,22 +183,47 @@
     {
       "id": "IMP-008",
       "title": "完成中断恢复矩阵与全量运行基线验证",
-      "status": "pending",
+      "status": "implemented",
       "covers": ["BEH-004", "BEH-006", "BEH-007", "BEH-012"],
       "verifies": ["VER-007", "VER-010", "VER-011", "VER-012"],
       "dependsOn": ["IMP-001", "IMP-002", "IMP-003", "IMP-004", "IMP-005", "IMP-006", "IMP-007", "IMP-009"],
       "scope": ["CLI", "State store", "Transcript/artifact store", "Test suite"],
-      "evidence": { "checks": [], "reviews": [] }
+      "evidence": {
+        "checks": [
+          "pnpm format:check",
+          "pnpm lint",
+          "pnpm typecheck",
+          "pnpm test (8 files/111 tests)",
+          "git diff --check",
+          "pnpm exec vitest --run tests/browser.test.ts: 44 tests passed",
+          "pnpm collab -- help: exit 0, help 含 wait 两个时长参数",
+          "无 package.json 的临时宿主目录绝对路径 help: exit 0 (VER-010)",
+          "spec-tasks diff: specChanged=false, contextChanged=false, no impacted tasks"
+        ],
+        "reviews": []
+      }
     },
     {
       "id": "IMP-009",
       "title": "建立固定 Project 与 GPT-5.6 Sol Pro 启动上下文",
-      "status": "pending",
+      "status": "implemented",
       "covers": ["BEH-002"],
       "verifies": ["VER-001", "VER-002"],
       "dependsOn": ["IMP-001"],
       "scope": ["CLI", "Browser boundary", "Test suite"],
-      "evidence": { "checks": [], "reviews": [] }
+      "evidence": {
+        "checks": [
+          "pnpm format:check",
+          "pnpm lint",
+          "pnpm typecheck",
+          "pnpm test (8 files/111 tests)",
+          "git diff --check",
+          "pnpm exec vitest --run tests/browser.test.ts: 44 tests passed，含 BEH-002 成功路径与 PROJECT_NOT_FOUND/PROJECT_NOT_UNIQUE/FIXED_TARGET_UNAVAILABLE/SELECTION_UNCONFIRMED/PAGE_CONTRACT_DRIFT 各失败夹具，均已断言关闭会话且无成功 taskId",
+          "VER-001/VER-002 live 2026-08-06: 并发 start 任务 404a8666-741e-413f-929a-bbe284ac77c4 与 a5859c62-1590-48a6-9a1b-4c5e77415cbc 均成功；两任务页面均回读 /g/g-p-6a72a51fc0ac81919292bcd8e256bb56/project、标题 ChatGPT - chatgpt-pro-collab、main h1 精确 Project 标题、唯一空白 #prompt-textarea、turn 数 0，且 GPT-5.6 Sol 与 Pro menuitemradio 各自唯一并 aria-checked=true；named session、浏览器 PID、session 目录、taskId 均不同；并发首次 send 均成功（turn 99741e8c-4a57-4942-8b64-75e439e274e9 / ff897d68-fe76-4acf-87b3-e09851ba5e50），SQLite 绑定不同 conversation id（6a73750b-175c... / 6a73750b-31f4...）及各自 project-scoped conversationUrl；wait 完成并落盘 response.md（README 校验 READY）；共享 seed sha256 3e4b106c38bf33013d364cc2e0c16711e04cba0c486de8531747f96680aba352 前后未变；失败夹具各错误均关闭已打开 session 并保留 failed task 记录，未调用 Project 创建或修改控件",
+          "spec-tasks diff: specChanged=false, contextChanged=false, no impacted tasks"
+        ],
+        "reviews": []
+      }
     }
   ]
 }

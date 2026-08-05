@@ -1,0 +1,654 @@
+export interface StartPageOptions {
+  readonly authenticated?: boolean;
+  readonly projectLoadsRows?: boolean;
+  readonly projectRowCount?: number;
+  readonly otherRowCount?: number;
+  readonly navigateOnProjectClick?: boolean;
+  readonly mainTitleCount?: number;
+  readonly composerCount?: number;
+  readonly existingTurns?: boolean;
+  readonly selectorControlCount?: number;
+  readonly modelOpenerCount?: number;
+  readonly modeRadioPresent?: boolean;
+  readonly modelRadioPresent?: boolean;
+  readonly modeInitiallyChecked?: boolean;
+  readonly modelInitiallyChecked?: boolean;
+  readonly modeClickApplies?: boolean;
+  readonly modelClickApplies?: boolean;
+}
+
+export interface StartPageFixture {
+  readonly events: string[];
+  readonly page: object;
+}
+
+interface MenuState {
+  readonly menuOpen: boolean;
+  readonly submenuOpen: boolean;
+}
+
+interface StartDomNode {
+  readonly tagName: string;
+  readonly textContent: string;
+  readonly attributes: Readonly<Record<string, string>>;
+  readonly children: readonly StartDomNode[];
+  readonly menuLayer: 'first' | 'submenu' | 'none';
+  readonly clickAction?: () => void;
+  getAttribute(name: string): string | null;
+  hasAttribute(name: string): boolean;
+  getClientRects(): readonly object[];
+  parentNode(): StartDomNode | null;
+  querySelector(selector: string): StartDomNode | null;
+  querySelectorAll(selector: string): readonly StartDomNode[];
+  click(): void;
+}
+
+class StartHtmlElement implements StartDomNode {
+  readonly tagName: string;
+  readonly textContent: string;
+  readonly attributes: Readonly<Record<string, string>>;
+  readonly children: readonly StartDomNode[];
+  readonly menuLayer: 'first' | 'submenu' | 'none';
+  readonly clickAction?: () => void;
+  readonly #readMenuState: () => MenuState;
+  readonly #childrenByNode: WeakMap<StartDomNode, readonly StartDomNode[]>;
+  readonly #parentOf: WeakMap<StartDomNode, StartDomNode>;
+
+  /**
+   * Creates one fixture DOM node.
+   *
+   * @param options Node identity, attributes, children, menu-layer state access, and click effect.
+   * @throws {Error} This constructor does not perform I/O.
+   */
+  constructor(options: {
+    readonly tagName: string;
+    readonly textContent: string;
+    readonly attributes: Readonly<Record<string, string>>;
+    readonly children?: readonly StartDomNode[];
+    readonly menuLayer?: 'first' | 'submenu' | 'none';
+    readonly readMenuState: () => MenuState;
+    readonly childrenByNode: WeakMap<StartDomNode, readonly StartDomNode[]>;
+    readonly parentOf?: WeakMap<StartDomNode, StartDomNode>;
+    readonly clickAction?: () => void;
+  }) {
+    this.tagName = options.tagName;
+    this.textContent = options.textContent;
+    this.attributes = options.attributes;
+    this.children = options.children ?? [];
+    this.menuLayer = options.menuLayer ?? 'none';
+    this.clickAction = options.clickAction;
+    this.#readMenuState = options.readMenuState;
+    this.#childrenByNode = options.childrenByNode;
+    this.#parentOf = options.parentOf ?? new WeakMap<StartDomNode, StartDomNode>();
+    this.#childrenByNode.set(this, this.children);
+    for (const child of this.children) {
+      this.#parentOf.set(child, this);
+    }
+  }
+
+  /**
+   * Reads one attribute.
+   *
+   * @param name Attribute name.
+   * @returns Attribute value or null.
+   */
+  getAttribute(name: string): string | null {
+    return this.attributes[name] ?? null;
+  }
+
+  /**
+   * Reports whether an attribute is present.
+   *
+   * @param name Attribute name.
+   * @returns True when the attribute exists.
+   */
+  hasAttribute(name: string): boolean {
+    return name in this.attributes;
+  }
+
+  /**
+   * Reports layout visibility for the current menu state.
+   *
+   * @returns One rect when the node is exposed by the current menu state.
+   */
+  getClientRects(): readonly object[] {
+    const menu = this.#readMenuState();
+    if (this.menuLayer === 'first' && !menu.menuOpen) {
+      return [];
+    }
+    if (this.menuLayer === 'submenu' && !(menu.menuOpen && menu.submenuOpen)) {
+      return [];
+    }
+    return [{}];
+  }
+
+  /**
+   * Returns the current parent node from the shared fixture parent map.
+   *
+   * @returns The parent node or null for root nodes.
+   */
+  parentNode(): StartDomNode | null {
+    return this.#parentOf.get(this) ?? null;
+  }
+
+  /**
+   * Returns the first descendant matching a supported selector.
+   *
+   * @param selector Supported fixture selector.
+   * @returns The first matching descendant or null.
+   * @throws {Error} Unsupported selectors fail instead of being guessed.
+   */
+  querySelector(selector: string): StartDomNode | null {
+    return this.querySelectorAll(selector)[0] ?? null;
+  }
+
+  /**
+   * Returns matching descendants for a supported selector.
+   *
+   * @param selector Supported fixture selector.
+   * @returns Matching descendants in document order.
+   * @throws {Error} Unsupported selectors fail instead of being guessed.
+   */
+  querySelectorAll(selector: string): readonly StartDomNode[] {
+    return this.descendants().filter((element) => {
+      return matchesFixtureSelector(element, selector);
+    });
+  }
+
+  /**
+   * Runs the node's click side effect.
+   *
+   * @throws {Error} Propagates the configured click action failure.
+   */
+  click(): void {
+    this.clickAction?.();
+  }
+
+  private descendants(): readonly StartDomNode[] {
+    const direct = this.#childrenByNode.get(this) ?? [];
+    return [
+      ...direct,
+      ...direct.flatMap((element) => {
+        return element instanceof StartHtmlElement ? element.descendants() : [];
+      }),
+    ];
+  }
+}
+
+class StartAnchorElement extends StartHtmlElement {}
+
+/**
+ * Creates the minimal Projects directory, Project composer, and model/mode menu boundary
+ * needed to execute the generated start verification function.
+ *
+ * @param options Page structure, selection, and navigation state exposed to the page function.
+ * @returns Page-shaped fixture plus an ordered click and selection audit.
+ * @throws {Error} Unsupported selectors fail instead of being guessed.
+ */
+export function startPageFixture(options: StartPageOptions): StartPageFixture {
+  const events: string[] = [];
+  const state = {
+    authenticated: options.authenticated ?? true,
+    composerCount: options.composerCount ?? 1,
+    existingTurns: options.existingTurns ?? false,
+    mainTitleCount: options.mainTitleCount ?? 1,
+    menuOpen: false,
+    modeChecked: options.modeInitiallyChecked ?? false,
+    modeClickApplies: options.modeClickApplies ?? true,
+    modeRadioPresent: options.modeRadioPresent ?? true,
+    modelChecked: options.modelInitiallyChecked ?? false,
+    modelClickApplies: options.modelClickApplies ?? true,
+    modelOpenerCount: options.modelOpenerCount ?? 1,
+    modelRadioPresent: options.modelRadioPresent ?? true,
+    navigateOnProjectClick: options.navigateOnProjectClick ?? true,
+    otherRowCount: options.otherRowCount ?? 0,
+    pathname: '/projects',
+    projectLoadsRows: options.projectLoadsRows ?? true,
+    projectRowCount: options.projectRowCount ?? 1,
+    selectorControlCount: options.selectorControlCount ?? 1,
+    submenuOpen: false,
+  };
+  const childrenByNode = new WeakMap<StartDomNode, readonly StartDomNode[]>();
+  const parentOf = new WeakMap<StartDomNode, StartDomNode>();
+  const setChildren = (parent: StartDomNode, children: readonly StartDomNode[]): void => {
+    childrenByNode.set(parent, children);
+    for (const child of children) {
+      parentOf.set(child, parent);
+    }
+  };
+  const readMenuState = (): MenuState => {
+    return { menuOpen: state.menuOpen, submenuOpen: state.submenuOpen };
+  };
+
+  const node = (
+    tagName: string,
+    textContent: string,
+    attributes: Readonly<Record<string, string>>,
+    children: readonly StartDomNode[] = [],
+    clickAction?: () => void,
+    menuLayer: 'first' | 'submenu' | 'none' = 'none',
+  ): StartDomNode => {
+    return new StartHtmlElement({
+      tagName,
+      textContent,
+      attributes,
+      children,
+      clickAction,
+      menuLayer,
+      readMenuState,
+      childrenByNode,
+      parentOf,
+    });
+  };
+
+  const anchor = (textContent: string, attributes: Readonly<Record<string, string>>): StartDomNode => {
+    return new StartAnchorElement({ tagName: 'a', textContent, attributes, readMenuState, childrenByNode, parentOf });
+  };
+
+  const closeMenu = (): void => {
+    state.menuOpen = false;
+    state.submenuOpen = false;
+  };
+
+  const authControls: StartDomNode[] = state.authenticated ? [] : [anchor('Log in', { href: '/auth/login' })];
+
+  const matchedRows: StartDomNode[] = state.projectLoadsRows
+    ? Array.from({ length: state.projectRowCount }, () => {
+        const row = node('div', '', { role: 'row' });
+        const name = node('span', 'chatgpt-pro-collab', {}, [], () => {
+          events.push('project-row-click');
+          if (state.navigateOnProjectClick) {
+            state.pathname = '/g/g-p-123/project';
+          }
+        });
+        setChildren(row, [name, node('button', 'Open project options for chatgpt-pro-collab', {})]);
+        return row;
+      })
+    : [];
+  const otherRows: StartDomNode[] = state.projectLoadsRows
+    ? Array.from({ length: state.otherRowCount }, () => {
+        const row = node('div', '', { role: 'row' });
+        setChildren(row, [node('span', 'other project', {})]);
+        return row;
+      })
+    : [];
+
+  const selectorControl: StartDomNode | null =
+    state.selectorControlCount === 1
+      ? node('button', 'Pro', { 'aria-haspopup': 'menu', 'aria-expanded': 'false' }, [], () => {
+          events.push('selector-click');
+          if (state.menuOpen) {
+            closeMenu();
+          } else {
+            state.menuOpen = true;
+            state.submenuOpen = false;
+          }
+        })
+      : null;
+  if (selectorControl !== null) {
+    const readAttribute = selectorControl.getAttribute.bind(selectorControl);
+    selectorControl.getAttribute = (name: string): string | null => {
+      if (name === 'aria-expanded') {
+        return state.menuOpen ? 'true' : 'false';
+      }
+      return readAttribute(name);
+    };
+  }
+
+  const composerForm = node('form', '', {});
+  setChildren(composerForm, [
+    node('button', '', { 'data-testid': 'composer-plus-btn' }),
+    node('textarea', '', { id: 'prompt-textarea' }),
+    node('button', 'Send prompt', { 'data-testid': 'send-button' }),
+    ...(selectorControl === null ? [] : [selectorControl]),
+  ]);
+
+  const titleNodes: StartDomNode[] = Array.from({ length: state.mainTitleCount }, () => {
+    return node('h1', 'chatgpt-pro-collab', {});
+  });
+  const composerNodes: StartDomNode[] = Array.from({ length: state.composerCount }, () => {
+    return composerForm;
+  });
+  const turnNodes: StartDomNode[] = state.existingTurns
+    ? [node('div', 'hello', { 'data-testid': 'conversation-turn-user-1', 'data-turn': 'user' })]
+    : [];
+  const main = node('main', '', {});
+  setChildren(main, [...titleNodes, ...composerNodes, ...turnNodes]);
+
+  const modeRadios: StartDomNode[] = (['Instant 5.5', 'Medium', 'High', 'Extra High', 'Pro'] as const)
+    .filter((mode) => {
+      return mode !== 'Pro' || state.modeRadioPresent;
+    })
+    .map((mode) => {
+      return node(
+        'div',
+        mode,
+        { 'role': 'menuitemradio', 'aria-checked': 'false' },
+        [],
+        () => {
+          if (mode === 'Pro') {
+            events.push('mode-click');
+            if (state.modeClickApplies) {
+              state.modeChecked = true;
+            }
+            closeMenu();
+          }
+        },
+        'first',
+      );
+    });
+  const modelOpeners: StartDomNode[] = Array.from({ length: state.modelOpenerCount }, () => {
+    return node(
+      'div',
+      'Models',
+      { 'role': 'menuitem', 'aria-haspopup': 'menu' },
+      [],
+      () => {
+        events.push('opener-click');
+        state.menuOpen = true;
+        state.submenuOpen = true;
+      },
+      'first',
+    );
+  });
+  const firstLayer = node('div', '', { role: 'menu' });
+  setChildren(firstLayer, [...modeRadios, ...modelOpeners]);
+
+  const modelRadios: StartDomNode[] = (['GPT-5.6 Sol', 'GPT-5.5', 'GPT-5.3', 'o3'] as const)
+    .filter((model) => {
+      return model !== 'GPT-5.6 Sol' || state.modelRadioPresent;
+    })
+    .map((model) => {
+      return node(
+        'div',
+        model,
+        { 'role': 'menuitemradio', 'aria-checked': 'false' },
+        [],
+        () => {
+          if (model === 'GPT-5.6 Sol') {
+            events.push('model-click');
+            if (state.modelClickApplies) {
+              state.modelChecked = true;
+            }
+            closeMenu();
+          }
+        },
+        'submenu',
+      );
+    });
+  const submenu = node('div', '', { role: 'menu' });
+  setChildren(submenu, modelRadios);
+
+  const radioChecked = (element: StartDomNode): string => {
+    if (element.textContent.trim() === 'Pro') {
+      return state.modeChecked ? 'true' : 'false';
+    }
+    if (element.textContent.trim() === 'GPT-5.6 Sol') {
+      return state.modelChecked ? 'true' : 'false';
+    }
+    return element.attributes['aria-checked'] ?? 'false';
+  };
+  for (const radio of [...modeRadios, ...modelRadios]) {
+    const readAttribute = radio.getAttribute.bind(radio);
+    radio.getAttribute = (name: string): string | null => {
+      if (name === 'aria-checked') {
+        return radioChecked(radio);
+      }
+      return readAttribute(name);
+    };
+  }
+
+  const rootChildren: StartDomNode[] = [...authControls, ...matchedRows, ...otherRows, main, firstLayer, submenu];
+  const allDocumentNodes = (): readonly StartDomNode[] => {
+    return rootChildren.flatMap((element) => {
+      return [element, ...descendants(element)];
+    });
+  };
+  const documentRoot = {
+    querySelector(selector: string) {
+      return (
+        allDocumentNodes().find((element) => {
+          return matchesFixtureSelector(element, selector);
+        }) ?? null
+      );
+    },
+    querySelectorAll(selector: string) {
+      return allDocumentNodes().filter((element) => {
+        return matchesFixtureSelector(element, selector);
+      });
+    },
+  };
+
+  const sessionStorage = {
+    storage: new Map<string, string>(),
+    getItem(key: string) {
+      return this.storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      this.storage.set(key, value);
+    },
+  };
+  const globals = () => {
+    return {
+      document: documentRoot,
+      getComputedStyle(_element: object) {
+        return { display: 'block', visibility: 'visible' };
+      },
+      HTMLAnchorElement: StartAnchorElement,
+      HTMLElement: StartHtmlElement,
+      location: { hostname: 'chatgpt.com', pathname: state.pathname },
+      sessionStorage,
+    };
+  };
+
+  const matches = (selector: string): readonly StartDomNode[] => {
+    return allDocumentNodes().filter((element) => {
+      return matchesFixtureSelector(element, selector);
+    });
+  };
+  const clickFirst = (nodes: readonly StartDomNode[], selector: string): void => {
+    const target = nodes[0];
+    if (target === undefined) {
+      throw new Error(`fixture locator is absent: ${selector}`);
+    }
+    target.click();
+  };
+
+  const page = {
+    evaluate(callback: unknown, argument?: unknown) {
+      return Promise.resolve(withStartGlobals(globals(), callback, argument));
+    },
+    getByRole(role: string, options: { readonly name?: string; readonly exact?: boolean }) {
+      const nodes = allDocumentNodes().filter((element) => {
+        if (element.attributes['role'] !== role) {
+          return false;
+        }
+        if (options.name === undefined) {
+          return true;
+        }
+        const name = element.getAttribute('aria-label') ?? element.textContent.trim();
+        return options.exact === true ? name === options.name : name.includes(options.name);
+      });
+      return {
+        count() {
+          return Promise.resolve(nodes.length);
+        },
+        first() {
+          return {
+            click() {
+              clickFirst(nodes, `getByRole(${role}, ${options.name ?? ''})`);
+              return Promise.resolve();
+            },
+          };
+        },
+      };
+    },
+    locator(selector: string) {
+      return {
+        count() {
+          return Promise.resolve(matches(selector).length);
+        },
+        first() {
+          return {
+            click() {
+              clickFirst(matches(selector), selector);
+              return Promise.resolve();
+            },
+          };
+        },
+      };
+    },
+    url() {
+      return `https://chatgpt.com${state.pathname}`;
+    },
+    async waitForFunction(callback: unknown, argument?: unknown) {
+      const startedAt = Date.now();
+      while (true) {
+        if (withStartGlobals(globals(), callback, argument) === true) {
+          return;
+        }
+        if (Date.now() - startedAt > 250) {
+          throw new Error('fixture waitForFunction deadline exceeded');
+        }
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 5);
+        });
+      }
+    },
+    waitForTimeout() {
+      return Promise.resolve();
+    },
+  };
+
+  return { events, page };
+
+  function descendants(element: StartDomNode): readonly StartDomNode[] {
+    const direct = childrenByNode.get(element) ?? [];
+    return [...direct, ...direct.flatMap(descendants)];
+  }
+}
+
+/**
+ * Matches one fixture node against one comma-separated selector group.
+ *
+ * @param element Candidate node.
+ * @param selector Supported fixture selector group.
+ * @returns True when the node matches.
+ * @throws {Error} Unsupported selectors fail instead of being guessed.
+ */
+function matchesFixtureSelector(element: StartDomNode, selector: string): boolean {
+  const alternatives = selector.split(',').map((part) => {
+    return part.trim();
+  });
+  return alternatives.some((part) => {
+    return matchesCompoundSelector(element, part);
+  });
+}
+
+function matchesCompoundSelector(element: StartDomNode, selector: string): boolean {
+  const parts = selector.trim().split(/\s+/u);
+  const finalPart = parts.at(-1);
+  if (finalPart === undefined || !matchesSingleSelector(element, finalPart)) {
+    return false;
+  }
+  for (const part of parts.slice(0, -1)) {
+    if (!hasAncestor(element, part)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function hasAncestor(element: StartDomNode, selector: string): boolean {
+  let parent = element.parentNode();
+  while (parent !== null) {
+    if (matchesSingleSelector(parent, selector)) {
+      return true;
+    }
+    parent = parent.parentNode();
+  }
+  return false;
+}
+
+function matchesSingleSelector(element: StartDomNode, selector: string): boolean {
+  if (selector === '*') {
+    return true;
+  }
+  if (selector === 'main') {
+    return element.tagName === 'main';
+  }
+  if (selector === 'form') {
+    return element.tagName === 'form';
+  }
+  if (selector === 'h1') {
+    return element.tagName === 'h1';
+  }
+  if (selector === 'button') {
+    return element.tagName === 'button';
+  }
+  if (selector === 'a') {
+    return element.tagName === 'a';
+  }
+  if (selector === '#prompt-textarea') {
+    return element.attributes['id'] === 'prompt-textarea';
+  }
+  if (selector === '[role="row"]') {
+    return element.attributes['role'] === 'row';
+  }
+  if (selector === '[role="menuitemradio"]') {
+    return element.attributes['role'] === 'menuitemradio';
+  }
+  if (selector === '[role="menuitem"][aria-haspopup]') {
+    return element.attributes['role'] === 'menuitem' && 'aria-haspopup' in element.attributes;
+  }
+  if (selector === '[aria-haspopup]') {
+    return 'aria-haspopup' in element.attributes;
+  }
+  if (selector === 'button[aria-haspopup]') {
+    return element.tagName === 'button' && 'aria-haspopup' in element.attributes;
+  }
+  if (selector === 'button[aria-haspopup="menu"]') {
+    return element.tagName === 'button' && element.attributes['aria-haspopup'] === 'menu';
+  }
+  if (selector === '[data-testid^="conversation-turn-"][data-turn]') {
+    return (
+      (element.attributes['data-testid'] ?? '').startsWith('conversation-turn-') && 'data-turn' in element.attributes
+    );
+  }
+  throw new Error(`unsupported start fixture selector: ${selector}`);
+}
+
+/**
+ * Executes one generated start callback with the fixture browser globals installed.
+ *
+ * @param globals Browser globals installed for the callback duration.
+ * @param callback Generated page callback.
+ * @param argument Callback argument supplied by the page function.
+ * @returns The callback result.
+ * @throws {TypeError} If the callback is not callable.
+ */
+function withStartGlobals(
+  globals: { readonly [name: string]: unknown },
+  callback: unknown,
+  argument: unknown,
+): unknown {
+  if (typeof callback !== 'function') {
+    throw new TypeError('start fixture callback is not a function');
+  }
+  const previous = new Map<string, PropertyDescriptor | undefined>();
+  for (const [name, value] of Object.entries(globals)) {
+    previous.set(name, Object.getOwnPropertyDescriptor(globalThis, name));
+    Object.defineProperty(globalThis, name, { configurable: true, writable: true, value });
+  }
+  try {
+    return Reflect.apply(callback, undefined, [argument]);
+  } finally {
+    for (const [name, descriptor] of previous) {
+      if (descriptor === undefined) {
+        Reflect.deleteProperty(globalThis, name);
+      } else {
+        Object.defineProperty(globalThis, name, descriptor);
+      }
+    }
+  }
+}

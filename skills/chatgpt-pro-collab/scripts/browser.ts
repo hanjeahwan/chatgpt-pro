@@ -9,6 +9,7 @@ import { ensureTaskDirectories, savePlaywrightScript, taskDirectory } from './se
 
 const PLAYWRIGHT_CLI_PACKAGE = '@playwright/cli@0.1.17';
 const CHATGPT_URL = 'https://chatgpt.com/';
+const PROJECTS_URL = 'https://chatgpt.com/projects';
 const PROTOCOL = 'chatgpt-pro-collab/v1';
 const BROWSER_COMMAND_GATE_PATH = fileURLToPath(new URL('./browser-command-gate.ts', import.meta.url));
 const COMMAND_PID_NOTIFICATION_FAILED_EXIT_CODE = 70;
@@ -118,6 +119,12 @@ interface StartProtocolResult extends ProtocolResult {
   readonly kind: 'start';
   readonly url: string;
   readonly contextMarker: string;
+}
+
+interface StartFailedProtocolResult extends ProtocolResult {
+  readonly kind: 'start-failed';
+  readonly errorCode: string;
+  readonly message: string;
 }
 
 interface UploadReadyProtocolResult extends ProtocolResult {
@@ -263,11 +270,16 @@ export class PlaywrightBrowser {
   /**
    * Starts one isolated headed session from the shared read-only authentication seed.
    *
+   * The task only succeeds inside the unique existing `chatgpt-pro-collab` Project's
+   * blank new-conversation composer after `GPT-5.6 Sol` and `Pro` are selected and read
+   * back as `aria-checked=true`. Any missing, non-unique, unconfirmable, or drifting
+   * page contract closes the opened session and throws a typed BrowserError.
+   *
    * @param taskId Unique task identifier and local session directory name.
    * @param sessionName Unique Playwright named session.
    * @param seedStatePath Readable setup state loaded but never saved by the task.
    * @returns PID reported by Playwright plus observed page and context identity.
-   * @throws {BrowserError} If the browser cannot start or the authenticated page is not observed.
+   * @throws {BrowserError} If the fixed Project, model, or mode context cannot be confirmed.
    * @throws {Error} If a local Playwright artifact cannot be written.
    */
   async startTask(taskId: string, sessionName: string, seedStatePath: string): Promise<BrowserSessionInfo> {
@@ -284,15 +296,23 @@ export class PlaywrightBrowser {
       opened = true;
       const pid = parseOpenPid(openOutput.stdout, sessionName);
       await this.#invoke(sessionName, taskId, ['state-load', seedStatePath], 'load authentication state');
-      await this.#invoke(sessionName, taskId, ['goto', CHATGPT_URL], 'open ChatGPT');
-      const result = await this.#runCode<StartProtocolResult>(
-        sessionName,
+      await this.#invoke(sessionName, taskId, ['goto', PROJECTS_URL], 'open ChatGPT projects');
+      const scriptPath = await savePlaywrightScript(
+        this.#paths,
         taskId,
         'verify-start',
         startVerificationScript(contextMarker),
-        'verify authenticated task page',
-        'start',
       );
+      const output = await this.#invoke(
+        sessionName,
+        taskId,
+        ['run-code', '--filename', scriptPath],
+        'verify fixed project start context',
+      );
+      const result = parseStartProtocolResult(output.stdout);
+      if (result.kind === 'start-failed') {
+        throw new BrowserError(result.errorCode, 'start task', result.message);
+      }
       return { pid, url: result.url, contextMarker: result.contextMarker, persistent: false };
     } catch (error) {
       if (opened) {
@@ -1123,6 +1143,34 @@ function parseProtocolResult<T extends ProtocolResult>(stdout: string, expectedK
 }
 
 /**
+ * Parses the start page envelope, preserving typed failure codes.
+ *
+ * @param stdout Complete `run-code` output for the start verification script.
+ * @returns The success envelope or the typed failure envelope.
+ * @throws {BrowserError} If no start envelope is present.
+ */
+function parseStartProtocolResult(stdout: string): StartProtocolResult | StartFailedProtocolResult {
+  const lines = stdout.trim().split(/\r?\n/u).reverse();
+  for (const line of lines) {
+    try {
+      const first = JSON.parse(line);
+      const candidate = typeof first === 'string' ? JSON.parse(first) : first;
+      if (
+        typeof candidate === 'object' &&
+        candidate !== null &&
+        candidate.protocol === PROTOCOL &&
+        (candidate.kind === 'start' || candidate.kind === 'start-failed')
+      ) {
+        return candidate as StartProtocolResult | StartFailedProtocolResult;
+      }
+    } catch {
+      // CLI wrapper lines are not JSON; only the page result envelope is relevant.
+    }
+  }
+  throw new BrowserError('PLAYWRIGHT_CONTRACT_DRIFT', 'parse start result', protocolFailureDetail(stdout));
+}
+
+/**
  * Validates the page-discovered ordered unique artifact descriptors.
  *
  * @param value Unknown protocol field returned by the page function.
@@ -1219,7 +1267,13 @@ function loginWaitScript(): string {
 }
 
 /**
- * Builds the authenticated task check and installs an in-memory context marker.
+ * Builds the fixed Project and model/mode start-context verification.
+ *
+ * The page function locates the unique `chatgpt-pro-collab` Project row on the projects
+ * page, enters its blank new-conversation composer, and confirms `GPT-5.6 Sol` plus `Pro`
+ * through `menuitemradio` selection with `aria-checked=true` readback. Every failure
+ * returns a typed `start-failed` envelope so the service can distinguish Project absence,
+ * non-uniqueness, fixed-target unavailability, unconfirmable selection, and drift.
  *
  * @param contextMarker Host-generated identity unique to this task.
  * @returns A Playwright page function source.
@@ -1228,29 +1282,344 @@ function loginWaitScript(): string {
 function startVerificationScript(contextMarker: string): string {
   return `async (page) => {
     const contextMarker = ${JSON.stringify(contextMarker)};
-    await page.waitForFunction(() => {
-      const composer = document.querySelector('#prompt-textarea');
-      if (!(composer instanceof HTMLElement) || composer.getClientRects().length === 0) return false;
-      const authControls = [...document.querySelectorAll('a, button')].filter((element) => {
-        const label = (element.textContent || '').trim();
-        const href = element instanceof HTMLAnchorElement ? element.getAttribute('href') || '' : '';
-        return (label === 'Log in' || label === 'Sign up' || href.includes('/auth/login')) &&
-          element instanceof HTMLElement && element.getClientRects().length > 0;
-      });
-      return authControls.length === 0;
-    }, undefined, { timeout: 60000, polling: 250 });
-    const url = await page.evaluate(() => {
-      return { hostname: location.hostname, pathname: location.pathname, href: location.href };
-    });
-    if (url.hostname !== 'chatgpt.com' || url.pathname !== '/') {
-      throw new Error('page contract drift: new conversation root was not observed');
+    const targetProject = 'chatgpt-pro-collab';
+    const targetModel = 'GPT-5.6 Sol';
+    const targetMode = 'Pro';
+    const fail = (errorCode, message) => {
+      return { protocol: '${PROTOCOL}', kind: 'start-failed', errorCode, message };
+    };
+    const evaluate = async (callback, argument) => {
+      let lastError;
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        try {
+          return await page.evaluate(callback, argument);
+        } catch (error) {
+          lastError = error;
+          await page.waitForTimeout(400);
+        }
+      }
+      throw lastError;
+    };
+
+    try {
+      await page.waitForFunction(() => {
+        const authControls = [...document.querySelectorAll('a, button')].filter((element) => {
+          const label = (element.textContent || '').trim();
+          const href = element instanceof HTMLAnchorElement ? element.getAttribute('href') || '' : '';
+          return (label === 'Log in' || label === 'Sign up' || href.includes('/auth/login')) &&
+            element instanceof HTMLElement && element.getClientRects().length > 0;
+        });
+        return authControls.length === 0;
+      }, undefined, { timeout: 60000, polling: 250 });
+    } catch {
+      return fail('PAGE_CONTRACT_DRIFT', 'authenticated ChatGPT Web page was not observed; run setup again if the session expired');
     }
+
+    try {
+      await page.waitForFunction((target) => {
+        const visible = (element) => {
+          if (!(element instanceof HTMLElement)) return false;
+          const style = getComputedStyle(element);
+          return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
+        };
+        return [...document.querySelectorAll('[role="row"]')].some((row) => {
+          if (!visible(row)) return false;
+          return [...row.querySelectorAll('*')].some((element) => {
+            return visible(element) && element.textContent.trim() === target;
+          });
+        });
+      }, targetProject, { timeout: 30000, polling: 250 });
+    } catch {
+      return fail('PROJECT_NOT_FOUND', 'no Project exactly named chatgpt-pro-collab was found; check the signed-in account and create or organize the chatgpt-pro-collab Project manually');
+    }
+    let rowInfo = { status: 'drift', reason: 'target Project row disappeared after it was observed' };
+    for (let attempt = 0; attempt < 4 && rowInfo.status === 'drift'; attempt += 1) {
+      if (attempt > 0) {
+        await page.waitForTimeout(400);
+      }
+      rowInfo = await evaluate((target) => {
+        const visible = (element) => {
+          if (!(element instanceof HTMLElement)) return false;
+          const style = getComputedStyle(element);
+          return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
+        };
+        const rows = [...document.querySelectorAll('[role="row"]')].filter(visible);
+        const matched = rows.filter((row) => {
+          return [...row.querySelectorAll('*')].some((element) => {
+            return visible(element) && element.textContent.trim() === target;
+          });
+        });
+        if (matched.length > 1) return { status: 'not-unique', count: matched.length };
+        if (matched.length === 0) return { status: 'drift', reason: 'target Project row disappeared after it was observed' };
+        const names = [...matched[0].querySelectorAll('*')].filter((element) => {
+          return visible(element) && element.textContent.trim() === target;
+        });
+        if (names.length === 0) return { status: 'drift', reason: 'target Project name is not clickable inside its row' };
+        return { status: 'ok' };
+      }, targetProject);
+    }
+    if (rowInfo.status === 'not-unique') {
+      return fail('PROJECT_NOT_UNIQUE', 'more than one Project exactly named chatgpt-pro-collab was found; rename or organize the Projects manually');
+    }
+    if (rowInfo.status === 'drift') {
+      return fail('PAGE_CONTRACT_DRIFT', rowInfo.reason);
+    }
+    try {
+      await page.evaluate((target) => {
+        const visible = (element) => {
+          if (!(element instanceof HTMLElement)) return false;
+          const style = getComputedStyle(element);
+          return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
+        };
+        const rows = [...document.querySelectorAll('[role="row"]')].filter(visible);
+        const matched = rows.filter((row) => {
+          return [...row.querySelectorAll('*')].some((element) => {
+            return visible(element) && element.textContent.trim() === target;
+          });
+        });
+        const names = matched.length === 1
+          ? [...matched[0].querySelectorAll('*')].filter((element) => {
+              return visible(element) && element.textContent.trim() === target;
+            })
+          : [];
+        if (names.length > 0) names[0].click();
+      }, targetProject);
+    } catch {
+      // The click may have started navigation before its context was destroyed;
+      // the project identity wait below is the arbiter.
+    }
+
+    try {
+      await page.waitForFunction((target) => {
+        const visible = (element) => {
+          if (!(element instanceof HTMLElement)) return false;
+          const style = getComputedStyle(element);
+          return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
+        };
+        const urlOk = /^\\/g\\/g-p-[^/]+\\/project$/.test(location.pathname);
+        const main = document.querySelector('main') ?? document.querySelector('[role="main"]');
+        const titleOk = main !== null && [...main.querySelectorAll('h1')].some((element) => {
+          return visible(element) && element.textContent.trim() === target;
+        });
+        const composers = [...document.querySelectorAll('#prompt-textarea')].filter(visible);
+        const composerOk = composers.length === 1 && (composers[0].textContent ?? '').trim() === '';
+        const turnsOk = [...document.querySelectorAll('[data-testid^="conversation-turn-"][data-turn]')].filter(visible).length === 0;
+        return urlOk && titleOk && composerOk && turnsOk;
+      }, targetProject, { timeout: 60000, polling: 250 });
+    } catch {
+      return fail('PAGE_CONTRACT_DRIFT', 'project new-conversation identity was not observed after entering the Project');
+    }
+
+    const selectorState = () => evaluate(() => {
+      const visible = (element) => {
+        if (!(element instanceof HTMLElement)) return false;
+        const style = getComputedStyle(element);
+        return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
+      };
+      const forms = [...document.querySelectorAll('form')].filter((form) => {
+        return form.querySelector('#prompt-textarea') !== null;
+      });
+      if (forms.length !== 1) return { status: 'drift', reason: 'composer form is not unique' };
+      const candidates = [...forms[0].querySelectorAll('button')].filter((button) => {
+        if (!visible(button)) return false;
+        const testId = button.getAttribute('data-testid');
+        if (testId === 'send-button' || testId === 'composer-plus-btn') return false;
+        return button.getAttribute('aria-haspopup') === 'menu';
+      });
+      if (candidates.length !== 1) {
+        return { status: 'drift', reason: 'composer model/mode selector control is not unique' };
+      }
+      return { status: 'ok', expanded: candidates[0].getAttribute('aria-expanded') === 'true' };
+    });
+    const selectorControl = page.locator('form button[aria-haspopup="menu"]');
+    const menuHasRadios = () => evaluate(() => {
+      const visible = (element) => {
+        if (!(element instanceof HTMLElement)) return false;
+        const style = getComputedStyle(element);
+        return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
+      };
+      return [...document.querySelectorAll('[role="menuitemradio"]')].filter(visible).length > 0;
+    });
+    const ensureMenuOpen = async () => {
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        if (await menuHasRadios()) return { status: 'ok' };
+        const state = await selectorState();
+        if (state.status === 'drift') {
+          await page.waitForTimeout(400);
+          continue;
+        }
+        if (state.expanded) {
+          await page.waitForTimeout(400);
+          continue;
+        }
+        if (await selectorControl.count() !== 1) {
+          await page.waitForTimeout(400);
+          continue;
+        }
+        try {
+          await selectorControl.first().click();
+        } catch {
+          await page.waitForTimeout(400);
+          continue;
+        }
+        await page.waitForTimeout(500);
+      }
+      return { status: 'drift', reason: 'composer model/mode selector control is not unique or did not open' };
+    };
+
+    const readRadio = (target) => evaluate((name) => {
+      const visible = (element) => {
+        if (!(element instanceof HTMLElement)) return false;
+        const style = getComputedStyle(element);
+        return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
+      };
+      const radios = [...document.querySelectorAll('[role="menuitemradio"]')].filter((element) => {
+        return visible(element) &&
+          (element.getAttribute('aria-label') ?? (element.textContent ?? '').trim()) === name;
+      });
+      return { count: radios.length, checked: radios.length === 1 && radios[0].getAttribute('aria-checked') === 'true' };
+    }, target);
+
+    const waitForRadio = (target) => page.waitForFunction((name) => {
+      const visible = (element) => {
+        if (!(element instanceof HTMLElement)) return false;
+        const style = getComputedStyle(element);
+        return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
+      };
+      return [...document.querySelectorAll('[role="menuitemradio"]')].some((element) => {
+        return visible(element) &&
+          (element.getAttribute('aria-label') ?? (element.textContent ?? '').trim()) === name;
+      });
+    }, target, { timeout: 10000, polling: 100 });
+
+    const modelOpener = page.locator('[role="menuitem"][aria-haspopup]');
+    const readOpener = () => evaluate(() => {
+      const visible = (element) => {
+        if (!(element instanceof HTMLElement)) return false;
+        const style = getComputedStyle(element);
+        return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
+      };
+      return [...document.querySelectorAll('[role="menuitem"][aria-haspopup]')].filter(visible).length;
+    });
+
+    const ensureModeVisible = async () => {
+      const opened = await ensureMenuOpen();
+      if (opened.status === 'drift') return opened;
+      try {
+        await waitForRadio(targetMode);
+      } catch {
+        return { status: 'unavailable' };
+      }
+      return { status: 'ok' };
+    };
+    const ensureModelVisible = async () => {
+      const opened = await ensureMenuOpen();
+      if (opened.status === 'drift') return opened;
+      const current = await readRadio(targetModel);
+      if (current.count === 0) {
+        if (await readOpener() !== 1) {
+          return { status: 'drift', reason: 'model submenu opener is not unique' };
+        }
+        if (await modelOpener.count() !== 1) {
+          return { status: 'drift', reason: 'model submenu opener is not unique' };
+        }
+        await modelOpener.first().click();
+        await page.waitForTimeout(400);
+      }
+      try {
+        await waitForRadio(targetModel);
+      } catch {
+        return { status: 'unavailable' };
+      }
+      return { status: 'ok' };
+    };
+
+    const confirmRadio = async (target, ensureVisible) => {
+      const visibleState = await ensureVisible();
+      if (visibleState.status === 'drift') return visibleState;
+      if (visibleState.status === 'unavailable') return { status: 'unavailable' };
+      const before = await readRadio(target);
+      if (before.count !== 1) return { status: 'unavailable', count: before.count };
+      if (before.checked) return { status: 'confirmed' };
+      const control = page.getByRole('menuitemradio', { name: target, exact: true });
+      if (await control.count() !== 1) return { status: 'unavailable' };
+      await control.first().click();
+      await page.waitForTimeout(400);
+      const reopened = await ensureVisible();
+      if (reopened.status === 'drift') return reopened;
+      if (reopened.status === 'unavailable') return { status: 'unconfirmed' };
+      const after = await readRadio(target);
+      if (after.count !== 1 || !after.checked) return { status: 'unconfirmed' };
+      return { status: 'confirmed' };
+    };
+
+    const modeVisible = await ensureModeVisible();
+    if (modeVisible.status === 'drift') return fail('PAGE_CONTRACT_DRIFT', modeVisible.reason);
+    if (modeVisible.status === 'unavailable') {
+      return fail('FIXED_TARGET_UNAVAILABLE', 'fixed mode Pro is not available or not unique as a menuitemradio');
+    }
+    const modeResult = await confirmRadio(targetMode, ensureModeVisible);
+    if (modeResult.status === 'drift') return fail('PAGE_CONTRACT_DRIFT', modeResult.reason);
+    if (modeResult.status === 'unavailable') {
+      return fail('FIXED_TARGET_UNAVAILABLE', 'fixed mode Pro is not available or not unique as a menuitemradio');
+    }
+    if (modeResult.status === 'unconfirmed') {
+      return fail('SELECTION_UNCONFIRMED', 'fixed mode Pro could not be read back as aria-checked=true');
+    }
+
+    const modelVisible = await ensureModelVisible();
+    if (modelVisible.status === 'drift') return fail('PAGE_CONTRACT_DRIFT', modelVisible.reason);
+    if (modelVisible.status === 'unavailable') {
+      return fail('FIXED_TARGET_UNAVAILABLE', 'fixed model GPT-5.6 Sol was not observed in the model submenu');
+    }
+    const modelResult = await confirmRadio(targetModel, ensureModelVisible);
+    if (modelResult.status === 'drift') return fail('PAGE_CONTRACT_DRIFT', modelResult.reason);
+    if (modelResult.status === 'unavailable') {
+      return fail('FIXED_TARGET_UNAVAILABLE', 'fixed model GPT-5.6 Sol is not available or not unique as a menuitemradio');
+    }
+    if (modelResult.status === 'unconfirmed') {
+      return fail('SELECTION_UNCONFIRMED', 'fixed model GPT-5.6 Sol could not be read back as aria-checked=true');
+    }
+
+    try {
+      await page.waitForFunction((target) => {
+        const visible = (element) => {
+          if (!(element instanceof HTMLElement)) return false;
+          const style = getComputedStyle(element);
+          return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
+        };
+        const urlOk = /^\\/g\\/g-p-[^/]+\\/project$/.test(location.pathname);
+        const main = document.querySelector('main') ?? document.querySelector('[role="main"]');
+        const titleOk = main !== null && [...main.querySelectorAll('h1')].some((element) => {
+          return visible(element) && element.textContent.trim() === target;
+        });
+        const composers = [...document.querySelectorAll('#prompt-textarea')].filter(visible);
+        const composerOk = composers.length === 1 && (composers[0].textContent ?? '').trim() === '';
+        return urlOk && titleOk && composerOk;
+      }, targetProject, { timeout: 60000, polling: 250 });
+    } catch {
+      return fail('PAGE_CONTRACT_DRIFT', 'project context drifted during model and mode confirmation');
+    }
+
+    try {
+      const state = await selectorState();
+      if (state.status === 'ok' && state.expanded) {
+        await selectorControl.first().click();
+        await page.waitForTimeout(300);
+      }
+    } catch {
+      // Menu close is best-effort cleanup; the confirmed selection persists.
+    }
+
     await page.evaluate((marker) => {
       sessionStorage.setItem('chatgpt-pro-collab-context-id', marker);
     }, contextMarker);
     const observedContextMarker = await page.evaluate(() => {
       return sessionStorage.getItem('chatgpt-pro-collab-context-id');
     });
+    if (observedContextMarker !== contextMarker) {
+      return fail('PAGE_CONTRACT_DRIFT', 'task context marker could not be read back');
+    }
     return JSON.stringify({
       protocol: '${PROTOCOL}',
       kind: 'start',
@@ -1260,21 +1629,29 @@ function startVerificationScript(contextMarker: string): string {
   }`;
 }
 
+const SEND_TARGET_OK = `
+    const sendTargetOk = (pathname) => {
+      const normalized = pathname.replace(/\\/$/, '');
+      if (expectedConversationId === null) {
+        return normalized === '' || /^\\/g\\/g-p-[^/]+\\/project$/.test(normalized);
+      }
+      return normalized === '/c/' + expectedConversationId;
+    };`;
+
 /**
  * Builds the pre-upload conversation and composer identity gate.
  *
- * @param expectedConversationId Existing bound conversation, or null for a new task.
+ * @param expectedConversationId Existing bound conversation, or null for a first turn.
  * @returns A Playwright page function source.
  * @throws {Error} This pure source builder does not throw.
  */
 function sendTargetVerificationScript(expectedConversationId: string | null): string {
   return `async (page) => {
-    const expectedConversationId = ${JSON.stringify(expectedConversationId)};
+    const expectedConversationId = ${JSON.stringify(expectedConversationId)};${SEND_TARGET_OK}
     const url = await page.evaluate(() => {
       return { hostname: location.hostname, pathname: location.pathname };
     });
-    const targetPath = expectedConversationId === null ? '/' : '/c/' + expectedConversationId;
-    if (url.hostname !== 'chatgpt.com' || url.pathname.replace(/\\/$/, '') !== targetPath.replace(/\\/$/, '')) {
+    if (url.hostname !== 'chatgpt.com' || !sendTargetOk(url.pathname)) {
       throw new Error('conversation identity does not match the send target');
     }
     const composer = page.locator('#prompt-textarea');
@@ -1312,10 +1689,7 @@ function sendTargetVerificationScript(expectedConversationId: string | null): st
     const readyUrl = await page.evaluate(() => {
       return { hostname: location.hostname, pathname: location.pathname };
     });
-    if (
-      readyUrl.hostname !== 'chatgpt.com' ||
-      readyUrl.pathname.replace(/\\/$/, '') !== targetPath.replace(/\\/$/, '')
-    ) {
+    if (readyUrl.hostname !== 'chatgpt.com' || !sendTargetOk(readyUrl.pathname)) {
       throw new Error('conversation identity changed while making the send target writable');
     }
     return JSON.stringify({ protocol: '${PROTOCOL}', kind: 'send-ready' });
@@ -1332,7 +1706,7 @@ function sendTargetVerificationScript(expectedConversationId: string | null): st
  */
 function clearUploadDraftScript(expectedConversationId: string | null, attachmentFileNames: readonly string[]): string {
   return `async (page) => {
-    const expectedConversationId = ${JSON.stringify(expectedConversationId)};
+    const expectedConversationId = ${JSON.stringify(expectedConversationId)};${SEND_TARGET_OK}
     const attachmentFileNames = ${JSON.stringify(attachmentFileNames)};
     await page.reload({ waitUntil: 'domcontentloaded' });
     const composer = page.locator('#prompt-textarea');
@@ -1356,8 +1730,7 @@ function clearUploadDraftScript(expectedConversationId: string | null, attachmen
     const url = await page.evaluate(() => {
       return { hostname: location.hostname, pathname: location.pathname };
     });
-    const targetPath = expectedConversationId === null ? '/' : '/c/' + expectedConversationId;
-    if (url.hostname !== 'chatgpt.com' || url.pathname.replace(/\\/$/, '') !== targetPath.replace(/\\/$/, '')) {
+    if (url.hostname !== 'chatgpt.com' || !sendTargetOk(url.pathname)) {
       throw new Error('conversation identity changed while clearing attachment draft');
     }
     return JSON.stringify({ protocol: '${PROTOCOL}', kind: 'draft-cleared' });
@@ -1373,12 +1746,11 @@ function clearUploadDraftScript(expectedConversationId: string | null, attachmen
  */
 function uploadPreparationScript(expectedConversationId: string | null): string {
   return `async (page) => {
-    const expectedConversationId = ${JSON.stringify(expectedConversationId)};
+    const expectedConversationId = ${JSON.stringify(expectedConversationId)};${SEND_TARGET_OK}
     const url = await page.evaluate(() => {
       return { hostname: location.hostname, pathname: location.pathname };
     });
-    const targetPath = expectedConversationId === null ? '/' : '/c/' + expectedConversationId;
-    if (url.hostname !== 'chatgpt.com' || url.pathname.replace(/\\/$/, '') !== targetPath.replace(/\\/$/, '')) {
+    if (url.hostname !== 'chatgpt.com' || !sendTargetOk(url.pathname)) {
       throw new Error('conversation identity changed before attachment preparation');
     }
     const plus = page.locator('[data-testid="composer-plus-btn"]');
@@ -1404,15 +1776,15 @@ function sendScript(expectedConversationId: string | null, prompt: string): stri
   return `async (page) => {
     let clicked = false;
     try {
-      const expectedConversationId = ${JSON.stringify(expectedConversationId)};
+      const expectedConversationId = ${JSON.stringify(expectedConversationId)};${SEND_TARGET_OK}
+      const conversationIdOf = (pathname) => {
+        const match = /\\/c\\/([^/?#]+)\\/?$/.exec(pathname);
+        return match === null || match[1].startsWith('WEB:') ? null : match[1];
+      };
       const initialUrl = await page.evaluate(() => {
         return { hostname: location.hostname, pathname: location.pathname };
       });
-      const targetPath = expectedConversationId === null ? '/' : '/c/' + expectedConversationId;
-      if (
-        initialUrl.hostname !== 'chatgpt.com' ||
-        initialUrl.pathname.replace(/\\/$/, '') !== targetPath.replace(/\\/$/, '')
-      ) {
+      if (initialUrl.hostname !== 'chatgpt.com' || !sendTargetOk(initialUrl.pathname)) {
         throw new Error('conversation identity changed before prompt submission');
       }
       const composer = page.locator('#prompt-textarea');
@@ -1431,25 +1803,25 @@ function sendScript(expectedConversationId: string | null, prompt: string): stri
         return elements.filter((element) => element.getAttribute('data-turn') === 'user').length > previousCount;
       }, userCount, { timeout: 60000, polling: 100 });
       await page.waitForFunction(() => {
-        const match = /^\\/c\\/([^/?#]+)\\/?$/.exec(location.pathname);
+        const match = /\\/c\\/([^/?#]+)\\/?$/.exec(location.pathname);
         return match !== null && !match[1].startsWith('WEB:');
       }, undefined, { timeout: 60000, polling: 100 });
       const url = await page.evaluate(() => {
         return { hostname: location.hostname, pathname: location.pathname, origin: location.origin };
       });
-      const match = /^\\/c\\/([^/?#]+)\\/?$/.exec(url.pathname);
-      if (url.hostname !== 'chatgpt.com' || match === null || match[1].startsWith('WEB:')) {
+      const conversationId = conversationIdOf(url.pathname);
+      if (url.hostname !== 'chatgpt.com' || conversationId === null) {
         throw new Error('page contract drift: canonical conversation URL was not observed');
       }
-      if (expectedConversationId !== null && match[1] !== expectedConversationId) {
+      if (expectedConversationId !== null && conversationId !== expectedConversationId) {
         throw new Error('submitted conversation identity differs from the bound task');
       }
       return JSON.stringify({
         protocol: '${PROTOCOL}',
         kind: 'send',
         status: 'submitted',
-        conversationId: match[1],
-        conversationUrl: url.origin + '/c/' + match[1],
+        conversationId,
+        conversationUrl: url.origin + url.pathname,
       });
     } catch (error) {
       return JSON.stringify({
@@ -1475,11 +1847,14 @@ function observationScript(expectedConversationId: string, observationWindowMs: 
     const expectedConversationId = ${JSON.stringify(expectedConversationId)};
     const observationWindowMs = ${JSON.stringify(observationWindowMs)};
     const observationDeadline = Date.now() + observationWindowMs;
+    const conversationIdOf = (pathname) => {
+      const match = /\\/c\\/([^/?#]+)\\/?$/.exec(pathname);
+      return match === null || match[1].startsWith('WEB:') ? null : match[1];
+    };
     const url = await page.evaluate(() => {
       return { hostname: location.hostname, pathname: location.pathname, origin: location.origin };
     });
-    const match = /^\\/c\\/([^/?#]+)\\/?$/.exec(url.pathname);
-    if (url.hostname !== 'chatgpt.com' || match === null || match[1] !== expectedConversationId) {
+    if (url.hostname !== 'chatgpt.com' || conversationIdOf(url.pathname) !== expectedConversationId) {
       throw new Error('conversation identity does not match the pending turn');
     }
     const turnSelector = '[data-testid^="conversation-turn-"][data-turn]';
@@ -1526,20 +1901,15 @@ function observationScript(expectedConversationId: string, observationWindowMs: 
     const completedUrl = await page.evaluate(() => {
       return { hostname: location.hostname, pathname: location.pathname, origin: location.origin };
     });
-    const completedMatch = /^\\/c\\/([^/?#]+)\\/?$/.exec(completedUrl.pathname);
-    if (
-      completedUrl.hostname !== 'chatgpt.com' ||
-      completedMatch === null ||
-      completedMatch[1] !== expectedConversationId
-    ) {
+    if (completedUrl.hostname !== 'chatgpt.com' || conversationIdOf(completedUrl.pathname) !== expectedConversationId) {
       throw new Error('conversation identity changed while observing response completion');
     }
     return JSON.stringify({
       protocol: '${PROTOCOL}',
       kind: 'observe',
       status: 'completed',
-      conversationId: completedMatch[1],
-      conversationUrl: completedUrl.origin + '/c/' + completedMatch[1],
+      conversationId: conversationIdOf(completedUrl.pathname),
+      conversationUrl: completedUrl.origin + completedUrl.pathname,
       assistantTurnId,
     });
   }`;
@@ -1564,11 +1934,14 @@ function captureScript(
     const expectedAssistantTurnId = ${JSON.stringify(expectedAssistantTurnId)};
     const captureTimeoutMs = ${JSON.stringify(captureTimeoutMs)};
     const captureDeadline = Date.now() + captureTimeoutMs;
+    const conversationIdOf = (pathname) => {
+      const match = /\\/c\\/([^/?#]+)\\/?$/.exec(pathname);
+      return match === null || match[1].startsWith('WEB:') ? null : match[1];
+    };
     const url = await page.evaluate(() => {
       return { hostname: location.hostname, pathname: location.pathname };
     });
-    const match = /^\\/c\\/([^/?#]+)\\/?$/.exec(url.pathname);
-    if (url.hostname !== 'chatgpt.com' || match === null || match[1] !== expectedConversationId) {
+    if (url.hostname !== 'chatgpt.com' || conversationIdOf(url.pathname) !== expectedConversationId) {
       throw new Error('conversation identity does not match the capturing turn');
     }
     const turnSelector = '[data-testid^="conversation-turn-"][data-turn]';
@@ -1673,12 +2046,7 @@ function captureScript(
     const capturedUrl = await page.evaluate(() => {
       return { hostname: location.hostname, pathname: location.pathname, origin: location.origin };
     });
-    const capturedMatch = /^\\/c\\/([^/?#]+)\\/?$/.exec(capturedUrl.pathname);
-    if (
-      capturedUrl.hostname !== 'chatgpt.com' ||
-      capturedMatch === null ||
-      capturedMatch[1] !== expectedConversationId
-    ) {
+    if (capturedUrl.hostname !== 'chatgpt.com' || conversationIdOf(capturedUrl.pathname) !== expectedConversationId) {
       throw new Error('conversation identity changed before response capture completed');
     }
     return JSON.stringify({
@@ -1687,8 +2055,8 @@ function captureScript(
       response: response.plain,
       responseHtml: response.html,
       artifacts,
-      conversationId: capturedMatch[1],
-      conversationUrl: capturedUrl.origin + '/c/' + capturedMatch[1],
+      conversationId: conversationIdOf(capturedUrl.pathname),
+      conversationUrl: capturedUrl.origin + capturedUrl.pathname,
     });
   }`;
 }
@@ -1721,11 +2089,14 @@ function downloadArtifactScript(
     const captureDeadline = Date.now() + ${JSON.stringify(captureTimeoutMs)};
     const refreshControls = ${JSON.stringify(refreshControls)};
     const remaining = () => Math.max(1, captureDeadline - Date.now());
+    const conversationIdOf = (pathname) => {
+      const match = /\\/c\\/([^/?#]+)\\/?$/.exec(pathname);
+      return match === null || match[1].startsWith('WEB:') ? null : match[1];
+    };
     const url = await page.evaluate(() => {
       return { hostname: location.hostname, pathname: location.pathname };
     });
-    const match = /^\\/c\\/([^/?#]+)\\/?$/.exec(url.pathname);
-    if (url.hostname !== 'chatgpt.com' || match === null || match[1] !== expectedConversationId) {
+    if (url.hostname !== 'chatgpt.com' || conversationIdOf(url.pathname) !== expectedConversationId) {
       throw new Error('conversation identity does not match artifact capture');
     }
     if (refreshControls) {
@@ -1733,12 +2104,7 @@ function downloadArtifactScript(
       const reloadedUrl = await page.evaluate(() => {
         return { hostname: location.hostname, pathname: location.pathname };
       });
-      const reloadedMatch = /^\\/c\\/([^/?#]+)\\/?$/.exec(reloadedUrl.pathname);
-      if (
-        reloadedUrl.hostname !== 'chatgpt.com' ||
-        reloadedMatch === null ||
-        reloadedMatch[1] !== expectedConversationId
-      ) {
+      if (reloadedUrl.hostname !== 'chatgpt.com' || conversationIdOf(reloadedUrl.pathname) !== expectedConversationId) {
         throw new Error('conversation identity changed while refreshing artifact controls');
       }
     }
