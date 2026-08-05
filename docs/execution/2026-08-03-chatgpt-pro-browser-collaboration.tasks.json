@@ -1,12 +1,12 @@
 {
   "spec": "docs/specs/2026-08-03-chatgpt-pro-browser-collaboration.md",
-  "specDigest": "sha256:718cead2853bc4d352b6810acc323cc1717b7a6f9fb7f03d2450068b5f9ab1d8",
-  "contextDigest": "sha256:91d72312ca733d52c015e7bbf2d97b8bc9b7e8bb01ea7b5140ac4ccc97c42b97",
+  "specDigest": "sha256:66684225f532a8bf39bd4ae4b4d29dbff63f9312b59cca0cacc1bf1718aa2094",
+  "contextDigest": "sha256:cc8c3520a8d289995c545bd85f6209ceefbf4658b7dd96a55fdd99db35eb8251",
   "sourceDigests": {
     "BEH-001": "sha256:81fc722eeffe25bb65e2eecd66fa5632133c4fa1cd9fc193ee60814d1fb3b0ae",
     "BEH-002": "sha256:a6b90a57305e58f15ae9b0d5868fe3182950dfd2743a0b335e00ffde43be7e43",
     "BEH-003": "sha256:3a33a5375fe8d0f24241e22a298ddce5dca588b827a649be9743ffb1edf10fd0",
-    "BEH-004": "sha256:387253af354255920a8ef04e582bb10d13aaea00c2b22723fb8462b095a557aa",
+    "BEH-004": "sha256:a515286b96fcd1ab3cdd262228d95dc7444771de15891c889634d984c6492532",
     "BEH-005": "sha256:3a92560c8d7f89bef76669ba25c88c31182da0ea2a22052184252c32414d1bc3",
     "BEH-006": "sha256:42e460ac18db205b5071bba3fa4757244153e186168bd0038cda5cd332b16648",
     "BEH-007": "sha256:06557b88fb956877901122ac16e98134aba1cbe59c709a3e919dbbe494e132fe",
@@ -14,7 +14,7 @@
     "BEH-009": "sha256:081033739f3142e4f24968fcce618348e6379c401dddbfe1f51eeac1a9de93c5",
     "BEH-010": "sha256:32cf4519501f2b855a9682642c5b365d1962b45609dfb9fbbea272507c441b3f",
     "BEH-011": "sha256:9b827d79f99e9906f62de1cd2fbf69b25a97036c7ccb142c6122c85a025b4634",
-    "BEH-012": "sha256:847b37eade707d50f21a0534707c78d57ffdde62565c27172112006929fa4dfb",
+    "BEH-012": "sha256:a1c71b8859dd105ca3fd76483afff0b5e4725059e1cc9294ee16d32bb4ca3357",
     "VER-001": "sha256:c05d8ecd99ba7277afc64f21d661ae5ca77f4542a50ba50b8534789b0817db63",
     "VER-002": "sha256:55e0c5659c76a100be65c593db9c78352f69bfe112966e638c15e54df6d82489",
     "VER-003": "sha256:7707532a8944369bb139c708146758ef058c9da5d03ecf55befb871eb31ef7ed",
@@ -25,11 +25,11 @@
     "VER-008": "sha256:f848a08fea813c2803bd0bc9c61c1fcda1a94a00ac5aba87a37955b43afe897c",
     "VER-009": "sha256:413d5e9c673210ee2412000340c56bd45b2c2972603c752c958d5ace29fb9bf4",
     "VER-010": "sha256:1db6a0a5673c9d4bcaed189b0854ba1768de653c766b87952a26bacadf1b0642",
-    "VER-011": "sha256:630ec4cc0675946fbf0104e61d09b78ac7fac7887e66a983eecbcd90ad4f986a",
+    "VER-011": "sha256:3f3249c3549a3285269e8616e3f143f507f60fde76cdce91c3e473016d498555",
     "VER-012": "sha256:11ee6da311459e2696aac1295c43afab734617fa76a6023f44cdc4c64842a134",
     "VER-013": "sha256:c629aaba3a6f3d130ec300def84e501c1b6cc8b0ce48cdeb4cc152eab85a6bc9",
     "VER-014": "sha256:bb23407878e06604dee9ebf0ae0ffbf89f1c509d3e6c376851421fc2080375c3",
-    "VER-015": "sha256:513d64750a9beef1f9d896b167fc3bf37f8ded571bd48a34b510640bed335211"
+    "VER-015": "sha256:7af0b117c34968180c549def1b6b5fc9fc94889b2a3f1ef106f092bce0ea5a51"
   },
   "baseSha": "ee90f2992445c24b75d9593543cb92d3f9a6bdef",
   "tasks": [
@@ -91,7 +91,7 @@
     {
       "id": "IMP-004",
       "title": "实现单次 wait 的内部观察与原始文字捕获",
-      "status": "implemented",
+      "status": "pending",
       "covers": ["BEH-004", "BEH-011"],
       "verifies": ["VER-004", "VER-014"],
       "dependsOn": ["IMP-001", "IMP-002", "IMP-003"],
@@ -112,7 +112,7 @@
     {
       "id": "IMP-005",
       "title": "捕获返回文件并支持可恢复发布",
-      "status": "implemented",
+      "status": "pending",
       "covers": ["BEH-012"],
       "verifies": ["VER-015"],
       "dependsOn": ["IMP-002", "IMP-004"],
@@ -141,7 +141,7 @@
     {
       "id": "IMP-006",
       "title": "完成同会话多轮与跨任务真实并发",
-      "status": "implemented",
+      "status": "pending",
       "covers": ["BEH-005", "BEH-006"],
       "verifies": ["VER-005", "VER-006"],
       "dependsOn": ["IMP-003", "IMP-004", "IMP-005"],
@@ -184,7 +184,7 @@
     {
       "id": "IMP-008",
       "title": "完成中断恢复矩阵与全量运行基线验证",
-      "status": "implemented",
+      "status": "pending",
       "covers": ["BEH-002", "BEH-004", "BEH-006", "BEH-007", "BEH-012"],
       "verifies": ["VER-007", "VER-010", "VER-011", "VER-012"],
       "dependsOn": ["IMP-001", "IMP-002", "IMP-003", "IMP-004", "IMP-005", "IMP-006", "IMP-007"],
