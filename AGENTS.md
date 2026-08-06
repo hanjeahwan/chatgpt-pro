@@ -10,6 +10,7 @@
 - 决策问题 Spike：`docs/spikes/*.md`；创建或执行时遵守 `create-spike` Skill
 - 代码规范：`CODE_STANDARD.md`
 - 规格实现、验证、提交和验收的稳定合同：`WORKFLOW.md`；执行时遵守 `execute-spec-workflow` Skill
+- 问题修复的最小、必要、可验证流程合同：`PROBLEM_FIXING.md`
 
 维护权威文档和指令时：
 
