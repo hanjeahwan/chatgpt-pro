@@ -1052,6 +1052,79 @@ describe('BEH-002 caller-provided task start', () => {
   });
 });
 
+describe('BEH-005 and BEH-006 multi-turn and cross-task concurrency', () => {
+  it('keeps one conversation across turns with independent turn files', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const promptPath = join(fixture.root, 'multi.md');
+    await writeFile(promptPath, 'turn one');
+    const firstTurn = await fixture.service.send(task.taskId, promptPath, []);
+    await fixture.service.wait(task.taskId, firstTurn.turnId, 20_000, 20_000);
+    await writeFile(promptPath, 'turn two');
+    const secondTurn = await fixture.service.send(task.taskId, promptPath, []);
+    await fixture.service.wait(task.taskId, secondTurn.turnId, 20_000, 20_000);
+
+    const store = new StateStore(fixture.paths.database);
+    const taskRow = store.requireTask(task.taskId);
+    expect(taskRow.conversationId).toBe(`conversation-${task.taskId}`);
+    const turns = store.listTurns(task.taskId);
+    expect(turns).toHaveLength(2);
+    expect(turns[0]?.responsePath).not.toBe(turns[1]?.responsePath);
+    expect(turns[0]?.userTurnIdentity).not.toBe(turns[1]?.userTurnIdentity);
+    store.close();
+    expect(fixture.browser.expectedConversationIds).toEqual([null, `conversation-${task.taskId}`]);
+    expect(
+      await readFile(
+        join(fixture.paths.sessionsDirectory, task.taskId, 'turns', firstTurn.turnId, 'prompt.md'),
+        'utf8',
+      ),
+    ).toBe('turn one');
+    expect(
+      await readFile(
+        join(fixture.paths.sessionsDirectory, task.taskId, 'turns', secondTurn.turnId, 'prompt.md'),
+        'utf8',
+      ),
+    ).toBe('turn two');
+  });
+
+  it('keeps two tasks fully isolated while their waits overlap', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const firstTask = await fixture.start();
+    const secondTask = await fixture.start();
+    const firstPrompt = join(fixture.root, 'a.md');
+    const secondPrompt = join(fixture.root, 'b.md');
+    await Promise.all([writeFile(firstPrompt, 'a'), writeFile(secondPrompt, 'b')]);
+    fixture.browser.responseArtifacts.push(
+      { sourceUrl: 'sandbox:/mnt/data/only-a.txt', label: 'only-a.txt' },
+      { sourceUrl: 'sandbox:/mnt/data/only-b.txt', label: 'only-b.txt' },
+    );
+    const firstTurn = await fixture.service.send(firstTask.taskId, firstPrompt, []);
+    const secondTurn = await fixture.service.send(secondTask.taskId, secondPrompt, []);
+    fixture.browser.captureDelayMs = 30;
+
+    const [firstResult, secondResult] = await Promise.all([
+      fixture.service.wait(firstTask.taskId, firstTurn.turnId, 20_000, 20_000),
+      fixture.service.wait(secondTask.taskId, secondTurn.turnId, 20_000, 20_000),
+    ]);
+    expect(firstResult).toMatchObject({ status: 'completed' });
+    expect(secondResult).toMatchObject({ status: 'completed' });
+    expect(fixture.browser.maxConcurrentCaptures).toBe(2);
+    const store = new StateStore(fixture.paths.database);
+    expect(store.requireTask(firstTask.taskId).conversationId).toBe(`conversation-${firstTask.taskId}`);
+    expect(store.requireTask(secondTask.taskId).conversationId).toBe(`conversation-${secondTask.taskId}`);
+    expect(store.requireTask(firstTask.taskId).playwrightSession).not.toBe(
+      store.requireTask(secondTask.taskId).playwrightSession,
+    );
+    expect(store.listTurns(firstTask.taskId)[0]?.responsePath).not.toBe(
+      store.listTurns(secondTask.taskId)[0]?.responsePath,
+    );
+    store.close();
+    expect(fixture.browser.expectedConversationIds).toEqual([null, null]);
+  });
+});
+
 describe('BEH-012 returned file capture and recoverable publication', () => {
   it('returns completed with an empty artifact list when the reply has no files', async () => {
     const fixture = await serviceFixture();

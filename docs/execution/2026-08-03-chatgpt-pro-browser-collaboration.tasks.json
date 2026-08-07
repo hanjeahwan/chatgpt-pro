@@ -135,7 +135,7 @@
     {
       "id": "IMP-006",
       "title": "完成同会话多轮与跨任务真实并发",
-      "status": "pending",
+      "status": "implemented",
       "covers": ["BEH-005", "BEH-006"],
       "verifies": ["VER-005", "VER-006"],
       "dependsOn": ["IMP-003", "IMP-004", "IMP-005", "IMP-009", "IMP-010"],
