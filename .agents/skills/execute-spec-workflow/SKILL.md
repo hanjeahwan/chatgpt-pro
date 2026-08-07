@@ -31,7 +31,7 @@ description: 用于用户明确要求按 `docs/specs/*.md` 实现并提交、在
 | Child 已放行，存在可执行 IMP、实施者验证或 implementation finding 修复 | `references/implement-and-verify.md` |
 | 实施者已完成 task branch，等待最终候选、双重验证、Review 或集成        | `references/review-and-integrate.md` |
 
-Spec 在执行中变化时，返回准备阶段增量对账。Review finding 需要修复时，先由实施者执行实现与验证阶段，再由同一审查者复审。Implementation 阶段遇到产品决策、Spec 变化、需协调员执行的外部验证或未知项时，实施者报告并停止当前 dispatch；是否进入 Spike 由协调员决定。
+Spec 在执行中需要更新时，复用同一 task branch/worktree 返回准备阶段，并按 `prepare-and-dispatch.md` 的更新路径重新通过 Ready Gate 与 Child Gate。Review finding 需要修复时，先由实施者执行实现与验证阶段，再由同一审查者复审。Implementation 阶段遇到产品决策、需协调员执行的外部验证或未知项时，实施者报告当前影响；是否继续、更新 Spec 或进入 Spike 由协调员决定。
 
 ## 3. 协作边界
 

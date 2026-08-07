@@ -9,11 +9,11 @@
 - **目标分支仍是 task branch 的祖先**：直接使用 task branch 作为 integration candidate。
 - **目标分支已经前进，默认线性历史**：从当前成果分支创建新的 integration branch/worktree，并由协调员把该候选 rebase 到当前目标分支。首次生成时，当前成果分支是 task branch；再次生成时，当前成果分支是上一版 integration candidate。
 - **用户明确要求保留拓扑，或上游同步必须保留 merge 关系**：从当前成果分支创建新的 integration branch/worktree，并在该候选中合入当前目标分支。
-- **生成候选发生冲突**：协调员不解决代码冲突；实施者在 integration candidate 中解决、验证并提交。原 task branch 保持不变。
+- **生成候选发生冲突**：协调员把 integration candidate 交给实施者；实施者解决冲突、验证并提交，task branch 继续保存原隔离成果。
 
-协调员使用 `git merge-base --is-ancestor <target-branch> <current-result-branch>` 判断目标分支是否仍是当前成果分支的祖先，不维护额外的 base revision 字段。
+协调员使用 `git merge-base --is-ancestor <target-branch> <current-result-branch>` 判断目标分支是否仍是当前成果分支的祖先；Git 提交图是起点与祖先关系的运行时事实来源。
 
-task branch 只保存隔离任务成果。禁止为了同步目标分支而 merge 或 rebase task branch。首次候选从 task branch 派生；候选产生实现修复、Review finding 修复或账本收口提交后，后续候选从上一版候选派生，确保已完成的任务改动不会丢失。当前 integration candidate 是后续验证、Review 和集成的唯一对象。
+task branch 保存隔离任务成果，integration candidate 承担目标分支同步。首次候选从 task branch 派生；候选产生实现修复、Review finding 修复或账本收口提交后，后续候选从上一版候选派生，确保已完成的任务改动不会丢失。当前 integration candidate 是后续验证、Review 和集成的唯一对象。
 
 ## 2. 双重验证最终候选
 
@@ -79,7 +79,7 @@ Review 完成后，协调员把 Review Task、reviewer terminal 和结论交回�
 
 ## 8. 阶段完成条件
 
-- task branch 在完整实施期间未因目标分支推进而同步、merge 或 rebase；
+- task branch 完整保存 Spec、任务账本、实现和实施者验证形成的隔离成果；
 - integration candidate 由协调员在实施者完成 task branch 后，根据当前目标分支生成；
 - 实施者和协调员已依次验证最终 integration candidate；
 - 所有阻塞 finding 已由同一审查者明确关闭；

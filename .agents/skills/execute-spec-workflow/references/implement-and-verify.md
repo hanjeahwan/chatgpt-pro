@@ -8,11 +8,10 @@
 - 每个提交依次执行：实现、相关验证、自查 diff、修复、复验、commit。
 - 提交后立即在对应 IMP 中记录已取得的验证证据，不记录 Git revision。
 - 一个 dispatch 连续处理所有可执行 IMP，直到遇到产品决策、Spec 变化、需协调员执行的外部验证、阻塞 finding 或其他明确 decision boundary；禁止为每个 IMP 单独派发或提前结束。
-- 实现已提交到 task branch 且相关检查完成后标记 `implemented`，允许下游 IMP 开始。全量验证或 Review 尚未齐全时不得标记 `done`。
-- Spec 在执行中发生变化时停止受影响任务并报告协调员。返回准备阶段重新对账并通过 `check --ready` 后才能继续。
-- 遇到无法从当前 Spec 或已确认页面合同判定的事项时，只向协调员报告未知项及影响面；不自行创建或执行 Spike，也不修改 Spec 或 ADR。
+- 实现已提交到 task branch 且相关检查完成后标记 `implemented`，允许下游 IMP 开始；全量验证和 Review 齐全后标记 `done`。
+- 实施中需要更新 Spec 时，实施者停止受影响任务，提交已经完成且验证过的改动，并向协调员交回 clean task worktree。协调员按 `prepare-and-dispatch.md` 第 3 节更新 Spec 和账本；Child Gate 再次放行后，原 implementation terminal 继续实施。
+- 遇到无法从当前 Spec 或已确认页面合同判定的事项时，实施者向协调员报告未知项及影响面；协调员选择继续、更新 Spec、执行 Spike 或请求产品决策。
 - 到达停止条件或完成条件后发送一次 `worker_done`。协调员处理结果后，向实施者派发下一阶段。
-- 禁止跳过有效测试。
 
 ## 2. 验证场景预检
 

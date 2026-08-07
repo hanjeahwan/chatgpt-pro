@@ -12,7 +12,7 @@ flowchart TD
     F --> G["Verification Gate"]
     G --> H["Review Gate"]
     H --> I["Integration Gate"]
-    E -- "Spec 变化或产品决策" --> B
+    E -- "更新 Spec 或处理产品决策" --> B
     G -- "实现或证据缺口" --> E
     H -- "阻塞 finding" --> E
     I -- "目标分支前进" --> F
@@ -44,18 +44,17 @@ flowchart TD
 | 身份                    | 合同                                                                        |
 | ----------------------- | --------------------------------------------------------------------------- |
 | task worktree           | 从首次任务专属 Spec 或账本写入前开始，承载本任务完整生命周期的唯一 worktree |
-| task branch             | 从目标分支创建且实施期间不跟随目标分支的持久 Git 身份                       |
-| implementation terminal | Child Gate 后任务文件的唯一写入者；协调员只执行 Git 集成操作                |
+| task branch             | 从目标分支当前提交创建，承载 Spec、计划、实现和实施者验证的持久 Git 身份    |
+| implementation terminal | Child Gate 放行期间任务文件的唯一写入者；准备阶段由协调员维护实施输入       |
 | integration candidate   | 实施完成后由协调员根据当前目标分支生成的当前验证、Review 与集成候选         |
 | Review Task             | 当前 Review 上下文；同一 finding 的修复和复审保持在该上下文                 |
 | reviewer terminal       | Review Task 的只读审查者；独立新问题才使用新的 reviewer terminal            |
 
 Git revision 只用于运行时确认审查者检查的实现内容与最终集成内容相同，不作为 WORKFLOW 标识或任务账本结构化字段。
 
-- 协调员在首次写入本任务专属 Spec、任务账本或其他实施输入前，从目标分支创建 task branch，并在唯一 task worktree 中检出该分支。
-- task branch 创建后，目标分支的推进不触发同步或 rebase。Spec、任务账本、实现和实施者验证均在 task branch 上完成。
-- 实施完成后，协调员才检查目标分支，并通过 Git 祖先关系决定直接采用 task branch，或从 task branch 创建独立 integration candidate。
-- 禁止为同步目标分支而改写 task branch。
+- 协调员在首次写入本任务专属 Spec、任务账本或其他实施输入前，显式指定目标分支创建 task branch/worktree，并确认两者起始 `HEAD` 相同。
+- Spec、任务账本、实现和实施者验证均提交到 task branch。实施中需要更新 Spec 时，复用同一 task branch/worktree 返回准备阶段；Ready Gate 和 Child Gate 再次放行后继续实施。
+- 实施者完成 task branch 后，协调员检查目标分支，并通过 Git 祖先关系决定直接采用 task branch，或从当前成果分支创建 integration candidate。目标分支同步只在 integration candidate 上执行。
 
 ## 3. Spike 边界
 
@@ -87,7 +86,7 @@ Gate 只包括 Ready、Child、Verification、Review 和 Integration。Implement
 
 ## 5. 交付前检查
 
-- [ ] task branch 是否在首次任务专属写入前从目标分支创建，且实施期间没有因目标分支推进而同步或 rebase？
+- [ ] task branch 是否在首次任务专属写入前从明确的目标分支创建，且所有任务改动均保留在 task branch 或其 integration candidate？
 - [ ] task worktree、integration candidate、implementation terminal 和 Review 上下文是否唯一且可定位？
 - [ ] Ready、Child、Verification、Review 和 Integration Gate 是否均有当前证据？
 - [ ] Implementation 阶段是否完成全部可执行 IMP，并取得相关检查和证据？

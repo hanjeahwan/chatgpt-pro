@@ -96,10 +96,10 @@ description: 为已经成形的新 Spec 创建稳定的实施任务账本，或�
 node <skill-directory>/scripts/spec-tasks.ts diff --spec docs/specs/<spec>.md --ledger docs/execution/<spec>.tasks.json
 ```
 
-- 本 Skill 只创建或对账任务账本，不运行 Ready Gate。`check --ready` 由 `execute-spec-workflow` 在实施输入提交后从仓库根目录运行唯一一次；本 Skill 不在实施输入提交前运行它。
+- 本 Skill 只创建或对账任务账本，不运行 Ready Gate。`execute-spec-workflow` 在每个实施输入版本提交后，从仓库根目录运行一次 `check --ready`。
 - 实现提交到 task branch 后记录相关检查；每项 VER 通过后记录可复现命令或证据位置。
 - 实现已提交到 task branch 且相关检查完成后把任务设为 `implemented`；下游任务可依赖 `implemented` 或 `done`，不必等待全量验证和 Review。
-- Spec 在执行中变化时停止受影响实现，重新执行第 2、5、6 节；未受影响任务可以保留。
+- Spec 在执行中变化时，执行流程把 clean task worktree 的写入权交回协调员；本 Skill 重新执行第 2、5、6 节增量对账受影响任务，并保留未受影响任务。
 - Code Review 完成后记录 reviewer thread 或根 Review Task 及结论。实现、验证和 Review 证据齐全时把任务设为 `done`，再由 `WORKFLOW.md` 的 Integration Gate 独立核对证据语义。
 - Integration Gate 核对通过后运行 `check --final`。该命令只校验账本 schema、Spec 摘要、覆盖、依赖、状态和证据字段非空，不判断证据内容是否真实或相关。
 - 账本收口产生的纯状态或证据更新不得夹带 Spec 或实现变化。
@@ -123,4 +123,4 @@ node <skill-directory>/scripts/spec-tasks.ts diff --spec docs/specs/<spec>.md --
 - [ ] Spec 变化是否已经增量对账，而非整体重建？
 - [ ] 账本是否已交回执行流程，且 Ready Gate 的 `check --ready` 由 `execute-spec-workflow` 在实施输入提交后运行？
 
-完成条件：账本与当前 Spec 摘要一致，任务身份稳定、覆盖完整、依赖可执行，且没有 `blocked` 或 `invalidated` 任务进入实现；账本已交回执行流程，Ready Gate 的 `check --ready` 由 `execute-spec-workflow` 在实施输入提交后运行唯一一次。
+完成条件：账本与当前 Spec 摘要一致，任务身份稳定、覆盖完整、依赖可执行，且没有 `blocked` 或 `invalidated` 任务进入实现；账本已交回执行流程，Ready Gate 的 `check --ready` 由 `execute-spec-workflow` 在当前实施输入版本提交后运行一次。
