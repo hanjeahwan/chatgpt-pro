@@ -2348,12 +2348,29 @@ function uploadPreparationScript(expectedConversationId: string | null): string 
     }
     const plus = page.locator('[data-testid="composer-plus-btn"]');
     if (await plus.count() !== 1) throw new Error('page contract drift: composer plus button is not unique');
-    await plus.click();
-    const upload = page.getByText('Add photos & files', { exact: true });
-    await upload.waitFor({ state: 'visible', timeout: 10000 });
-    if (await upload.count() !== 1) throw new Error('page contract drift: upload action is not unique');
-    await upload.click();
-    return JSON.stringify({ protocol: '${PROTOCOL}', kind: 'upload-ready' });
+    let lastFailure = 'page contract drift: upload action was not visible';
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (attempt > 0) {
+        await page.keyboard.press('Escape');
+        await page.waitForTimeout(400);
+      }
+      await plus.click();
+      await page.waitForTimeout(500);
+      const upload = page.getByText('Add photos & files', { exact: true });
+      try {
+        await upload.waitFor({ state: 'visible', timeout: 10000 });
+      } catch {
+        lastFailure = 'page contract drift: upload action was not visible';
+        continue;
+      }
+      if (await upload.count() !== 1) {
+        lastFailure = 'page contract drift: upload action is not unique';
+        continue;
+      }
+      await upload.click();
+      return JSON.stringify({ protocol: '${PROTOCOL}', kind: 'upload-ready' });
+    }
+    throw new Error(lastFailure);
   }`;
 }
 
@@ -2391,16 +2408,20 @@ function sendScript(expectedConversationId: string | null, prompt: string): stri
       const turns = page.locator('[data-testid^="conversation-turn-"][data-turn]');
       if (await composer.count() !== 1) throw new Error('page contract drift: composer is not unique');
       if (await send.count() !== 1) throw new Error('page contract drift: send button is not unique');
-      const userCount = await turns.evaluateAll((elements) => {
-        return elements.filter((element) => element.getAttribute('data-turn') === 'user').length;
+      const userIds = await turns.evaluateAll((elements) => {
+        return elements
+          .filter((element) => element.getAttribute('data-turn') === 'user')
+          .map((element) => element.getAttribute('data-testid'));
       });
       await composer.fill(${JSON.stringify(prompt)});
       clicked = true;
       await send.click();
-      await page.waitForFunction((previousCount) => {
-        const elements = [...document.querySelectorAll('[data-testid^="conversation-turn-"][data-turn]')];
-        return elements.filter((element) => element.getAttribute('data-turn') === 'user').length > previousCount;
-      }, userCount, { timeout: 60000, polling: 100 });
+      await page.waitForFunction((knownIds) => {
+        const ids = [...document.querySelectorAll('[data-testid^="conversation-turn-"][data-turn="user"]')].map(
+          (element) => element.getAttribute('data-testid'),
+        );
+        return ids.some((id) => id !== null && !knownIds.includes(id));
+      }, userIds, { timeout: 120000, polling: 100 });
       const userTurnIdentity = await page.evaluate(() => {
         const elements = [...document.querySelectorAll('[data-testid^="conversation-turn-"][data-turn="user"]')];
         const last = elements.at(-1);
@@ -2897,12 +2918,17 @@ function downloadArtifactScript(
         throw new Error('page contract drift: artifact rows are not an unambiguous target subsequence');
       }
       const matchedIndex = discovered.occurrences.findIndex((artifact, index) => {
-        return index >= occurrenceCursor && artifact.basename === candidates[0].basename;
+        return (
+          index >= occurrenceCursor &&
+          artifact.basename === candidates[0].basename &&
+          !rowBySourceUrl.has(artifact.sourceUrl)
+        );
       });
-      const matchedArtifact = discovered.occurrences[matchedIndex];
-      if (!rowBySourceUrl.has(matchedArtifact.sourceUrl)) {
-        rowBySourceUrl.set(matchedArtifact.sourceUrl, rowIndex);
+      if (matchedIndex < 0) {
+        throw new Error('page contract drift: artifact row has no unmatched target with its basename');
       }
+      const matchedArtifact = discovered.occurrences[matchedIndex];
+      rowBySourceUrl.set(matchedArtifact.sourceUrl, rowIndex);
       occurrenceCursor = matchedIndex + 1;
     }
 
@@ -3087,12 +3113,33 @@ function autoVerifySubmissionScript(
         error: 'the current conversation differs from the bound task',
       });
     }
-    const visible = (element) => {
-      if (!(element instanceof HTMLElement)) return false;
-      const style = getComputedStyle(element);
-      return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
-    };
+    if (previousUserTurnIdentity !== null) {
+      await page.waitForFunction((anchorId) => {
+        const isVisible = (element) => {
+          if (!(element instanceof HTMLElement)) return false;
+          const style = getComputedStyle(element);
+          return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
+        };
+        return [...document.querySelectorAll('[data-testid^="conversation-turn-"][data-turn]')].filter(isVisible).some(
+          (element) => element.getAttribute('data-testid') === anchorId,
+        );
+      }, previousUserTurnIdentity, { timeout: 60000, polling: 100 });
+    } else {
+      await page.waitForFunction(() => {
+        const isVisible = (element) => {
+          if (!(element instanceof HTMLElement)) return false;
+          const style = getComputedStyle(element);
+          return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
+        };
+        return [...document.querySelectorAll('[data-testid^="conversation-turn-"][data-turn]')].filter(isVisible).length > 0;
+      }, undefined, { timeout: 60000, polling: 100 });
+    }
     const turnState = await page.evaluate(({ previous, expectedPrompt, names }) => {
+      const visible = (element) => {
+        if (!(element instanceof HTMLElement)) return false;
+        const style = getComputedStyle(element);
+        return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
+      };
       const elements = [...document.querySelectorAll('[data-testid^="conversation-turn-"][data-turn]')].filter(visible);
       let anchorIndex = -1;
       if (previous !== null) {
@@ -3104,11 +3151,12 @@ function autoVerifySubmissionScript(
         }
         anchorIndex = matches[0];
       }
+      const normalizeUserTurnText = (value) => value.replace(/^You said:\\s*/u, '').trim();
       const candidates = [];
       for (let index = anchorIndex + 1; index < elements.length; index += 1) {
         if (elements[index].getAttribute('data-turn') !== 'user') continue;
-        const text = (elements[index].textContent || '').trim();
-        if (text !== expectedPrompt) continue;
+        const text = normalizeUserTurnText(elements[index].textContent || '');
+        if (text !== expectedPrompt.trim()) continue;
         if (!names.every((name) => text.includes(name))) continue;
         candidates.push({ identity: elements[index].getAttribute('data-testid') });
       }
@@ -3200,9 +3248,31 @@ function resolveSubmittedScript(
         const style = getComputedStyle(element);
         return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
       };
-      return [...document.querySelectorAll('main h1, nav h1, header h1, [role="banner"] h1, main h2')]
-        .filter(visible).some((element) => element.textContent.trim() === target);
+      return [...document.querySelectorAll('*')].some((element) => {
+        return visible(element) && element.children.length === 0 && element.textContent.trim() === target;
+      });
     }, 'chatgpt-pro-collab', { timeout: 60000, polling: 250 });
+    if (previousUserTurnIdentity !== null) {
+      await page.waitForFunction((anchorId) => {
+        const visible = (element) => {
+          if (!(element instanceof HTMLElement)) return false;
+          const style = getComputedStyle(element);
+          return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
+        };
+        return [...document.querySelectorAll('[data-testid^="conversation-turn-"][data-turn]')].filter(visible).some(
+          (element) => element.getAttribute('data-testid') === anchorId,
+        );
+      }, previousUserTurnIdentity, { timeout: 60000, polling: 100 });
+    } else {
+      await page.waitForFunction(() => {
+        const visible = (element) => {
+          if (!(element instanceof HTMLElement)) return false;
+          const style = getComputedStyle(element);
+          return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
+        };
+        return [...document.querySelectorAll('[data-testid^="conversation-turn-"][data-turn]')].filter(visible).length > 0;
+      }, undefined, { timeout: 60000, polling: 100 });
+    }
     const turnState = await page.evaluate(({ previous, expectedPrompt, names }) => {
       const visible = (element) => {
         if (!(element instanceof HTMLElement)) return false;
@@ -3220,11 +3290,12 @@ function resolveSubmittedScript(
         }
         anchorIndex = matches[0];
       }
+      const normalizeUserTurnText = (value) => value.replace(/^You said:\\s*/u, '').trim();
       const candidates = [];
       for (let index = anchorIndex + 1; index < elements.length; index += 1) {
         if (elements[index].getAttribute('data-turn') !== 'user') continue;
-        const text = (elements[index].textContent || '').trim();
-        if (text !== expectedPrompt) continue;
+        const text = normalizeUserTurnText(elements[index].textContent || '');
+        if (text !== expectedPrompt.trim()) continue;
         const position = text.indexOf(names[0] || '');
         if (position < 0) continue;
         const ordered = names.every((name) => text.includes(name));
@@ -3279,13 +3350,13 @@ function resolveNotSubmittedScript(
     const previousUserTurnIdentity = ${JSON.stringify(previousUserTurnIdentity)};
     const prompt = ${JSON.stringify(prompt)};
     const attachmentNames = ${JSON.stringify(attachmentNames)};
-    const visible = (element) => {
-      if (!(element instanceof HTMLElement)) return false;
-      const style = getComputedStyle(element);
-      return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
-    };
     if (expectedConversationId === null) {
       await page.waitForFunction(() => {
+        const visible = (element) => {
+          if (!(element instanceof HTMLElement)) return false;
+          const style = getComputedStyle(element);
+          return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
+        };
         const urlOk = /^\\/g\\/g-p-[^/]+\\/project$/.test(location.pathname);
         const main = document.querySelector('main') ?? document.querySelector('[role="main"]');
         const titleOk = main !== null && [...main.querySelectorAll('h1')].some((element) => {
@@ -3304,12 +3375,22 @@ function resolveNotSubmittedScript(
         return match === null || match[1].startsWith('WEB:') ? null : match[1];
       };
       await page.waitForFunction((id) => {
+        const visible = (element) => {
+          if (!(element instanceof HTMLElement)) return false;
+          const style = getComputedStyle(element);
+          return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
+        };
         const match = /\\/c\\/([^/?#]+)\\/?$/.exec(location.pathname);
         return location.hostname === 'chatgpt.com' &&
           match !== null && !match[1].startsWith('WEB:') && match[1] === id &&
           [...document.querySelectorAll('#prompt-textarea')].filter(visible).length === 1;
       }, expectedConversationId, { timeout: 60000, polling: 250 });
       const state = await page.evaluate(({ previous, expectedPrompt, names }) => {
+        const visible = (element) => {
+          if (!(element instanceof HTMLElement)) return false;
+          const style = getComputedStyle(element);
+          return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
+        };
         const elements = [...document.querySelectorAll('[data-testid^="conversation-turn-"][data-turn]')]
           .filter(visible);
         let anchorIndex = -1;
@@ -3322,10 +3403,11 @@ function resolveNotSubmittedScript(
           }
           anchorIndex = matches[0];
         }
+        const normalizeUserTurnText = (value) => value.replace(/^You said:\\s*/u, '').trim();
         for (let index = anchorIndex + 1; index < elements.length; index += 1) {
           if (elements[index].getAttribute('data-turn') !== 'user') continue;
-          const text = (elements[index].textContent || '').trim();
-          if (text === expectedPrompt && names.every((name) => text.includes(name))) {
+          const text = normalizeUserTurnText(elements[index].textContent || '');
+          if (text === expectedPrompt.trim() && names.every((name) => text.includes(name))) {
             return { status: 'matching' };
           }
         }

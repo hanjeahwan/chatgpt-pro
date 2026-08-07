@@ -5,6 +5,7 @@ export interface ProjectSendPageFixture {
   setComposerText(text: string): void;
   setPathname(pathname: string): void;
   setProjectTitle(title: string): void;
+  setUploadMenuDelay(attempts: number): void;
   setUserTurnCount(count: number): void;
 }
 
@@ -69,6 +70,9 @@ export function projectSendPageFixture(initialPathname: string): ProjectSendPage
     archived: false,
     composerText: '',
     pathname: initialPathname,
+    plusAttempts: 0,
+    uploadItemReady: false,
+    uploadMenuDelay: 0,
     userTurnCount: 0,
   };
 
@@ -143,6 +147,9 @@ export function projectSendPageFixture(initialPathname: string): ProjectSendPage
       if (selector === '[data-testid="send-button"]') {
         return [new SendHtmlElement('button', '', { 'data-testid': 'send-button' })];
       }
+      if (selector === '[data-testid="composer-plus-btn"]') {
+        return [new SendHtmlElement('button', '', { 'data-testid': 'composer-plus-btn' })];
+      }
       if (selector === '[data-testid^="conversation-turn-"][data-turn]') {
         return turnElements();
       }
@@ -158,6 +165,14 @@ export function projectSendPageFixture(initialPathname: string): ProjectSendPage
           events.push('send-click');
           state.userTurnCount += 1;
           state.pathname = '/g/g-p-123-chatgpt-pro-collab/c/new-conversation';
+          return;
+        }
+        if (selector === '[data-testid="composer-plus-btn"]') {
+          events.push('plus-click');
+          state.plusAttempts += 1;
+          if (state.plusAttempts > state.uploadMenuDelay) {
+            state.uploadItemReady = true;
+          }
           return;
         }
         throw new Error(`fixture locator click is unsupported: ${selector}`);
@@ -191,13 +206,30 @@ export function projectSendPageFixture(initialPathname: string): ProjectSendPage
       return Promise.resolve(withSendGlobals(globals(), callback, argument));
     },
     getByText(text: string, _options: { readonly exact?: boolean }) {
-      const visible = state.archived && text === archivedMessage.textContent;
+      const archivedVisible = state.archived && text === archivedMessage.textContent;
+      const uploadVisible = text === 'Add photos & files' && state.uploadItemReady;
+      const visible = archivedVisible || uploadVisible;
       return {
         count() {
           return Promise.resolve(visible ? 1 : 0);
         },
         isVisible() {
           return Promise.resolve(visible);
+        },
+        async waitFor() {
+          if (!visible) {
+            throw new Error(`fixture text is absent: ${text}`);
+          }
+        },
+        async click() {
+          if (uploadVisible) {
+            events.push('upload-click');
+            return;
+          }
+          if (archivedVisible) {
+            return;
+          }
+          throw new Error('fixture upload action is absent');
         },
       };
     },
@@ -240,6 +272,13 @@ export function projectSendPageFixture(initialPathname: string): ProjectSendPage
     waitForTimeout() {
       return Promise.resolve();
     },
+    keyboard: {
+      async press(key: string) {
+        if (key !== 'Escape') {
+          throw new Error(`unsupported fixture keyboard key: ${key}`);
+        }
+      },
+    },
   };
 
   return {
@@ -260,6 +299,9 @@ export function projectSendPageFixture(initialPathname: string): ProjectSendPage
     },
     setUserTurnCount(count: number) {
       state.userTurnCount = count;
+    },
+    setUploadMenuDelay(attempts: number) {
+      state.uploadMenuDelay = attempts;
     },
   };
 }

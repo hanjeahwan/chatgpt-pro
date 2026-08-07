@@ -404,6 +404,24 @@ describe('BEH-003 first send stays inside the fixed Project composer', () => {
     expect(fixture.events).toEqual(['send-click']);
   });
 
+  it('retries the upload menu when the upload action renders late', async () => {
+    const fixture = await executableProjectSendFixture({
+      initialPathname: '/g/g-p-123/project',
+      beforePrepareUpload: (pageFixture) => {
+        pageFixture.setUploadMenuDelay(1);
+      },
+    });
+    await writeFile(fixture.paths.seedState, '{}');
+    await writeFile(join(fixture.paths.root, 'a.txt'), 'a');
+
+    const result = await fixture.browser.send('task-a', 'session-a', null, 'exact prompt', [
+      join(fixture.paths.root, 'a.txt'),
+    ]);
+
+    expect(result).toMatchObject({ status: 'submitted' });
+    expect(fixture.events).toEqual(['plus-click', 'plus-click', 'upload-click', 'send-click']);
+  });
+
   it('rejects a first send whose page is on the home root before the preflight', async () => {
     const fixture = await executableProjectSendFixture({ initialPathname: '/' });
 
@@ -1051,6 +1069,54 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     },
   );
 
+  it('maps a same-name target to its artifact row even when a duplicate occurrence sits between them', async () => {
+    const firstSource = 'sandbox:/mnt/data/a/readme.txt';
+    const secondSource = 'sandbox:/mnt/data/b/readme.txt';
+    const fixture = await executableBrowserFixture({
+      responseHtml: [
+        '<a href="sandbox:/mnt/data/report.html">report</a>',
+        '<a href="sandbox:/mnt/data/archive.zip">archive</a>',
+        '<a href="sandbox:/mnt/data/image.png">image</a>',
+        '<a href="sandbox:/mnt/data/main.py">main</a>',
+        `<a href="${firstSource}">first</a>`,
+        `<a href="${firstSource}">first again</a>`,
+        `<a href="${secondSource}">second</a>`,
+      ].join(''),
+      behaviorButtonCount: 7,
+      artifactRows: ['report.html', 'archive.zip', 'image.png', 'main.py', 'readme.txt', 'readme.txt'],
+      suggestedFilename: 'readme.txt',
+      directDownloadDisabled: true,
+    });
+    const temporaryPath = join(fixture.root, 'second-readme.tmp');
+
+    await expect(
+      fixture.browser.downloadArtifact(
+        'task-a',
+        'session-a',
+        'conversation-a',
+        [
+          'sandbox:/mnt/data/report.html',
+          'sandbox:/mnt/data/archive.zip',
+          'sandbox:/mnt/data/image.png',
+          'sandbox:/mnt/data/main.py',
+          firstSource,
+          secondSource,
+        ],
+        secondSource,
+        temporaryPath,
+        5000,
+        new AbortController().signal,
+      ),
+    ).resolves.toMatchObject({ sourceUrl: secondSource, suggestedFilename: 'readme.txt' });
+    expect(fixture.events).toContain('download:artifact');
+    expect(
+      fixture.events.some((event) => {
+        return event === 'download:direct';
+      }),
+    ).toBe(false);
+    await expect(readFile(temporaryPath, 'utf8')).resolves.toBe('downloaded readme.txt');
+  });
+
   it('executes a missing download event and preserves the browser timeout failure code', async () => {
     const sourceUrl = 'sandbox:/mnt/data/result.txt';
     const fixture = await executableBrowserFixture({
@@ -1525,6 +1591,7 @@ function expectNoProjectModifyEvents(events: readonly string[]): void {
 async function executableProjectSendFixture(options: {
   readonly initialPathname: string;
   readonly beforeSubmit?: (pageFixture: ReturnType<typeof projectSendPageFixture>) => void;
+  readonly beforePrepareUpload?: (pageFixture: ReturnType<typeof projectSendPageFixture>) => void;
 }) {
   const root = await mkdtemp(join(tmpdir(), 'collab-project-send-'));
   const paths = collabPaths(root);
@@ -1536,6 +1603,9 @@ async function executableProjectSendFixture(options: {
     try {
       if (invocation.arguments.includes('run-code')) {
         const scriptPath = invocation.arguments[invocation.arguments.indexOf('--filename') + 1] ?? '';
+        if (basename(scriptPath).startsWith('prepare-upload')) {
+          options.beforePrepareUpload?.(pageFixture);
+        }
         if (basename(scriptPath).startsWith('send-')) {
           options.beforeSubmit?.(pageFixture);
         }

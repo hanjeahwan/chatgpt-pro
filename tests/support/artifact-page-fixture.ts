@@ -8,6 +8,7 @@ export interface ArtifactPageOptions {
   readonly includeLaterTurn?: boolean;
   readonly artifactRows?: readonly string[];
   readonly unrelatedRowControls?: boolean;
+  readonly directDownloadDisabled?: boolean;
   readonly downloadEvent?: 'success' | 'timeout';
   readonly suggestedFilename?: string;
 }
@@ -102,6 +103,9 @@ export function artifactPageFixture(options: ArtifactPageOptions): ArtifactPageF
 
   const behaviorButtons = Array.from({ length: options.behaviorButtonCount }, () => {
     return visibleControl(() => {
+      if (options.directDownloadDisabled === true) {
+        throw new Error('fixture direct download is disabled');
+      }
       return triggerDownload('direct');
     });
   });

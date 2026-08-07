@@ -688,7 +688,8 @@ export class StateStore {
       }
       if (
         task.conversationId !== null &&
-        (task.conversationId !== conversationId || task.conversationUrl !== conversationUrl)
+        (task.conversationId !== conversationId ||
+          conversationIdOf(task.conversationUrl) !== conversationIdOf(conversationUrl))
       ) {
         throw new StateError('CONVERSATION_MISMATCH', `task is already bound to a different conversation: ${taskId}`);
       }
@@ -850,7 +851,8 @@ export class StateStore {
       }
       if (
         task.conversationId !== null &&
-        (task.conversationId !== conversationId || task.conversationUrl !== conversationUrl)
+        (task.conversationId !== conversationId ||
+          conversationIdOf(task.conversationUrl) !== conversationIdOf(conversationUrl))
       ) {
         throw new StateError('CONVERSATION_MISMATCH', `task is already bound to a different conversation: ${taskId}`);
       }
@@ -1859,6 +1861,21 @@ export class StateStore {
       throw error;
     }
   }
+}
+
+/**
+ * Extracts the canonical conversation identity from a plain or project-scoped canonical URL.
+ *
+ * @param url Canonical conversation URL, plain `/c/<id>` or project-scoped.
+ * @returns The trailing conversation identifier, or null when the URL is not canonical.
+ * @throws {Error} This pure parser does not throw for string inputs.
+ */
+function conversationIdOf(url: string | null): string | null {
+  if (url === null) {
+    return null;
+  }
+  const match = /\/c\/([^/?#]+)\/?$/u.exec(url);
+  return match === null || match[1] === undefined || match[1].startsWith('WEB:') ? null : match[1];
 }
 
 /**

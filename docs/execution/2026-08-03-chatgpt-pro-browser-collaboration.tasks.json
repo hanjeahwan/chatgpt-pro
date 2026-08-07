@@ -46,9 +46,9 @@
           "pnpm format:check",
           "pnpm lint",
           "pnpm typecheck",
-          "pnpm test (179 passed)",
-          "VER-001 前置条件仅措辞修订（提及 Power 控件），无代码行为变化；setup journal 恢复路径检查重跑",
-          "VER-001 live 登录验证待协调员执行"
+          "pnpm test (181 passed)",
+          "VER-001 live 最终轮：scratch HOME 下 SIGKILL 中断 setup login wait → 无 seed、无 committed setup op（login/effect-unknown 保留）、无成功输出，setup 浏览器残留会话随后由 resume 关闭；将生产 seed 复制入 scratch auth 后重跑 setup → 跳过重新登录、关闭记录 session、自动 commit（evidence: seedValidated/sessionClosed true）；生产 seed sha256 前后一致（3e4b106c…）未被改写",
+          "VER-001 两任务同 seed：9958178a/e7e820ec 并发 start 均 ok，seed 未改写（IMP-009 证据保留）"
         ],
         "reviews": []
       }
@@ -66,7 +66,7 @@
           "pnpm format:check",
           "pnpm lint",
           "pnpm typecheck",
-          "pnpm test (147 passed)",
+          "pnpm test (181 passed)",
           "tests/audit.test.ts: text/artifact order and paths after close + process restart, host prompt rewrite keeps saved copy, automatic vs human resolution evidence, task journal readability after close"
         ],
         "reviews": []
@@ -85,9 +85,10 @@
           "pnpm format:check",
           "pnpm lint",
           "pnpm typecheck",
-          "pnpm test (179 passed)",
-          "代码未变，零基 Power 合同依赖链后重跑全量；send 账本、needs-decision、draft 恢复与单归档附件检查保持通过",
-          "VER-003/VER-013 live Web 与宿主 forward 验证仍待最终轮"
+          "pnpm test (181 passed)",
+          "VER-003 live 最终轮：任务 977eff11 上传附件后提交放行前 SIGKILL → recover 走 auto-verify（真实页面），turn 进入 needs-decision/unknown-submission，未产生 user turn；resolve-submission not-submitted 页面验证安全 composer 后 turn 置 failed；随后显式 send 才产生新 user turn（conversation-turn-7）并 completed；composer 无残留附件",
+          "修复 autoVerifySubmissionScript/resolveNotSubmittedScript 中 page.evaluate/waitForFunction 回调引用外部 visible 的闭包 bug（live recover 暴露 ReferenceError），修复后 recover/resolve 全链路 live 重验通过；181 测试全绿",
+          "VER-013 live：977eff11 tar.gz（108 普通文件、marker/checksum 与本地一致）+ 115b43c3 zip（108 普通文件、marker 一致）forward test 均 completed；上传菜单竞态修复（3 次重试 + Escape）live 验证通过"
         ],
         "reviews": []
       }
@@ -105,9 +106,9 @@
           "pnpm format:check",
           "pnpm lint",
           "pnpm typecheck",
-          "pnpm test (179 passed)",
-          "代码未变，依赖链后重跑全量；persisted user turn 锚定观察与单次 wait 检查保持通过",
-          "VER-004/VER-014 live 剪贴板与宿主 forward 验证仍待最终轮"
+          "pnpm test (181 passed)",
+          "VER-004 live：任务 e67a20a8 长文本+代码 turn（ea10fa9b Rust 所有权、82884ab1 cgroup v2，response.md 24510 bytes）completed，artifactPaths 空；页面刷新后按同一 user turn identity（conversation-turn-11）重判 completed，重复 wait 返回同一 responsePath 且旧 response 未被覆盖",
+          "VER-014 live：1ms observation-expiry→pending 单次 wait 返回单一 terminal JSON、stderr 空、无中间输出；捕获超时/真实错误由确定性夹具覆盖"
         ],
         "reviews": []
       }
@@ -125,9 +126,8 @@
           "pnpm format:check",
           "pnpm lint",
           "pnpm typecheck",
-          "pnpm test (179 passed)",
-          "代码未变，依赖链后重跑全量；返回文件捕获与可恢复发布检查保持通过",
-          "VER-015 live ChatGPT Web 文件 UI 验证仍待最终轮"
+          "pnpm test (181 passed)",
+          "VER-015 live：任务 eab98061 turn 84eb8272 返回 report.html/archive.zip/image.png/main.py/readme.txt/readme(1).txt 六个 sandbox 文件按序落盘，同名 readme.txt 以逻辑 URL 区分且本地不覆盖；artifact 行与本地文件齐全"
         ],
         "reviews": []
       }
@@ -145,9 +145,9 @@
           "pnpm format:check",
           "pnpm lint",
           "pnpm typecheck",
-          "pnpm test (179 passed)",
-          "代码未变，依赖链后重跑全量；同会话多轮与跨任务并发检查保持通过",
-          "VER-005/VER-006 live 上下文证据仍待最终轮"
+          "pnpm test (181 passed)",
+          "VER-005 live：e67a20a8 同一 conversation（6a759c72）内 7 个 completed turn，第二 turn 引用上轮状态转换表并续写，turn 文件独立",
+          "VER-006 live：e67a20a8 与 977eff11 两个 named session 并发 send + 并发 wait，两 wait 窗口重叠（首个 120s 窗口双双 pending 到期），随后各自 completed，transcript 分别归属正确任务"
         ],
         "reviews": []
       }
@@ -165,9 +165,9 @@
           "pnpm format:check",
           "pnpm lint",
           "pnpm typecheck",
-          "pnpm test (179 passed)",
-          "代码未变，依赖链后重跑全量；closing 状态与归档账本恢复检查保持通过",
-          "VER-008/VER-009 live Web 归档界面验证待协调员执行"
+          "pnpm test (181 passed)",
+          "VER-008 live：close SIGKILL 中断后任务保持 closing（op close 保留），status.nextAction=close，recover 不重建 session，并发 close 只完成一次 closed，重复 close alreadyClosed；named session 与浏览器进程消失",
+          "VER-009 live：115b43c3 archive 提交（evidence archived:true bindingRestored:true），页面回到 canonical 绑定，随后 send/wait 使用相同 conversation 标识（6a75a971）并 completed；close 不归档 Web（e67a20a8 close 后 conversation 仍在）"
         ],
         "reviews": []
       }
@@ -185,10 +185,12 @@
           "pnpm format:check",
           "pnpm lint",
           "pnpm typecheck",
-          "pnpm test (179 passed)",
-          "代码未变，依赖链后重跑全量；跨进程崩溃恢复、状态快照与恢复矩阵检查保持通过",
-          "VER-010/VER-012 可执行部分已重跑（两种 CLI 入口 help、node:sqlite smoke、playwright-cli help/list 均 exit 0）",
-          "VER-007/VER-011/VER-016 中涉及 live 页面与外部资源的项目仍待最终轮"
+          "pnpm test (181 passed)",
+          "VER-007 live：修改原 prompt-e4.md 后 close e67a20a8，新 CLI 进程复读 SQLite/turn 目录，prompt/response/artifact 原内容保留（149/24510 bytes），同名 prompt 两 turn 独立；human 裁决 op（df0b5e38/798a287c）evidence 含 decision/canonicalUrl/pageVerification/resolution_source",
+          "VER-010：format:check/lint/typecheck/test(181)/pnpm collab help/Skill 绝对路径 help（无 package.json 临时目录）均 exit 0",
+          "VER-011：确定性并发与故障注入测试套件全绿（state-concurrency 11、browser 63、collab 69）",
+          "VER-012：node v22.19.0 与 v25.9.0 node:sqlite DatabaseSync 内存 smoke 均 exit 0；最小 .ts 入口 smoke exit 0；playwright-cli help/raw list 均 exit 0",
+          "VER-016 live：submitted 裁决两例（human）已绑定唯一 user turn；not-submitted 裁决 live 验证安全 composer 后 turn failed；浏览器被杀后 recover 重建唯一 named session 并恢复 canonical conversation（977eff11）；closing 任务 recover 不重建"
         ],
         "reviews": []
       }
@@ -206,13 +208,9 @@
           "pnpm format:check",
           "pnpm lint",
           "pnpm typecheck",
-          "pnpm test (179 passed)",
-          "零基 Power 合同（Spec 修订 1298135）：五档 slider 使用 aria-valuemin=0/aria-valuemax=4，第五级为 aria-valuenow==aria-valuemax==4，不得硬编码 max==5；confirmPower 以 powerAtFifthLevel（now==max==4 && min==0）判定，Home+ArrowRight 键控按回读差推进",
-          "live 模型菜单修复：真实菜单含两个 [role=menuitem][aria-haspopup]（Model 与 Effort），模型项文本为 ModelGPT-5.6 Sol（无空格）；openModelSubmenu 改为按 /^Model/ 前缀唯一定位并点击，readCurrentMenu 模型读回去除空格前缀；子菜单为精确名 menuitemradio（GPT-5.6 Sol/GPT-5.5/o3）",
-          "确定性回归：默认夹具建模真实菜单（Effort opener + ModelGPT-5.6 Sol 无空格文本 + 零基 slider）；旧全局 opener 代码在夹具下精确复现 live 失败消息（start task: model submenu opener is not unique），旧 max==5 代码精确复现零基不通过，新代码全绿",
-          "live VER-001/VER-002 已由实施者执行并通过：两个全新 canonical UUID 9958178a-cdbf-4475-b834-6f96bd3cf6b1 与 e7e820ec-ceeb-442b-a351-20a20eb423de 并发 start 均 ok:true；独立 named session（chatgpt-pro-collab-<uuid>）、browser PID（66822/66821）、context marker（c33e9e3d.../3f520752...）与 session 目录；两任务 SQLite evidence 均为 projectIdentity 6a72a51fc0ac81919292bcd8e256bb56、modelConfirmed true、powerConfirmed true、powerNow 4、powerMin 0、powerMax 4；页面 URL https://chatgpt.com/g/g-p-6a72a51fc0ac81919292bcd8e256bb56/project；seed sha256 前后一致未被改写；playwright list 两 session open（in-memory、headed）",
-          "清理：两个任务均已 close（wasOpen true→closed，closed_at 记录），playwright list 为 no browsers；现场证据保留于 ~/.local/chatgpt-pro-collab/sessions/{9958178a,e7e820ec}-*/playwright/",
-          "VER-002 的首次发送与中断重试 live 部分、VER-001 的 setup 中断 live 部分仍属最终轮验证范围"
+          "pnpm test (181 passed)",
+          "VER-002 live 最终轮：start SIGKILL 中断（session 打开后）→ 同 taskId 重试恢复同一任务并 ok（54f13238，starting→active）；绑定前并发重复 start 同一 taskId 只产生一条 task 记录、一个 named session、一个 committed start op（1224e89e）；已绑定任务再次 start 返回 TASK_CONFLICT 且无浏览器副作用（e67a20a8）；两个全新 UUID 并发 start 均 ok、独立 session/pid/context/dir（9958178a/e7e820ec，IMP-009 前轮证据保留）",
+          "live 首次发送：e67a20a8（含 ws+ext 附件）与 eab98061（prompt-F）首次 send 均提交并绑定 conversation，user turn identity 记录"
         ],
         "reviews": []
       }
