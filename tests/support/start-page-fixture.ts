@@ -215,8 +215,9 @@ export function startPageFixture(options: StartPageOptions): StartPageFixture {
     plusMenuTrigger: options.plusMenuTrigger ?? false,
     powerKeysApplies: options.powerKeysApplies ?? true,
     powerInitiallyMax: options.powerInitiallyMax ?? false,
-    powerMax: 5,
-    powerNow: (options.powerInitiallyMax ?? false) ? 5 : 2,
+    powerMax: 4,
+    powerMin: 0,
+    powerNow: (options.powerInitiallyMax ?? false) ? 4 : 2,
     powerSliderPresent: options.powerSliderPresent ?? true,
     projectLoadsRows: options.projectLoadsRows ?? true,
     projectRowCount: options.projectRowCount ?? 1,
@@ -284,7 +285,7 @@ export function startPageFixture(options: StartPageOptions): StartPageFixture {
     if (key === 'Home') {
       events.push('power-home');
       if (state.powerKeysApplies) {
-        state.powerNow = 1;
+        state.powerNow = state.powerMin;
       }
       return;
     }
@@ -382,7 +383,7 @@ export function startPageFixture(options: StartPageOptions): StartPageFixture {
 
   const modelItem = node(
     'div',
-    `Model ${state.currentModel}`,
+    `Model${state.currentModel}`,
     { 'role': 'menuitem', 'aria-haspopup': 'menu' },
     [],
     () => {
@@ -395,19 +396,20 @@ export function startPageFixture(options: StartPageOptions): StartPageFixture {
   Object.defineProperty(modelItem, 'textContent', {
     configurable: true,
     get() {
-      return `Model ${state.currentModel}`;
+      return `Model${state.currentModel}`;
     },
   });
   const modelOpeners: StartDomNode[] = Array.from({ length: state.modelOpenerCount }, () => {
     return modelItem;
   });
+  const effortOpener = node('div', 'EffortPro', { 'role': 'menuitem', 'aria-haspopup': 'menu' }, [], () => {}, 'first');
 
   const powerSlider = node(
     'div',
     `Medium, ${state.powerNow} of ${state.powerMax}`,
     {
       'role': 'slider',
-      'aria-valuemin': '1',
+      'aria-valuemin': '0',
       'aria-valuenow': String(state.powerNow),
       'aria-valuemax': String(state.powerMax),
       'tabindex': '0',
@@ -424,7 +426,7 @@ export function startPageFixture(options: StartPageOptions): StartPageFixture {
   });
   const powerSliders: StartDomNode[] = state.powerSliderPresent ? [powerSlider] : [];
   const firstLayer = node('div', '', { role: 'menu' });
-  setChildren(firstLayer, [...modelOpeners, ...powerSliders]);
+  setChildren(firstLayer, [...modelOpeners, effortOpener, ...powerSliders]);
 
   const modelRadios: StartDomNode[] = (['GPT-5.6 Sol', 'GPT-5.5', 'GPT-5.3', 'o3'] as const)
     .filter((model) => {

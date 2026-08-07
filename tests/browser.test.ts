@@ -75,8 +75,9 @@ describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
         projectId: 'g-p-123',
         modelConfirmed: true,
         powerConfirmed: true,
-        powerNow: 5,
-        powerMax: 5,
+        powerNow: 4,
+        powerMin: 0,
+        powerMax: 4,
       }),
     ]);
     await writeFile(fixture.paths.seedState, '{}');
@@ -90,8 +91,9 @@ describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
       projectId: 'g-p-123',
       modelConfirmed: true,
       powerConfirmed: true,
-      powerNow: 5,
-      powerMax: 5,
+      powerNow: 4,
+      powerMin: 0,
+      powerMax: 4,
       persistent: false,
     });
     expect(fixture.invocations[0]?.arguments).toEqual([
@@ -187,8 +189,9 @@ describe('BEH-002 fixed Project and GPT-5.6 Sol Power 5/5 start context', () => 
     expect(result).toMatchObject({
       modelConfirmed: true,
       powerConfirmed: true,
-      powerNow: 5,
-      powerMax: 5,
+      powerNow: 4,
+      powerMin: 0,
+      powerMax: 4,
     });
     expect(fixture.events).toEqual([
       'project-row-click',
@@ -227,7 +230,7 @@ describe('BEH-002 fixed Project and GPT-5.6 Sol Power 5/5 start context', () => 
     const result = await fixture.browser.startTask('task-a', 'session-a', fixture.paths.seedState);
 
     expect(result.contextMarker).toBeTruthy();
-    expect(result).toMatchObject({ powerNow: 5, powerMax: 5 });
+    expect(result).toMatchObject({ powerNow: 4, powerMin: 0, powerMax: 4 });
     expect(fixture.events).toEqual(['project-row-click', 'selector-click', 'selector-click']);
   });
 
@@ -1273,8 +1276,9 @@ describe('BEH-013 browser boundary support', () => {
         projectId: 'g-p-123',
         modelConfirmed: true,
         powerConfirmed: true,
-        powerNow: 5,
-        powerMax: 5,
+        powerNow: 4,
+        powerMin: 0,
+        powerMax: 4,
       }),
       output('Sessions:\n  - name: session-a\n    state: open\n    pid: 4123\n'),
     ]);
@@ -1289,8 +1293,9 @@ describe('BEH-013 browser boundary support', () => {
       projectId: 'g-p-123',
       modelConfirmed: true,
       powerConfirmed: true,
-      powerNow: 5,
-      powerMax: 5,
+      powerNow: 4,
+      powerMin: 0,
+      powerMax: 4,
       persistent: false,
     });
     expect(

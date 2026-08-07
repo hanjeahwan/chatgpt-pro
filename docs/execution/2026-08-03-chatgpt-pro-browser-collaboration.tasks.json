@@ -86,8 +86,8 @@
           "pnpm lint",
           "pnpm typecheck",
           "pnpm test (179 passed)",
-          "代码未变，依赖链（IMP-009 Power 修订）后重跑全量；send 账本、needs-decision、draft 恢复与单归档附件检查保持通过",
-          "VER-003/VER-013 live Web 与宿主 forward 验证待协调员执行"
+          "代码未变，零基 Power 合同依赖链后重跑全量；send 账本、needs-decision、draft 恢复与单归档附件检查保持通过",
+          "VER-003/VER-013 live Web 与宿主 forward 验证仍待最终轮"
         ],
         "reviews": []
       }
@@ -107,7 +107,7 @@
           "pnpm typecheck",
           "pnpm test (179 passed)",
           "代码未变，依赖链后重跑全量；persisted user turn 锚定观察与单次 wait 检查保持通过",
-          "VER-004/VER-014 live 剪贴板与宿主 forward 验证待协调员执行"
+          "VER-004/VER-014 live 剪贴板与宿主 forward 验证仍待最终轮"
         ],
         "reviews": []
       }
@@ -127,7 +127,7 @@
           "pnpm typecheck",
           "pnpm test (179 passed)",
           "代码未变，依赖链后重跑全量；返回文件捕获与可恢复发布检查保持通过",
-          "VER-015 live ChatGPT Web 文件 UI 验证待协调员执行"
+          "VER-015 live ChatGPT Web 文件 UI 验证仍待最终轮"
         ],
         "reviews": []
       }
@@ -147,7 +147,7 @@
           "pnpm typecheck",
           "pnpm test (179 passed)",
           "代码未变，依赖链后重跑全量；同会话多轮与跨任务并发检查保持通过",
-          "VER-005/VER-006 live 上下文证据待协调员执行"
+          "VER-005/VER-006 live 上下文证据仍待最终轮"
         ],
         "reviews": []
       }
@@ -187,8 +187,8 @@
           "pnpm typecheck",
           "pnpm test (179 passed)",
           "代码未变，依赖链后重跑全量；跨进程崩溃恢复、状态快照与恢复矩阵检查保持通过",
-          "VER-010/VER-012 可执行部分已重跑（两种 CLI 入口 help、Node v25.9.0、node:sqlite smoke、playwright-cli help/list 均 exit 0）",
-          "VER-007/VER-011/VER-016 中涉及 live 页面与外部资源的项目待协调员执行"
+          "VER-010/VER-012 可执行部分已重跑（两种 CLI 入口 help、node:sqlite smoke、playwright-cli help/list 均 exit 0）",
+          "VER-007/VER-011/VER-016 中涉及 live 页面与外部资源的项目仍待最终轮"
         ],
         "reviews": []
       }
@@ -207,15 +207,12 @@
           "pnpm lint",
           "pnpm typecheck",
           "pnpm test (179 passed)",
-          "用户裁决：固定 GPT-5.6 Sol + Power 5/5（Spec 已由协调员修订，Ready Gate 已在 main 0f08d8c 通过）",
-          "start 脚本改为：打开唯一模型/Power 菜单（沿用 send/composer-plus 身份排除的 selectorControl），把唯一 Power slider 经 focus+End 设置到最大并回读 aria-valuenow == aria-valuemax 且 max==5；模型经当前模型项（Model <model>）/模型子菜单读回与选择 GPT-5.6 Sol；联合回读后才返回成功",
-          "确定性回归：start-page-fixture 以 Model 项 + Power slider 建模新菜单合同；成功/已选中/滑块缺失/End 不可回读/模型缺失/模型重置 Power 联合失败/plus 菜单 aria-haspopup/opener 缺失等夹具全绿；旧代码在 plusMenuTrigger 下精确复现 live 失败消息",
-          "start evidence 改为 projectIdentity/modelConfirmed/powerConfirmed/powerNow/powerMax",
-          "VER-002 live 重跑待协调员执行；2026-08-07 两次 live 失败现场（a1b558c6/3abda0f6/ad1aec41/33141986）均因旧 Pro menuitemradio 合同失效，已由用户裁决与本次实现取代",
-          "Power slider 键控修复（2026-08-07 live 第二次失败）：task 3c94621d/3493d04b 在 e2a8a0a 上真实 Web 返回 SELECTION_UNCONFIRMED fixed Power could not be set to the maximum level with aria-valuenow == aria-valuemax；协调员 power-contract-probe 证明真实 slider 的可用键控为 locator.press Home/ArrowRight（End 不移动值），aria-valuenow/aria-valuemax 数值状态可回读",
-          "最小修复：confirmPower 由 focus+End 改为 slider.press('Home') 后按回读差 press('ArrowRight') 到最大值，仍回读 aria-valuenow == aria-valuemax == 5；fixture 建模真实键控（End 静默忽略、Home/ArrowRight 生效）",
-          "确定性回归：旧 End 代码在夹具下精确复现同一 live 失败消息（start task: fixed Power could not be set to the maximum level with aria-valuenow == aria-valuemax），新代码通过；成功事件序列含 power-home + 4×power-arrow-right",
-          "VER-002 live 重跑仍待协调员执行，未声称 live VER 通过"
+          "零基 Power 合同（Spec 修订 1298135）：五档 slider 使用 aria-valuemin=0/aria-valuemax=4，第五级为 aria-valuenow==aria-valuemax==4，不得硬编码 max==5；confirmPower 以 powerAtFifthLevel（now==max==4 && min==0）判定，Home+ArrowRight 键控按回读差推进",
+          "live 模型菜单修复：真实菜单含两个 [role=menuitem][aria-haspopup]（Model 与 Effort），模型项文本为 ModelGPT-5.6 Sol（无空格）；openModelSubmenu 改为按 /^Model/ 前缀唯一定位并点击，readCurrentMenu 模型读回去除空格前缀；子菜单为精确名 menuitemradio（GPT-5.6 Sol/GPT-5.5/o3）",
+          "确定性回归：默认夹具建模真实菜单（Effort opener + ModelGPT-5.6 Sol 无空格文本 + 零基 slider）；旧全局 opener 代码在夹具下精确复现 live 失败消息（start task: model submenu opener is not unique），旧 max==5 代码精确复现零基不通过，新代码全绿",
+          "live VER-001/VER-002 已由实施者执行并通过：两个全新 canonical UUID 9958178a-cdbf-4475-b834-6f96bd3cf6b1 与 e7e820ec-ceeb-442b-a351-20a20eb423de 并发 start 均 ok:true；独立 named session（chatgpt-pro-collab-<uuid>）、browser PID（66822/66821）、context marker（c33e9e3d.../3f520752...）与 session 目录；两任务 SQLite evidence 均为 projectIdentity 6a72a51fc0ac81919292bcd8e256bb56、modelConfirmed true、powerConfirmed true、powerNow 4、powerMin 0、powerMax 4；页面 URL https://chatgpt.com/g/g-p-6a72a51fc0ac81919292bcd8e256bb56/project；seed sha256 前后一致未被改写；playwright list 两 session open（in-memory、headed）",
+          "清理：两个任务均已 close（wasOpen true→closed，closed_at 记录），playwright list 为 no browsers；现场证据保留于 ~/.local/chatgpt-pro-collab/sessions/{9958178a,e7e820ec}-*/playwright/",
+          "VER-002 的首次发送与中断重试 live 部分、VER-001 的 setup 中断 live 部分仍属最终轮验证范围"
         ],
         "reviews": []
       }

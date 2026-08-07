@@ -954,7 +954,14 @@ describe('BEH-002 caller-provided task start', () => {
         kind: 'start',
         phase: 'committed',
         resolutionSource: 'automatic',
-        evidence: { projectIdentity: 'g-p-123', modelConfirmed: true, powerConfirmed: true, powerNow: 5, powerMax: 5 },
+        evidence: {
+          projectIdentity: 'g-p-123',
+          modelConfirmed: true,
+          powerConfirmed: true,
+          powerNow: 4,
+          powerMin: 0,
+          powerMax: 4,
+        },
       },
     ]);
     store.close();
@@ -1863,8 +1870,9 @@ class FakeBrowser implements CollabBrowser {
       projectId: 'g-p-123',
       modelConfirmed: true,
       powerConfirmed: true,
-      powerNow: 5,
-      powerMax: 5,
+      powerNow: 4,
+      powerMin: 0,
+      powerMax: 4,
       persistent: false as const,
     });
   }

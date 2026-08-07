@@ -65,6 +65,7 @@ export interface BrowserSessionInfo {
   readonly modelConfirmed: boolean;
   readonly powerConfirmed: boolean;
   readonly powerNow: number;
+  readonly powerMin: number;
   readonly powerMax: number;
   readonly persistent: false;
 }
@@ -132,6 +133,7 @@ interface StartProtocolResult extends ProtocolResult {
   readonly modelConfirmed: boolean;
   readonly powerConfirmed: boolean;
   readonly powerNow: number;
+  readonly powerMin: number;
   readonly powerMax: number;
 }
 
@@ -455,6 +457,7 @@ export class PlaywrightBrowser {
         modelConfirmed: result.modelConfirmed,
         powerConfirmed: result.powerConfirmed,
         powerNow: result.powerNow,
+        powerMin: result.powerMin,
         powerMax: result.powerMax,
         persistent: false,
       };
@@ -1622,6 +1625,7 @@ function parseStartProtocolResult(stdout: string): StartProtocolResult | StartFa
             candidate.modelConfirmed !== true ||
             candidate.powerConfirmed !== true ||
             typeof candidate.powerNow !== 'number' ||
+            typeof candidate.powerMin !== 'number' ||
             typeof candidate.powerMax !== 'number'
           ) {
             throw new BrowserError(
@@ -1914,7 +1918,7 @@ function startVerificationScript(contextMarker: string): string {
       const nameOf = (element) => element.getAttribute('aria-label') ?? (element.textContent ?? '').trim();
       const sliders = [...document.querySelectorAll('[role="slider"]')].filter(visible);
       const modelItems = [...document.querySelectorAll('[role="menuitem"], [role="option"]')].filter((element) => {
-        return visible(element) && /^Model\\s+/u.test(nameOf(element));
+        return visible(element) && /^Model/u.test(nameOf(element));
       });
       return sliders.length > 0 || modelItems.length > 0;
     });
@@ -1959,12 +1963,17 @@ function startVerificationScript(contextMarker: string): string {
         return { status: 'drift', reason: 'Power slider is not unique' };
       }
       const now = sliders[0].getAttribute('aria-valuenow');
+      const min = sliders[0].getAttribute('aria-valuemin');
       const max = sliders[0].getAttribute('aria-valuemax');
-      if (now === null || max === null) {
+      if (now === null || min === null || max === null) {
         return { status: 'drift', reason: 'Power slider omitted its numeric state' };
       }
-      return { status: 'ok', now: Number(now), max: Number(max) };
+      return { status: 'ok', now: Number(now), min: Number(min), max: Number(max) };
     });
+
+    const powerAtFifthLevel = (power) => {
+      return power.now === power.max && power.max === 4 && power.min === 0;
+    };
 
     const confirmPower = async () => {
       const opened = await ensureMenuOpen();
@@ -1972,7 +1981,7 @@ function startVerificationScript(contextMarker: string): string {
       let power = await readPower();
       if (power.status === 'drift') return power;
       if (power.status === 'unavailable') return power;
-      if (power.now !== power.max || power.max !== 5) {
+      if (!powerAtFifthLevel(power)) {
         const slider = page.locator('[role="slider"]');
         if (await slider.count() !== 1) {
           return { status: 'drift', reason: 'Power slider is not unique' };
@@ -1991,20 +2000,27 @@ function startVerificationScript(contextMarker: string): string {
         if (power.status === 'drift') return power;
         if (power.status === 'unavailable') return power;
       }
-      if (power.now !== power.max || power.max !== 5) {
-        return { status: 'unconfirmed', now: power.now, max: power.max };
+      if (!powerAtFifthLevel(power)) {
+        return { status: 'unconfirmed', now: power.now, min: power.min, max: power.max };
       }
-      return { status: 'confirmed', now: power.now, max: power.max };
+      return { status: 'confirmed', now: power.now, min: power.min, max: power.max };
     };
 
-    const modelOpener = page.locator('[role="menuitem"][aria-haspopup]');
-    const readOpener = () => evaluate(() => {
+    const openModelSubmenu = () => evaluate(() => {
       const visible = (element) => {
         if (!(element instanceof HTMLElement)) return false;
         const style = getComputedStyle(element);
         return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
       };
-      return [...document.querySelectorAll('[role="menuitem"][aria-haspopup]')].filter(visible).length;
+      const nameOf = (element) => element.getAttribute('aria-label') ?? (element.textContent ?? '').trim();
+      const openers = [...document.querySelectorAll('[role="menuitem"][aria-haspopup]')].filter((element) => {
+        return visible(element) && /^Model/u.test(nameOf(element));
+      });
+      if (openers.length !== 1) {
+        return false;
+      }
+      openers[0].click();
+      return true;
     });
 
     const readCurrentModel = () => evaluate(() => {
@@ -2015,12 +2031,12 @@ function startVerificationScript(contextMarker: string): string {
       };
       const nameOf = (element) => element.getAttribute('aria-label') ?? (element.textContent ?? '').trim();
       const modelItems = [...document.querySelectorAll('[role="menuitem"], [role="option"]')].filter((element) => {
-        return visible(element) && /^Model\\s+/u.test(nameOf(element));
+        return visible(element) && /^Model/u.test(nameOf(element));
       });
       const checkedRadios = [...document.querySelectorAll('[role="menuitemradio"]')].filter((element) => {
         return visible(element) && element.getAttribute('aria-checked') === 'true';
       });
-      const itemModel = modelItems.length === 1 ? nameOf(modelItems[0]).replace(/^Model\\s+/u, '') : null;
+      const itemModel = modelItems.length === 1 ? nameOf(modelItems[0]).replace(/^Model/u, '').trim() : null;
       if (modelItems.length > 1) {
         return { status: 'drift', reason: 'current model readback is not unique' };
       }
@@ -2047,13 +2063,9 @@ function startVerificationScript(contextMarker: string): string {
       if (current.status === 'ok' && current.model === targetModel) {
         return { status: 'confirmed' };
       }
-      if (await readOpener() !== 1) {
+      if (!(await openModelSubmenu())) {
         return { status: 'drift', reason: 'model submenu opener is not unique' };
       }
-      if (await modelOpener.count() !== 1) {
-        return { status: 'drift', reason: 'model submenu opener is not unique' };
-      }
-      await modelOpener.first().click();
       await page.waitForTimeout(400);
       let option = page.getByRole('menuitemradio', { name: targetModel, exact: true });
       if (await option.count() !== 1) {
@@ -2082,7 +2094,7 @@ function startVerificationScript(contextMarker: string): string {
     if (powerResult.status === 'unconfirmed') {
       return fail(
         'SELECTION_UNCONFIRMED',
-        'fixed Power could not be set to the maximum level with aria-valuenow == aria-valuemax',
+        'fixed Power could not be set to the fifth level (aria-valuenow == aria-valuemax == 4 in the zero-based 0..4 range)',
       );
     }
 
@@ -2105,10 +2117,10 @@ function startVerificationScript(contextMarker: string): string {
       }
       const powerState = await readPower();
       if (powerState.status === 'drift') return powerState;
-      if (powerState.status !== 'ok' || powerState.now !== powerState.max || powerState.max !== 5) {
+      if (powerState.status !== 'ok' || !powerAtFifthLevel(powerState)) {
         return { status: 'unconfirmed', target: 'Power 5/5' };
       }
-      return { status: 'confirmed', now: powerState.now, max: powerState.max };
+      return { status: 'confirmed', now: powerState.now, min: powerState.min, max: powerState.max };
     };
     const joint = await jointReadback();
     if (joint.status === 'drift') return fail('PAGE_CONTRACT_DRIFT', joint.reason);
@@ -2174,6 +2186,7 @@ function startVerificationScript(contextMarker: string): string {
       modelConfirmed: true,
       powerConfirmed: true,
       powerNow: joint.now,
+      powerMin: joint.min,
       powerMax: joint.max,
     });
   }`;

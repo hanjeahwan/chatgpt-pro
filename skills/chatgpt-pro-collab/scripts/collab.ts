@@ -515,6 +515,7 @@ export class CollabService {
         modelConfirmed: browser.modelConfirmed,
         powerConfirmed: browser.powerConfirmed,
         powerNow: browser.powerNow,
+        powerMin: browser.powerMin,
         powerMax: browser.powerMax,
       });
       store.commitOperation(effectOperation.id, 'automatic', {
@@ -526,6 +527,7 @@ export class CollabService {
         modelConfirmed: browser.modelConfirmed,
         powerConfirmed: browser.powerConfirmed,
         powerNow: browser.powerNow,
+        powerMin: browser.powerMin,
         powerMax: browser.powerMax,
       });
       if (task.status === 'starting') {
