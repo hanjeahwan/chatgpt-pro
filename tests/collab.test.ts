@@ -863,6 +863,69 @@ describe('BEH-001 setup journal and interruption recovery', () => {
     expect(fixture.browser.setupSessions).toEqual([]);
     expect(fixture.browser.setupClosedSessions).toEqual(['chatgpt-pro-collab-setup-cleaning']);
   });
+
+  it('does not commit setup while the interactive session is not confirmed closed', async () => {
+    const fixture = await serviceFixture();
+    await writeFile(fixture.paths.seedState, validSeedText());
+    fixture.browser.nextSetupCloseResult = { sessionClosed: false };
+
+    await expect(fixture.service.setup()).rejects.toMatchObject({
+      code: 'SETUP_SESSION_NOT_CLOSED',
+      message: expect.stringContaining('run setup again to finish cleanup'),
+    });
+
+    const store = new StateStore(fixture.paths.database);
+    const setupOperation = store.listOperations().find((operation) => {
+      return operation.kind === 'setup';
+    });
+    expect(setupOperation).toMatchObject({ step: 'cleanup', phase: 'effect-unknown' });
+    expect(setupOperation?.phase).not.toBe('committed');
+    store.close();
+
+    fixture.browser.nextSetupCloseResult = { sessionClosed: true };
+    await fixture.service.setup();
+
+    const reopened = new StateStore(fixture.paths.database);
+    const committed = reopened.listOperations().find((operation) => {
+      return operation.kind === 'setup';
+    });
+    expect(committed).toMatchObject({
+      phase: 'committed',
+      evidence: { seedValidated: true, sessionClosed: true },
+    });
+    reopened.close();
+    expect(fixture.browser.setupSessions).toEqual([]);
+    expect(fixture.browser.setupClosedSessions).toHaveLength(2);
+  });
+
+  it('re-enters interactive login from seed effect-unknown when a valid seed stops authenticating', async () => {
+    const fixture = await serviceFixture();
+    await writeFile(fixture.paths.seedState, validSeedText());
+    fixture.browser.seedAuthenticated = false;
+    const store = new StateStore(fixture.paths.database);
+    store.createOperation({
+      id: 'setup-seed-effect-unknown',
+      kind: 'setup',
+      step: 'seed',
+      taskId: null,
+      turnId: null,
+      sessionName: 'chatgpt-pro-collab-setup-reauth',
+    });
+    store.markOperationEffectUnknown('setup-seed-effect-unknown');
+    store.close();
+
+    await fixture.service.setup();
+
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireOperation('setup-seed-effect-unknown')).toMatchObject({
+      phase: 'committed',
+      evidence: { seedValidated: true, sessionClosed: true },
+    });
+    reopened.close();
+    expect(fixture.browser.setupSessions).toEqual(['chatgpt-pro-collab-setup-reauth']);
+    expect(fixture.browser.setupClosedSessions).toEqual(['chatgpt-pro-collab-setup-reauth']);
+    expect(fixture.browser.seedVerifications).toBeGreaterThanOrEqual(2);
+  });
 });
 
 describe('BEH-003 send journal and archive attachments', () => {
@@ -1993,6 +2056,7 @@ class FakeBrowser implements CollabBrowser {
   readonly setupClosedSessions: string[] = [];
   seedAuthenticated = true;
   seedVerifications = 0;
+  nextSetupCloseResult: { readonly sessionClosed: boolean } | null = null;
   readonly cleanedComposers: string[] = [];
   readonly archiveObservations: string[] = [];
   readonly autoVerifications: string[] = [];
@@ -2076,15 +2140,15 @@ class FakeBrowser implements CollabBrowser {
   }
 
   /**
-   * Reports the fake setup session as closed.
+   * Reports the fake setup session close, with an optional injected unconfirmed result.
    *
    * @param sessionName Recorded setup session name.
-   * @returns The closed session flag.
+   * @returns The configured or default closed-session flag.
    * @throws {Error} This fake setup close does not throw.
    */
   async setupClose(sessionName: string): Promise<{ readonly sessionClosed: boolean }> {
     this.setupClosedSessions.push(sessionName);
-    return { sessionClosed: true };
+    return this.nextSetupCloseResult ?? { sessionClosed: true };
   }
 
   /**

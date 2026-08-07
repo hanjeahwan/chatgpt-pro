@@ -1866,12 +1866,15 @@ function authenticatedPageScript(): string {
         const style = getComputedStyle(element);
         return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
       };
+      const onChatGpt = location.hostname === 'chatgpt.com' && /^https?:$/.test(location.protocol);
+      const composers = [...document.querySelectorAll('#prompt-textarea')].filter(visible);
+      const composerOk = composers.length === 1;
       const authControls = [...document.querySelectorAll('a, button')].filter((element) => {
         const label = (element.textContent || '').trim();
         const href = element instanceof HTMLAnchorElement ? element.getAttribute('href') || '' : '';
         return visible(element) && (label === 'Log in' || label === 'Sign up' || href.includes('/auth/login'));
       });
-      return authControls.length === 0;
+      return onChatGpt && composerOk && authControls.length === 0;
     }, undefined, { timeout: 60000, polling: 500 });
   }`;
 }
@@ -2344,6 +2347,11 @@ const USER_TURN_EVIDENCE = `
         return style.visibility !== 'hidden' && style.display !== 'none' && candidate.getClientRects().length > 0;
       };
       const leaves = [...element.querySelectorAll('*')].filter((leaf) => visible(leaf) && leaf.children.length === 0);
+      const isAccessibleHeading = (leaf) => {
+        const tagName = typeof leaf.tagName === 'string' ? leaf.tagName.toUpperCase() : '';
+        const role = typeof leaf.getAttribute === 'function' ? (leaf.getAttribute('role') || '') : '';
+        return /^H[1-6]$/.test(tagName) || role === 'heading';
+      };
       const leafInside = (leaf, container) => {
         let ancestor = leaf.parentElement;
         while (ancestor !== null && ancestor !== element) {
@@ -2373,7 +2381,7 @@ const USER_TURN_EVIDENCE = `
           if (names.includes(text)) attachmentTexts.push(text);
           continue;
         }
-        if (text === 'You said:' || text === 'You said') continue;
+        if (isAccessibleHeading(leaf) && (text === 'You said:' || text === 'You said')) continue;
         promptParts.push(leaf.textContent || '');
       }
       if (attachmentTexts.length !== names.length) return false;
@@ -3620,35 +3628,42 @@ function resolveNotSubmittedScript(
       if (populatedFileInputCount !== 0) {
         throw new Error('composer still has a populated file input after not-submitted adjudication');
       }
-      const visibleAttachmentTexts = await composerForm.locator('*').evaluateAll((elements) => {
+      const visibleAttachmentControlCount = await composerForm.locator('*').evaluateAll((elements) => {
         const visible = (element) => {
           if (!(element instanceof HTMLElement)) return false;
           const style = getComputedStyle(element);
           return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
         };
-        return elements
-          .filter((element) => visible(element) && element.children.length === 0)
-          .map((element) => (element.textContent || '').trim())
-          .filter((text) => text !== '' && (/\\.[A-Za-z0-9]{1,12}$/u.test(text) || attachmentNames.includes(text)));
+        const isAttachmentControl = (element) => {
+          if (!(element instanceof HTMLElement)) return false;
+          const ariaLabel = typeof element.getAttribute === 'function' ? element.getAttribute('aria-label') || '' : '';
+          const testId = typeof element.getAttribute === 'function' ? element.getAttribute('data-testid') || '' : '';
+          const tagName = typeof element.tagName === 'string' ? element.tagName.toUpperCase() : '';
+          return (
+            (tagName === 'BUTTON' && /remove|delete/i.test(ariaLabel)) ||
+            /file|attachment|composer-file/i.test(testId)
+          );
+        };
+        return elements.filter((element) => visible(element) && isAttachmentControl(element)).length;
       });
-      if (visibleAttachmentTexts.length !== 0) {
+      if (visibleAttachmentControlCount !== 0) {
         throw new Error('composer still shows staged attachment chips after not-submitted adjudication');
       }
     };
-    const projectPathOk = () => {
-      if (expectedProjectIdentity !== null) {
-        return location.pathname === '/g/g-p-' + expectedProjectIdentity + '/project';
-      }
-      return /^\\/g\\/g-p-[^/]+\\/project$/.test(location.pathname);
-    };
     if (expectedConversationId === null) {
-      await page.waitForFunction(() => {
+      await page.waitForFunction((identity) => {
         const visible = (element) => {
           if (!(element instanceof HTMLElement)) return false;
           const style = getComputedStyle(element);
           return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
         };
-        const urlOk = projectPathOk();
+        const projectPathOk = (expectedIdentity) => {
+          if (expectedIdentity !== null) {
+            return location.pathname === '/g/g-p-' + expectedIdentity + '/project';
+          }
+          return /^\\/g\\/g-p-[^/]+\\/project$/.test(location.pathname);
+        };
+        const urlOk = projectPathOk(identity);
         const main = document.querySelector('main') ?? document.querySelector('[role="main"]');
         const titleOk = main !== null && [...main.querySelectorAll('h1')].some((element) => {
           return element instanceof HTMLElement && element.getClientRects().length > 0 &&
@@ -3659,7 +3674,7 @@ function resolveNotSubmittedScript(
         const turnsOk = [...document.querySelectorAll('[data-testid^="conversation-turn-"][data-turn]')]
           .filter(visible).length === 0;
         return urlOk && titleOk && composerOk && turnsOk;
-      }, undefined, { timeout: 60000, polling: 250 });
+      }, expectedProjectIdentity, { timeout: 60000, polling: 250 });
       await verifyComposerResidueFree();
       const stop = page.getByRole('button', { name: 'Stop answering', exact: true });
       if (await stop.count() > 0 && await stop.first().isVisible()) {

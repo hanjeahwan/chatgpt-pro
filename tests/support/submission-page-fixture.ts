@@ -13,6 +13,9 @@ export interface SubmissionPageOptions {
   readonly populatedFileInputs?: number;
   readonly composerChips?: readonly string[];
   readonly stopVisible?: boolean;
+  readonly hostname?: string;
+  readonly composerCount?: number;
+  readonly authControls?: readonly string[];
 }
 
 export interface SubmissionPageFixture {
@@ -24,7 +27,9 @@ interface LeafElement {
   readonly textContent: string;
   readonly children: readonly unknown[];
   readonly parentElement: LeafElement | null;
+  readonly tagName: string;
   getClientRects(): readonly object[];
+  getAttribute(name: string): string | null;
 }
 
 interface TurnElement extends LeafElement {
@@ -36,6 +41,8 @@ class SubmissionHtmlElement implements TurnElement {
   readonly textContent: string;
   readonly children: readonly LeafElement[];
   readonly parentElement: LeafElement | null;
+  readonly tagName: string;
+  readonly attributes: ReadonlyMap<string, string>;
 
   /**
    * Creates one fixture DOM node with optional leaf children.
@@ -43,22 +50,32 @@ class SubmissionHtmlElement implements TurnElement {
    * @param textContent Element text.
    * @param children Leaf children returned by `querySelectorAll('*')`.
    * @param parentElement Parent used by the attachment chip traversal.
+   * @param tagName Element tag exposed to structural checks.
+   * @param attributes Element attributes exposed to structural checks.
    * @throws {Error} This constructor does not perform I/O.
    */
-  constructor(textContent: string, children: readonly LeafElement[] = [], parentElement: LeafElement | null = null) {
+  constructor(
+    textContent: string,
+    children: readonly LeafElement[] = [],
+    parentElement: LeafElement | null = null,
+    tagName: string = 'DIV',
+    attributes: ReadonlyMap<string, string> = new Map(),
+  ) {
     this.textContent = textContent;
     this.children = children;
     this.parentElement = parentElement;
+    this.tagName = tagName;
+    this.attributes = attributes;
   }
 
   /**
    * Reads one attribute from the fixture identity options.
    *
-   * @param _name Attribute name; unused because turn identity is fixed at construction.
+   * @param name Attribute name read by generated structural checks.
    * @returns Attribute value or null.
    */
-  getAttribute(_name: string): string | null {
-    return null;
+  getAttribute(name: string): string | null {
+    return this.attributes.get(name) ?? null;
   }
 
   /**
@@ -99,10 +116,13 @@ export function submissionPageFixture(options: SubmissionPageOptions): Submissio
     populatedFileInputs: options.populatedFileInputs ?? 0,
     composerChips: options.composerChips ?? [],
     stopVisible: options.stopVisible ?? false,
+    hostname: options.hostname ?? 'chatgpt.com',
+    composerCount: options.composerCount ?? 1,
+    authControls: options.authControls ?? [],
   };
 
   const headingLeaf = (parentElement: LeafElement | null): LeafElement => {
-    return new SubmissionHtmlElement('You said:', [], parentElement);
+    return new SubmissionHtmlElement('You said:', [], parentElement, 'H4');
   };
   const promptLeaf = (promptText: string | undefined, parentElement: LeafElement | null): LeafElement => {
     return new SubmissionHtmlElement(promptText ?? '', [], parentElement);
@@ -140,7 +160,12 @@ export function submissionPageFixture(options: SubmissionPageOptions): Submissio
     });
   };
 
-  const composer = new SubmissionHtmlElement(state.composerText);
+  const composers = Array.from({ length: state.composerCount }, () => {
+    return new SubmissionHtmlElement(state.composerText);
+  });
+  const authControlLeaves = state.authControls.map((label) => {
+    return new SubmissionHtmlElement(label, [], null, 'A', new Map([['href', '/auth/login']]));
+  });
   const main = {
     querySelectorAll(selector: string) {
       return selector === 'h1' || selector === '*' ? [new SubmissionHtmlElement(state.mainTitle)] : [];
@@ -152,6 +177,9 @@ export function submissionPageFixture(options: SubmissionPageOptions): Submissio
       if (selector === 'main' || selector === '[role="main"]') {
         return main;
       }
+      if (selector === '#prompt-textarea') {
+        return composers[0] ?? null;
+      }
       return null;
     },
     querySelectorAll(selector: string) {
@@ -159,7 +187,10 @@ export function submissionPageFixture(options: SubmissionPageOptions): Submissio
         return turnElements();
       }
       if (selector === '#prompt-textarea') {
-        return [composer];
+        return composers;
+      }
+      if (selector === 'a, button') {
+        return authControlLeaves;
       }
       return [];
     },
@@ -172,6 +203,13 @@ export function submissionPageFixture(options: SubmissionPageOptions): Submissio
         return { display: 'block', visibility: 'visible' };
       },
       HTMLElement: SubmissionHtmlElement,
+      HTMLAnchorElement: class extends SubmissionHtmlElement {
+        readonly href: string;
+        constructor(href: string) {
+          super('');
+          this.href = href;
+        }
+      },
       HTMLInputElement: class extends SubmissionHtmlElement {
         readonly value: string;
         constructor(value: string) {
@@ -179,14 +217,19 @@ export function submissionPageFixture(options: SubmissionPageOptions): Submissio
           this.value = value;
         }
       },
-      location: { hostname: 'chatgpt.com', pathname: state.pathname, origin: 'https://chatgpt.com' },
+      location: {
+        hostname: state.hostname,
+        pathname: state.pathname,
+        origin: `https://${state.hostname}`,
+        protocol: state.hostname === 'about:blank' ? 'about:' : 'https:',
+      },
     };
   };
 
   const locatorCollection = (selector: string) => {
     const matches = (): readonly object[] => {
       if (selector === '#prompt-textarea') {
-        return [composer];
+        return composers;
       }
       if (selector === '[data-testid^="conversation-turn-"][data-turn]') {
         return turnElements();
@@ -262,8 +305,17 @@ export function submissionPageFixture(options: SubmissionPageOptions): Submissio
             }
             const leaves = [
               new SubmissionHtmlElement(state.composerText, [], null),
-              ...state.composerChips.map((name) => {
-                return chipLeaf(name, null);
+              ...state.composerChips.map((name, index) => {
+                return new SubmissionHtmlElement(
+                  name,
+                  [],
+                  null,
+                  'BUTTON',
+                  new Map([
+                    ['aria-label', 'Remove file'],
+                    ['data-testid', `composer-file-${index}`],
+                  ]),
+                );
               }),
             ];
             return Promise.resolve(withSubmissionGlobals(globals(), callback, leaves, argument));
@@ -357,6 +409,11 @@ export function submissionPageFixture(options: SubmissionPageOptions): Submissio
 /**
  * Executes one generated submission callback with the fixture browser globals installed.
  *
+ * The callback is first reconstructed from its own source (via `Function`), mirroring
+ * Playwright's real serialization boundary: a serialized page callback cannot capture
+ * lexical bindings from the Node-side page function, so a generated script that closes
+ * over an outer variable fails exactly like it would in a real browser.
+ *
  * @param globals Browser globals installed for the callback duration.
  * @param callback Generated page callback.
  * @param argument Callback argument supplied by the page function.
@@ -371,13 +428,14 @@ function withSubmissionGlobals(
   if (typeof callback !== 'function') {
     throw new TypeError('submission fixture callback is not a function');
   }
+  const serialized = new Function(`return (${String(callback)})`)() as (...rest: readonly unknown[]) => unknown;
   const previous = new Map<string, PropertyDescriptor | undefined>();
   for (const [name, value] of Object.entries(globals)) {
     previous.set(name, Object.getOwnPropertyDescriptor(globalThis, name));
     Object.defineProperty(globalThis, name, { configurable: true, writable: true, value });
   }
   try {
-    return Reflect.apply(callback, undefined, arguments_);
+    return Reflect.apply(serialized, undefined, arguments_);
   } finally {
     for (const [name, descriptor] of previous) {
       if (descriptor === undefined) {

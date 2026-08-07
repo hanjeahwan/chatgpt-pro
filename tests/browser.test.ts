@@ -268,6 +268,66 @@ describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
     ]);
   });
 
+  it('authenticates a seed only on the signed-in chatgpt.com composer page', async () => {
+    const fixture = await browserFixture([
+      output('  (no browsers)'),
+      output('verification opened'),
+      output('seed loaded'),
+      output('navigated to chatgpt.com'),
+      output('verify-seed passed'),
+      output('verification closed'),
+    ]);
+    await writeFile(fixture.paths.seedState, '{}');
+
+    await expect(
+      fixture.browser.verifyAuthenticatedSeed('chatgpt-pro-collab-setup-live', fixture.paths.seedState),
+    ).resolves.toEqual({ authenticated: true });
+
+    const source = await lastScript(fixture.invocations);
+    expect(source).toContain("location.hostname === 'chatgpt.com'");
+    expect(source).toContain("document.querySelectorAll('#prompt-textarea')");
+    expect(source).toContain("label === 'Log in'");
+    expectPageFunctionSyntax(source);
+
+    const runAuthScript = new Function(`return (${source})`)() as (page: object) => Promise<void>;
+
+    await expect(
+      runAuthScript(
+        submissionPageFixture({ pathname: '/', hostname: 'chatgpt.com', composerCount: 1, authControls: [] }).page,
+      ),
+    ).resolves.toBeUndefined();
+
+    await expect(
+      runAuthScript(submissionPageFixture({ pathname: '/', hostname: 'about:blank', composerCount: 0 }).page),
+    ).rejects.toThrow(/fixture waitForFunction deadline exceeded/);
+
+    await expect(
+      runAuthScript(submissionPageFixture({ pathname: '/', hostname: 'chatgpt.com', composerCount: 0 }).page),
+    ).rejects.toThrow(/fixture waitForFunction deadline exceeded/);
+
+    await expect(
+      runAuthScript(
+        submissionPageFixture({
+          pathname: '/',
+          hostname: 'chatgpt.com',
+          composerCount: 1,
+          authControls: ['Log in'],
+        }).page,
+      ),
+    ).rejects.toThrow(/fixture waitForFunction deadline exceeded/);
+
+    await expect(
+      runAuthScript(
+        submissionPageFixture({
+          pathname: '/',
+          hostname: 'chatgpt.com',
+          composerCount: 2,
+          authControls: [],
+        }).page,
+      ),
+    ).rejects.toThrow(/fixture waitForFunction deadline exceeded/);
+  });
+
   it('uses the fixed CLI prefix, task output directory, and shared seed without persistence', async () => {
     const fixture = await browserFixture([
       output('### Browser `session-a` opened with pid 4123.'),
@@ -2022,6 +2082,118 @@ describe('BEH-003 and BEH-013 submission verification against page evidence', ()
     });
 
     expect(verified).toMatchObject({ kind: 'resolve-not-submitted' });
+  });
+
+  it('passes the recorded Project identity as a serialized waitForFunction argument, not a closure', async () => {
+    const captured = await captureSubmissionScript('resolve-not-submitted', {
+      conversationId: null,
+      projectIdentity: '123',
+      previousUserTurnIdentity: null,
+      prompt: 'exact prompt',
+      attachmentNames: [],
+    });
+
+    const waitCall = captured.slice(captured.indexOf('page.waitForFunction'));
+    expect(waitCall).toContain('(identity) =>');
+    expect(waitCall).toContain('const projectPathOk = (expectedIdentity) => {');
+    expect(waitCall).toContain('projectPathOk(identity)');
+    expect(waitCall).toContain('}, expectedProjectIdentity, { timeout: 60000, polling: 250 });');
+    expect(captured).not.toMatch(/projectPathOk\(\)/u);
+    expectPageFunctionSyntax(captured);
+  });
+
+  it('rejects every staged attachment chip shape by its remove-control structure, not its file name', async () => {
+    for (const chip of ['LICENSE(1)', 'LICENSE', 'a.report-archive-config', '报告.pdf']) {
+      const fixture = submissionPageFixture({
+        pathname: '/g/g-p-123/project',
+        composerChips: [chip],
+        turns: [],
+      });
+
+      await expect(
+        runSubmissionScript(fixture.page, {
+          conversationId: null,
+          projectIdentity: '123',
+          previousUserTurnIdentity: null,
+          prompt: 'exact prompt',
+          attachmentNames: ['LICENSE'],
+          expectKind: 'resolve-not-submitted',
+        }),
+      ).rejects.toThrow(/staged attachment chips/);
+    }
+  });
+
+  it('does not bind a user turn whose body is the literal heading text when the saved prompt is empty', async () => {
+    const fixture = submissionPageFixture({
+      pathname: '/g/g-p-123-chatgpt-pro-collab/c/conversation-a',
+      turns: [
+        {
+          testId: 'conversation-turn-1',
+          turn: 'user',
+          promptText: 'You said:',
+          chips: ['a.txt'],
+        },
+        { testId: 'conversation-turn-2', turn: 'assistant' },
+      ],
+    });
+
+    const verified = await runSubmissionScript(fixture.page, {
+      conversationId: 'conversation-a',
+      previousUserTurnIdentity: null,
+      prompt: '',
+      attachmentNames: ['a.txt'],
+      expectKind: 'auto-verify-submission',
+    });
+
+    expect(verified).toMatchObject({ status: 'unresolved' });
+  });
+
+  it('keeps a literal You said: prompt verbatim instead of excluding it as the accessible heading', async () => {
+    const fixture = submissionPageFixture({
+      pathname: '/g/g-p-123-chatgpt-pro-collab/c/conversation-a',
+      turns: [
+        {
+          testId: 'conversation-turn-1',
+          turn: 'user',
+          promptText: 'You said:',
+        },
+        { testId: 'conversation-turn-2', turn: 'assistant' },
+      ],
+    });
+
+    const verified = await runSubmissionScript(fixture.page, {
+      conversationId: 'conversation-a',
+      previousUserTurnIdentity: null,
+      prompt: 'You said:',
+      attachmentNames: [],
+      expectKind: 'auto-verify-submission',
+    });
+
+    expect(verified).toMatchObject({ status: 'submitted', userTurnIdentity: 'conversation-turn-1' });
+  });
+
+  it('distinguishes the accessible You said: heading from an ordinary prompt leaf', async () => {
+    const fixture = submissionPageFixture({
+      pathname: '/g/g-p-123-chatgpt-pro-collab/c/conversation-a',
+      turns: [
+        {
+          testId: 'conversation-turn-1',
+          turn: 'user',
+          promptText: 'analyze this',
+        },
+        { testId: 'conversation-turn-2', turn: 'assistant' },
+      ],
+    });
+
+    const verified = await runSubmissionScript(fixture.page, {
+      conversationId: 'conversation-a',
+      previousUserTurnIdentity: null,
+      prompt: 'analyze this',
+      attachmentNames: [],
+      expectKind: 'auto-verify-submission',
+    });
+
+    expect(verified).toMatchObject({ status: 'submitted', userTurnIdentity: 'conversation-turn-1' });
   });
 });
 

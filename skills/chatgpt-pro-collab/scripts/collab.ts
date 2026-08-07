@@ -322,13 +322,18 @@ export class CollabService {
           );
         }
         let verified = await this.#browser.verifyAuthenticatedSeed(sessionName, seedPath);
-        if (!verified.authenticated && operation.phase === 'prepared') {
-          operation = store.markOperationEffectUnknown(operation.id, {
-            observedAt: now(),
-            sessionName,
-            postcondition: 'state-save command released after an interactive login',
-          });
-          await this.#browser.setupSaveSeed(sessionName, seedPath);
+        if (!verified.authenticated) {
+          if (operation.phase === 'prepared') {
+            operation = store.markOperationEffectUnknown(operation.id, {
+              observedAt: now(),
+              sessionName,
+              postcondition: 'state-save command released after an interactive login',
+            });
+            await this.#browser.setupSaveSeed(sessionName, seedPath);
+          } else if (operation.phase === 'effect-unknown') {
+            await this.#browser.setupOpen(sessionName);
+            await this.#browser.setupSaveSeed(sessionName, seedPath);
+          }
           verified = await this.#browser.verifyAuthenticatedSeed(sessionName, seedPath);
         }
         if (!verified.authenticated) {
@@ -354,12 +359,18 @@ export class CollabService {
           });
         }
         const closed = await this.#browser.setupClose(sessionName);
+        if (closed.sessionClosed !== true) {
+          throw new CollabError(
+            'SETUP_SESSION_NOT_CLOSED',
+            `setup session could not be confirmed closed (sessionClosed: ${closed.sessionClosed}); run setup again to finish cleanup`,
+          );
+        }
         operation = store.commitOperation(operation.id, 'automatic', {
           observedAt: now(),
           sessionName,
           postcondition: 'setup session closed after verified seed',
           seedValidated: true,
-          sessionClosed: closed.sessionClosed,
+          sessionClosed: true,
         });
       }
       return { seedPath: await requireSeedState(this.#paths) };
