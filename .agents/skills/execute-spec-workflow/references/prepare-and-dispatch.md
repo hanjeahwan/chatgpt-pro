@@ -6,7 +6,7 @@
 
 1. 读取完整 Spec、相关代码、测试和当前工作区改动。
 2. 使用 `plan-spec-implementation` Skill 创建或增量对账对应任务账本。
-3. 提交 implementation worker 所需的 Spec、任务账本和其他实施输入。
+3. 提交实施者所需的 Spec、任务账本和其他实施输入。
 4. 实施输入提交后，从仓库根目录运行一次任务脚本的 `check --ready`。
 5. 确认实施输入没有遗留在未提交改动中。
 
@@ -29,7 +29,7 @@
 - **worktree dirty**：识别改动来源和负责人；保留有效改动并交回原负责人处理，不得通过删除或重建 child 丢弃改动。
 - **child 创建或 terminal 启动失败**：回收本次未成功建立的资源，再从包含已提交实施输入的目标分支重试。
 
-Implementation worker 不得在 child 中重新创建或替代准备阶段的 Spec、任务账本和其他实施输入。
+实施者不得在 child 中重新创建或替代准备阶段的 Spec、任务账本和其他实施输入。
 
 恢复已有 child 时，先恢复唯一的 implementation worktree、branch 和 terminal，再核对起点包含已提交实施输入、协作身份唯一且 worktree clean。无法唯一恢复时停止，不得创建重复协作身份。
 
@@ -39,11 +39,11 @@ Implementation worker 不得在 child 中重新创建或替代准备阶段的 Sp
 
 - 产品决策（含 Spike 结论为 NO-GO/INCONCLUSIVE 或需要产品决定的未知项）；
 - Spec 变化；
-- 需宿主执行的外部验证；
+- 需协调员执行的外部验证；
 - 阻塞 finding；
-- 其他宿主明确声明的停止条件。
+- 其他协调员明确声明的停止条件。
 
-禁止为每个 IMP 单独派发，也不得在到达 boundary 前提前结束 dispatch。Implementation worker 遇到未知项时只报告，不自行创建或执行 Spike。后续阶段复用原 implementation terminal。
+禁止为每个 IMP 单独派发，也不得在到达 boundary 前提前结束 dispatch。实施者遇到未知项时只报告，不自行创建或执行 Spike。后续阶段复用原 implementation terminal。
 
 Dispatch 只提供：
 
@@ -60,4 +60,4 @@ Dispatch 只提供：
 - 实施输入已提交，且 `check --ready` 已通过一次；
 - Child 放行检查全部通过（起点、协作身份唯一、clean）；
 - implementation worktree、branch 和 terminal 均唯一；
-- 原 implementation terminal 已收到一个可独立判定的连续实施阶段。
+- 实施者已收到一个可独立判定的连续实施阶段。

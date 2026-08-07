@@ -5,7 +5,7 @@ description: 协调已经成形的 Spec 从实施输入准备、Orca child workt
 
 # 执行 Spec 工作流
 
-以宿主 Agent 作为协调员，按仓库 `WORKFLOW.md` 的角色、协作身份和 Gate 合同推进实施。任务身份、依赖、状态和证据以对应 `docs/execution/*.tasks.json` 为准。
+作为协调员，按仓库 `WORKFLOW.md` 的角色、协作身份和 Gate 合同推进实施。任务身份、依赖、状态和证据以对应 `docs/execution/*.tasks.json` 为准。
 
 ## 1. 检测当前状态
 
@@ -31,12 +31,12 @@ description: 协调已经成形的 Spec 从实施输入准备、Orca child workt
 | Child 已放行，存在可执行 IMP、未收口验证或 implementation finding 修复 | `references/implement-and-verify.md` |
 | 实现与验证已收口，等待 Review、`check --final` 或集成                  | `references/review-and-integrate.md` |
 
-Spec 在执行中变化时，返回准备阶段增量对账。Review finding 需要修复时，先返回原 implementation terminal 执行实现与验证阶段，再回到原 reviewer terminal 复审。Implementation 阶段遇到产品决策、Spec 变化、需宿主执行的外部验证或未知项时，原 implementation terminal 报告并停止当前 dispatch；是否进入 Spike 由宿主决定。
+Spec 在执行中变化时，返回准备阶段增量对账。Review finding 需要修复时，先由实施者执行实现与验证阶段，再由同一审查者复审。Implementation 阶段遇到产品决策、Spec 变化、需协调员执行的外部验证或未知项时，实施者报告并停止当前 dispatch；是否进入 Spike 由协调员决定。
 
 ## 3. 协作边界
 
 - 角色职责、稳定协作身份和 Gate 以 `WORKFLOW.md` 为准。
-- 默认角色映射：implementation terminal 使用 Orca agent `opencode`；reviewer terminal 使用 Orca agent `codex`。
+- 默认运行映射：实施者使用 implementation terminal 和 Orca agent `opencode`；审查者使用 reviewer terminal 和 Orca agent `pi`。
 - 使用 `plan-spec-implementation` Skill 创建或增量对账任务账本。
 - Spike 的创建、执行与模板使用 `create-spike` Skill。
 - 使用 `orchestration` Skill 协调 Task、Dispatch、消息和等待；使用 `orca-cli` Skill 操作 Orca worktree 与 terminal。
