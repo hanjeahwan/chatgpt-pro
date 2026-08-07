@@ -243,6 +243,38 @@ describe('VER-011 SQLite cross-process concurrency', () => {
     contender.releaseTaskOperation('task-a', 'contender');
     contender.close();
   });
+
+  it('preserves an effect-unknown send submit across a real subprocess crash', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-submit-crash-'));
+    const databasePath = join(root, 'state.sqlite');
+    const readyPath = join(root, 'ready');
+    const taskId = 'submitted-before-crash';
+    const turnId = 'crashed-turn';
+    const workerPath = join(import.meta.dirname, 'support', 'submit-crash-worker.ts');
+    const worker = spawn(process.execPath, [workerPath, databasePath, taskId, turnId, readyPath], {
+      stdio: 'ignore',
+    });
+    const workerCompletion = waitForExit(worker);
+    await waitForPath(readyPath);
+
+    worker.kill('SIGKILL');
+    await workerCompletion;
+    const reopened = new StateStore(databasePath);
+    expect(reopened.requireTurn(taskId, turnId)).toMatchObject({ status: 'sending' });
+    expect(reopened.getUncommittedTaskOperation(taskId)).toMatchObject({
+      kind: 'send',
+      step: 'submit',
+      phase: 'effect-unknown',
+    });
+    reopened.markSubmissionUnknownAndNeedsDecision(
+      taskId,
+      turnId,
+      'send-op',
+      'auto-verification unresolved after crash',
+    );
+    expect(reopened.requireTurn(taskId, turnId)).toMatchObject({ status: 'unknown-submission' });
+    reopened.close();
+  });
 });
 
 /**

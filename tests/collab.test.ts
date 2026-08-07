@@ -1052,6 +1052,145 @@ describe('BEH-002 caller-provided task start', () => {
   });
 });
 
+describe('BEH-013 recovery matrix completion', () => {
+  it('auto-verifies a released submission and binds the turn with automatic evidence', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const taskId = randomUUID();
+    const turnId = 'crashed-turn';
+    const promptPath = join(fixture.root, 'crashed.md');
+    await writeFile(promptPath, 'crashed prompt');
+    const store = new StateStore(fixture.paths.database);
+    store.createTask(taskId, `chatgpt-pro-collab-${taskId}`);
+    store.beginSendTurn(taskId, turnId, promptPath, [], 'send-op');
+    store.advanceSendToSubmitEffectUnknown('send-op', {
+      observedAt: new Date().toISOString(),
+      sessionName: `chatgpt-pro-collab-${taskId}`,
+      postcondition: 'submit command released',
+    });
+    store.close();
+    await savePromptCopy(fixture.paths, taskId, turnId, Buffer.from('crashed prompt'));
+
+    const status = await fixture.service.recover(taskId);
+    expect(status).toMatchObject({ taskStatus: 'active', turnStatus: 'pending', nextAction: 'wait' });
+    expect(fixture.browser.autoVerifications).toEqual([taskId]);
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireTurn(taskId, turnId)).toMatchObject({
+      status: 'pending',
+      userTurnIdentity: `user-turn-${taskId}`,
+    });
+    expect(reopened.requireOperation('send-op')).toMatchObject({
+      phase: 'committed',
+      resolutionSource: 'automatic',
+      evidence: { promptVerbatimMatch: true, attachmentNamesMatch: true },
+    });
+    reopened.close();
+  });
+
+  it('opens the decision gate when page evidence cannot prove the submission', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const taskId = randomUUID();
+    const turnId = 'unresolved-turn';
+    const promptPath = join(fixture.root, 'unresolved.md');
+    await writeFile(promptPath, 'unresolved prompt');
+    const store = new StateStore(fixture.paths.database);
+    store.createTask(taskId, `chatgpt-pro-collab-${taskId}`);
+    store.beginSendTurn(taskId, turnId, promptPath, [], 'send-op');
+    store.advanceSendToSubmitEffectUnknown('send-op');
+    store.close();
+    await savePromptCopy(fixture.paths, taskId, turnId, Buffer.from('unresolved prompt'));
+    fixture.browser.nextAutoVerifyUnresolved = taskId;
+
+    const status = await fixture.service.recover(taskId);
+    expect(status).toMatchObject({ turnStatus: 'unknown-submission', nextAction: 'resolve-submission' });
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireOperation('send-op')).toMatchObject({ phase: 'needs-decision' });
+    reopened.close();
+  });
+
+  it('opens the decision gate without guessing when the browser session is gone', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const taskId = randomUUID();
+    const turnId = 'no-browser-turn';
+    const promptPath = join(fixture.root, 'no-browser.md');
+    await writeFile(promptPath, 'no browser prompt');
+    const store = new StateStore(fixture.paths.database);
+    store.createTask(taskId, `chatgpt-pro-collab-${taskId}`);
+    store.beginSendTurn(taskId, turnId, promptPath, [], 'send-op');
+    store.advanceSendToSubmitEffectUnknown('send-op');
+    store.close();
+    await savePromptCopy(fixture.paths, taskId, turnId, Buffer.from('no browser prompt'));
+    fixture.browser.sessionAvailabilityResult = 'missing';
+
+    const status = await fixture.service.recover(taskId);
+    expect(status).toMatchObject({
+      turnStatus: 'unknown-submission',
+      browserStatus: 'missing',
+      nextAction: 'resolve-submission',
+    });
+    expect(fixture.browser.autoVerifications).toEqual([]);
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireOperation('send-op')).toMatchObject({ phase: 'needs-decision' });
+    reopened.close();
+  });
+
+  it('serializes concurrent recover calls into one rebuild and one verification', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const promptPath = join(fixture.root, 'concurrent-recover.md');
+    await writeFile(promptPath, 'concurrent');
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+    await fixture.service.wait(task.taskId, turn.turnId, 20_000, 20_000);
+    fixture.browser.sessionAvailabilityResult = 'missing';
+
+    const [first, second] = await Promise.all([
+      fixture.service.recover(task.taskId),
+      fixture.service.recover(task.taskId),
+    ]);
+    expect(first.browserStatus).toBe('available');
+    expect(second.browserStatus).toBe('available');
+    expect(fixture.browser.startCount).toBe(2);
+    expect(fixture.browser.recoveredConversations).toEqual([task.taskId]);
+  });
+
+  it('rejects a submitted adjudication whose page verification fails', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const taskId = randomUUID();
+    const turnId = 'failed-verify-turn';
+    const promptPath = join(fixture.root, 'failed-verify.md');
+    await writeFile(promptPath, 'failed verify');
+    const store = new StateStore(fixture.paths.database);
+    store.createTask(taskId, `chatgpt-pro-collab-${taskId}`);
+    store.beginTurn(taskId, turnId, promptPath, []);
+    store.markSubmissionAttempting(taskId, turnId);
+    store.createOperation({
+      id: 'send-op',
+      kind: 'send',
+      step: 'submit',
+      taskId,
+      turnId,
+      sessionName: `chatgpt-pro-collab-${taskId}`,
+    });
+    store.markOperationEffectUnknown('send-op');
+    store.markOperationNeedsDecision('send-op');
+    store.close();
+    await savePromptCopy(fixture.paths, taskId, turnId, Buffer.from('failed verify'));
+    fixture.browser.nextVerifySafeComposerFailureTaskId = taskId;
+
+    await expect(fixture.service.resolveSubmission(taskId, turnId, 'not-submitted')).rejects.toThrow(
+      /safe composer verification failure/,
+    );
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireTurn(taskId, turnId).status).toBe('unknown-submission');
+    expect(reopened.requireOperation('send-op').phase).toBe('needs-decision');
+    reopened.close();
+  });
+});
+
 describe('BEH-008 local close and BEH-009 archive journal', () => {
   it('persists closing before terminating the browser and completes on a repeated close', async () => {
     const fixture = await serviceFixture();
@@ -1610,8 +1749,10 @@ class FakeBrowser implements CollabBrowser {
   readonly setupClosedSessions: string[] = [];
   readonly cleanedComposers: string[] = [];
   readonly archiveObservations: string[] = [];
+  readonly autoVerifications: string[] = [];
   nextArchiveState: 'archived' | 'not-archived' = 'archived';
   nextArchiveStateUnknown: string | null = null;
+  nextAutoVerifyUnresolved: string | null = null;
   readonly expectedConversationIds: Array<string | null> = [];
   readonly expectedAssistantTurnIds: Array<string | null> = [];
   readonly responseArtifacts: Array<{ readonly sourceUrl: string; readonly label: string }> = [];
@@ -1619,7 +1760,7 @@ class FakeBrowser implements CollabBrowser {
   nextDownloadFailureSourceUrl: string | null = null;
   nextStartFailureCode: string | null = null;
   sessionAvailabilityResult: 'available' | 'missing' | 'unknown' = 'available';
-  nextNotSubmittedFailureTaskId: string | null = null;
+  nextVerifySafeComposerFailureTaskId: string | null = null;
   observedOperations = 0;
   nextSendStatus: 'submitted' | 'not-submitted' | 'unknown-submission' | 'unsafe-not-submitted' = 'submitted';
   pendingWaitPolls = 0;
@@ -1810,6 +1951,43 @@ class FakeBrowser implements CollabBrowser {
   }
 
   /**
+   * Records one fake automatic submission verification.
+   *
+   * @param taskId Task identifier.
+   * @param _sessionName Unused named session.
+   * @param expectedConversationId Database-bound identity.
+   * @param _previousUserTurnIdentity Unused anchor.
+   * @param _prompt Unused saved prompt.
+   * @param _attachmentNames Unused ordered attachment names.
+   * @param observer Task-lease child-process observer.
+   * @returns The configured auto-verification result.
+   * @throws {Error} This fake verification does not throw.
+   */
+  async autoVerifySubmission(
+    taskId: string,
+    _sessionName: string,
+    expectedConversationId: string | null,
+    _previousUserTurnIdentity: string | null,
+    _prompt: string,
+    _attachmentNames: readonly string[],
+    observer?: BrowserOperationObserver,
+  ) {
+    this.observe(observer);
+    this.autoVerifications.push(taskId);
+    if (this.nextAutoVerifyUnresolved === taskId) {
+      this.nextAutoVerifyUnresolved = null;
+      return { status: 'unresolved' as const, reason: 'injected unresolved auto-verification' };
+    }
+    const conversationId = expectedConversationId ?? `conversation-${taskId}`;
+    return {
+      status: 'submitted' as const,
+      conversationId,
+      conversationUrl: `https://chatgpt.com/c/${conversationId}`,
+      userTurnIdentity: `user-turn-${taskId}`,
+    };
+  }
+
+  /**
    * Records one fake archive-state observation.
    *
    * @param taskId Task identifier.
@@ -1918,8 +2096,8 @@ class FakeBrowser implements CollabBrowser {
     observer?: BrowserOperationObserver,
   ) {
     this.observe(observer);
-    if (this.nextNotSubmittedFailureTaskId === taskId) {
-      this.nextNotSubmittedFailureTaskId = null;
+    if (this.nextVerifySafeComposerFailureTaskId === taskId) {
+      this.nextVerifySafeComposerFailureTaskId = null;
       throw new Error('injected safe composer verification failure');
     }
     this.safeComposersVerified.push(taskId);

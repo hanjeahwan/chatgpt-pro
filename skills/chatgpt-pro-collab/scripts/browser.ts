@@ -210,11 +210,29 @@ interface ObserveArchiveProtocolResult extends ProtocolResult {
   readonly error?: string;
 }
 
+interface AutoVerifySubmissionProtocolResult extends ProtocolResult {
+  readonly kind: 'auto-verify-submission';
+  readonly status: 'submitted' | 'unresolved';
+  readonly conversationId?: string;
+  readonly conversationUrl?: string;
+  readonly userTurnIdentity?: string;
+  readonly error?: string;
+}
+
 export interface BrowserResolveSubmittedResult {
   readonly conversationId: string;
   readonly conversationUrl: string;
   readonly userTurnIdentity: string;
 }
+
+export type BrowserAutoVerifyResult =
+  | {
+      readonly status: 'submitted';
+      readonly conversationId: string;
+      readonly conversationUrl: string;
+      readonly userTurnIdentity: string;
+    }
+  | { readonly status: 'unresolved'; readonly reason: string };
 
 export type BrowserArchiveState =
   | { readonly status: 'archived' }
@@ -969,6 +987,57 @@ export class PlaywrightBrowser {
       'draft-cleared',
       observer,
     );
+  }
+
+  /**
+   * Auto-verifies a released submission from the current page when the result was lost.
+   *
+   * Only a unique user turn after the recorded anchor matching the saved prompt and
+   * ordered attachment names proves the submission; anything else is unresolved.
+   *
+   * @param taskId Owning task identifier.
+   * @param sessionName Owning Playwright named session.
+   * @param expectedConversationId Bound conversation, or null before binding.
+   * @param previousUserTurnIdentity Anchor of the previous completed turn, or null for a first turn.
+   * @param prompt Saved prompt text for verbatim user-turn matching.
+   * @param attachmentNames Ordered saved attachment basenames.
+   * @param observer Task-lease child-process observer.
+   * @returns The proven submission or an unresolved reason.
+   * @throws {BrowserError} If the page contract itself cannot be evaluated.
+   * @throws {Error} If a local Playwright artifact cannot be written.
+   */
+  async autoVerifySubmission(
+    taskId: string,
+    sessionName: string,
+    expectedConversationId: string | null,
+    previousUserTurnIdentity: string | null,
+    prompt: string,
+    attachmentNames: readonly string[],
+    observer?: BrowserOperationObserver,
+  ): Promise<BrowserAutoVerifyResult> {
+    const result = await this.#runCode<AutoVerifySubmissionProtocolResult>(
+      sessionName,
+      taskId,
+      'auto-verify-submission',
+      autoVerifySubmissionScript(expectedConversationId, previousUserTurnIdentity, prompt, attachmentNames),
+      'auto-verify submission outcome',
+      'auto-verify-submission',
+      observer,
+    );
+    if (
+      result.status === 'submitted' &&
+      result.conversationId !== undefined &&
+      result.conversationUrl !== undefined &&
+      result.userTurnIdentity !== undefined
+    ) {
+      return {
+        status: 'submitted',
+        conversationId: result.conversationId,
+        conversationUrl: result.conversationUrl,
+        userTurnIdentity: result.userTurnIdentity,
+      };
+    }
+    return { status: 'unresolved', reason: result.error ?? 'no unique matching user turn on the current page' };
   }
 
   /**
@@ -2903,6 +2972,119 @@ function observeArchiveScript(canonicalUrl: string, expectedConversationId: stri
       kind: 'observe-archive',
       status: 'unknown',
       error: 'the sidebar archive link is not unique',
+    });
+  }`;
+}
+
+/**
+ * Builds the automatic submission verification from the current page state.
+ *
+ * @param expectedConversationId Bound conversation, or null before binding.
+ * @param previousUserTurnIdentity Anchor of the previous completed turn, or null for a first turn.
+ * @param prompt Saved prompt text for verbatim user-turn matching.
+ * @param attachmentNames Ordered saved attachment basenames.
+ * @returns A Playwright page function source.
+ * @throws {Error} This pure source builder does not throw.
+ */
+function autoVerifySubmissionScript(
+  expectedConversationId: string | null,
+  previousUserTurnIdentity: string | null,
+  prompt: string,
+  attachmentNames: readonly string[],
+): string {
+  return `async (page) => {
+    const expectedConversationId = ${JSON.stringify(expectedConversationId)};
+    const previousUserTurnIdentity = ${JSON.stringify(previousUserTurnIdentity)};
+    const prompt = ${JSON.stringify(prompt)};
+    const attachmentNames = ${JSON.stringify(attachmentNames)};
+    const conversationIdOf = (pathname) => {
+      const match = /\\/c\\/([^/?#]+)\\/?$/.exec(pathname);
+      return match === null || match[1].startsWith('WEB:') ? null : match[1];
+    };
+    const url = await page.evaluate(() => {
+      return { hostname: location.hostname, pathname: location.pathname, origin: location.origin };
+    });
+    if (url.hostname !== 'chatgpt.com') {
+      return JSON.stringify({
+        protocol: '${PROTOCOL}',
+        kind: 'auto-verify-submission',
+        status: 'unresolved',
+        error: 'the current page is not on chatgpt.com',
+      });
+    }
+    const conversationId = conversationIdOf(url.pathname);
+    if (conversationId === null) {
+      return JSON.stringify({
+        protocol: '${PROTOCOL}',
+        kind: 'auto-verify-submission',
+        status: 'unresolved',
+        error: 'the current page is not a canonical conversation',
+      });
+    }
+    if (expectedConversationId !== null && conversationId !== expectedConversationId) {
+      return JSON.stringify({
+        protocol: '${PROTOCOL}',
+        kind: 'auto-verify-submission',
+        status: 'unresolved',
+        error: 'the current conversation differs from the bound task',
+      });
+    }
+    const visible = (element) => {
+      if (!(element instanceof HTMLElement)) return false;
+      const style = getComputedStyle(element);
+      return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
+    };
+    const turnState = await page.evaluate(({ previous, expectedPrompt, names }) => {
+      const elements = [...document.querySelectorAll('[data-testid^="conversation-turn-"][data-turn]')].filter(visible);
+      let anchorIndex = -1;
+      if (previous !== null) {
+        const matches = elements.flatMap((element, index) => {
+          return element.getAttribute('data-testid') === previous ? [index] : [];
+        });
+        if (matches.length !== 1) {
+          return { status: 'drift', reason: 'previous user turn anchor is absent or not unique' };
+        }
+        anchorIndex = matches[0];
+      }
+      const candidates = [];
+      for (let index = anchorIndex + 1; index < elements.length; index += 1) {
+        if (elements[index].getAttribute('data-turn') !== 'user') continue;
+        const text = (elements[index].textContent || '').trim();
+        if (text !== expectedPrompt) continue;
+        if (!names.every((name) => text.includes(name))) continue;
+        candidates.push({ identity: elements[index].getAttribute('data-testid') });
+      }
+      if (candidates.length !== 1) {
+        return { status: candidates.length === 0 ? 'none' : 'multiple', count: candidates.length };
+      }
+      return { status: 'unique', identity: candidates[0].identity };
+    }, { previous: previousUserTurnIdentity, expectedPrompt: prompt, names: attachmentNames });
+    if (turnState.status === 'drift') {
+      return JSON.stringify({
+        protocol: '${PROTOCOL}',
+        kind: 'auto-verify-submission',
+        status: 'unresolved',
+        error: turnState.reason,
+      });
+    }
+    if (turnState.status !== 'unique' || turnState.identity === null) {
+      return JSON.stringify({
+        protocol: '${PROTOCOL}',
+        kind: 'auto-verify-submission',
+        status: 'unresolved',
+        error: 'zero or multiple matching user turns after the recorded anchor',
+      });
+    }
+    const finalUrl = await page.evaluate(() => {
+      return { hostname: location.hostname, pathname: location.pathname, origin: location.origin };
+    });
+    return JSON.stringify({
+      protocol: '${PROTOCOL}',
+      kind: 'auto-verify-submission',
+      status: 'submitted',
+      conversationId: conversationIdOf(finalUrl.pathname),
+      conversationUrl: finalUrl.origin + finalUrl.pathname,
+      userTurnIdentity: turnState.identity,
     });
   }`;
 }

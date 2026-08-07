@@ -8,6 +8,7 @@ import {
   PlaywrightBrowser,
   type BrowserArchiveState,
   type BrowserArtifactDownload,
+  type BrowserAutoVerifyResult,
   type BrowserAvailability,
   type BrowserCaptureResult,
   type BrowserObservationResult,
@@ -33,7 +34,7 @@ import {
   seedStateValid,
   type CollabPaths,
 } from './session.ts';
-import { StateError, StateStore, type OperationRecord, type StatusRecord } from './state.ts';
+import { StateError, StateStore, type OperationRecord, type StatusRecord, type TurnRecord } from './state.ts';
 
 const CAPTURE_ABORT_SETTLE_MS = 250;
 
@@ -133,6 +134,15 @@ export interface CollabBrowser {
     conversationId: string,
     observer?: BrowserOperationObserver,
   ): Promise<BrowserArchiveState>;
+  autoVerifySubmission(
+    taskId: string,
+    sessionName: string,
+    expectedConversationId: string | null,
+    previousUserTurnIdentity: string | null,
+    prompt: string,
+    attachmentNames: readonly string[],
+    observer?: BrowserOperationObserver,
+  ): Promise<BrowserAutoVerifyResult>;
 }
 
 export interface StartResult {
@@ -354,6 +364,102 @@ export class CollabService {
         }
       }
     });
+  }
+
+  /**
+   * Auto-verifies a released submission whose result was lost, or opens the decision gate.
+   *
+   * @param store Current process-local state connection.
+   * @param taskId Task whose send workflow is recovered.
+   * @param operation Effect-unknown send operation at the submit step.
+   * @param sendingTurn The sending turn of the released submission.
+   * @param observer Task-lease child-process observer.
+   * @returns The recovered status snapshot.
+   * @throws {CollabError} If the saved prompt is unreadable or state is inconsistent.
+   * @throws {Error} If state or browser operations fail.
+   */
+  async #recoverSubmittedSend(
+    store: StateStore,
+    taskId: string,
+    operation: OperationRecord,
+    sendingTurn: TurnRecord | undefined,
+    observer: BrowserOperationObserver,
+  ): Promise<StatusRecord> {
+    const task = store.requireTask(taskId);
+    const observedAt = new Date().toISOString();
+    if (sendingTurn === undefined) {
+      store.commitOperation(operation.id, 'automatic', {
+        observedAt,
+        sessionName: task.playwrightSession,
+        postcondition: 'released submission had no recoverable sending turn',
+      });
+      const afterMissing = await this.#browser.sessionAvailability(task.playwrightSession);
+      return store.getStatus(taskId, afterMissing);
+    }
+    const prompt = await readSavedPrompt(this.#paths, taskId, sendingTurn.id);
+    const attachmentNames = sendingTurn.attachmentPaths.map((attachmentPath) => {
+      return basename(attachmentPath);
+    });
+    const previousUserTurnIdentity = await previousCompletedTurnIdentity(store, taskId, sendingTurn.id);
+    if ((await this.#browser.sessionAvailability(task.playwrightSession)) === 'missing') {
+      store.markSubmissionUnknownAndNeedsDecision(
+        taskId,
+        sendingTurn.id,
+        operation.id,
+        'browser session missing; submission outcome could not be verified',
+        {
+          observedAt,
+          sessionName: task.playwrightSession,
+          postcondition: 'no page evidence available for automatic proof',
+        },
+      );
+      const after = await this.#browser.sessionAvailability(task.playwrightSession);
+      return store.getStatus(taskId, after);
+    }
+    const verified = await this.#browser.autoVerifySubmission(
+      taskId,
+      task.playwrightSession,
+      task.conversationId,
+      previousUserTurnIdentity,
+      prompt,
+      attachmentNames,
+      observer,
+    );
+    if (verified.status === 'submitted') {
+      store.commitSubmittedTurn(
+        taskId,
+        sendingTurn.id,
+        verified.conversationId,
+        verified.conversationUrl,
+        verified.userTurnIdentity,
+        operation.id,
+        {
+          observedAt,
+          sessionName: task.playwrightSession,
+          pageUrl: verified.conversationUrl,
+          postcondition: 'unique matching user turn auto-verified after the recorded anchor',
+          conversationId: verified.conversationId,
+          userTurnIdentity: verified.userTurnIdentity,
+          promptVerbatimMatch: true,
+          attachmentNamesMatch: true,
+        },
+      );
+      const after = await this.#browser.sessionAvailability(task.playwrightSession);
+      return store.getStatus(taskId, after);
+    }
+    store.markSubmissionUnknownAndNeedsDecision(
+      taskId,
+      sendingTurn.id,
+      operation.id,
+      `auto-verification unresolved: ${verified.reason}`,
+      {
+        observedAt,
+        sessionName: task.playwrightSession,
+        postcondition: 'page evidence did not prove the submission',
+      },
+    );
+    const after = await this.#browser.sessionAvailability(task.playwrightSession);
+    return store.getStatus(taskId, after);
   }
 
   /**
@@ -1000,9 +1106,24 @@ export class CollabService {
    */
   async recover(taskId: string): Promise<StatusRecord> {
     return this.#withStore(async (store) => {
-      return this.#withTaskOperation(store, taskId, 'recover', async (observer) => {
-        return this.#recoverSnapshot(store, taskId, observer);
-      });
+      while (true) {
+        const token = randomUUID();
+        try {
+          store.acquireTaskOperation(taskId, 'recover', token);
+          return await this.#withAcquiredTaskOperation(store, taskId, token, async (observer) => {
+            return this.#recoverSnapshot(store, taskId, observer);
+          });
+        } catch (error) {
+          if (!(error instanceof StateError) || error.code !== 'TASK_OPERATION_IN_PROGRESS') {
+            throw error;
+          }
+          const operation = store.getTaskOperation(taskId);
+          if (operation !== null && operation !== 'recover') {
+            throw error;
+          }
+          await yieldTaskOperation();
+        }
+      }
     });
   }
 
@@ -1045,8 +1166,17 @@ export class CollabService {
     if (pendingTurn !== undefined && pendingTurn.status === 'unknown-submission') {
       return before;
     }
-    if (operation !== null && operation.kind === 'send' && operation.phase === 'needs-decision') {
-      return before;
+    if (operation !== null && operation.kind === 'send' && operation.step === 'submit') {
+      if (operation.phase === 'needs-decision') {
+        return before;
+      }
+      if (operation.phase !== 'effect-unknown') {
+        throw new CollabError(
+          'OPERATION_PHASE_CONFLICT',
+          `send operation is ${operation.phase}, expected effect-unknown: ${operation.id}`,
+        );
+      }
+      return this.#recoverSubmittedSend(store, taskId, operation, pendingTurn, observer);
     }
     if (operation !== null && operation.kind === 'send' && operation.step === 'draft') {
       const task = store.requireTask(taskId);

@@ -175,7 +175,7 @@
     {
       "id": "IMP-008",
       "title": "完成中断恢复矩阵与全量运行基线验证",
-      "status": "pending",
+      "status": "implemented",
       "covers": ["BEH-004", "BEH-006", "BEH-007", "BEH-012", "BEH-013"],
       "verifies": ["VER-007", "VER-010", "VER-011", "VER-012", "VER-016"],
       "dependsOn": ["IMP-001", "IMP-002", "IMP-003", "IMP-004", "IMP-005", "IMP-006", "IMP-007", "IMP-009", "IMP-010"],
