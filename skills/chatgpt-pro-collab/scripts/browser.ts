@@ -63,7 +63,9 @@ export interface BrowserSessionInfo {
   readonly contextMarker: string;
   readonly projectId: string;
   readonly modelConfirmed: boolean;
-  readonly modeConfirmed: boolean;
+  readonly powerConfirmed: boolean;
+  readonly powerNow: number;
+  readonly powerMax: number;
   readonly persistent: false;
 }
 
@@ -128,7 +130,9 @@ interface StartProtocolResult extends ProtocolResult {
   readonly contextMarker: string;
   readonly projectId: string;
   readonly modelConfirmed: boolean;
-  readonly modeConfirmed: boolean;
+  readonly powerConfirmed: boolean;
+  readonly powerNow: number;
+  readonly powerMax: number;
 }
 
 interface StartFailedProtocolResult extends ProtocolResult {
@@ -449,7 +453,9 @@ export class PlaywrightBrowser {
         contextMarker: result.contextMarker,
         projectId: result.projectId,
         modelConfirmed: result.modelConfirmed,
-        modeConfirmed: result.modeConfirmed,
+        powerConfirmed: result.powerConfirmed,
+        powerNow: result.powerNow,
+        powerMax: result.powerMax,
         persistent: false,
       };
     } catch (error) {
@@ -1614,7 +1620,9 @@ function parseStartProtocolResult(stdout: string): StartProtocolResult | StartFa
           if (
             typeof candidate.projectId !== 'string' ||
             candidate.modelConfirmed !== true ||
-            candidate.modeConfirmed !== true
+            candidate.powerConfirmed !== true ||
+            typeof candidate.powerNow !== 'number' ||
+            typeof candidate.powerMax !== 'number'
           ) {
             throw new BrowserError(
               'PLAYWRIGHT_CONTRACT_DRIFT',
@@ -1748,7 +1756,6 @@ function startVerificationScript(contextMarker: string): string {
     const contextMarker = ${JSON.stringify(contextMarker)};
     const targetProject = 'chatgpt-pro-collab';
     const targetModel = 'GPT-5.6 Sol';
-    const targetMode = 'Pro';
     const fail = (errorCode, message) => {
       return { protocol: '${PROTOCOL}', kind: 'start-failed', errorCode, message };
     };
@@ -1898,17 +1905,22 @@ function startVerificationScript(contextMarker: string): string {
     const selectorControl = page.locator(
       'form button[aria-haspopup="menu"]:not([data-testid="send-button"]):not([data-testid="composer-plus-btn"])',
     );
-    const menuHasRadios = () => evaluate(() => {
+    const menuHasTargets = () => evaluate(() => {
       const visible = (element) => {
         if (!(element instanceof HTMLElement)) return false;
         const style = getComputedStyle(element);
         return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
       };
-      return [...document.querySelectorAll('[role="menuitemradio"]')].filter(visible).length > 0;
+      const nameOf = (element) => element.getAttribute('aria-label') ?? (element.textContent ?? '').trim();
+      const sliders = [...document.querySelectorAll('[role="slider"]')].filter(visible);
+      const modelItems = [...document.querySelectorAll('[role="menuitem"], [role="option"]')].filter((element) => {
+        return visible(element) && /^Model\\s+/u.test(nameOf(element));
+      });
+      return sliders.length > 0 || modelItems.length > 0;
     });
     const ensureMenuOpen = async () => {
       for (let attempt = 0; attempt < 6; attempt += 1) {
-        if (await menuHasRadios()) return { status: 'ok' };
+        if (await menuHasTargets()) return { status: 'ok' };
         const state = await selectorState();
         if (state.status === 'drift') {
           await page.waitForTimeout(400);
@@ -1930,33 +1942,53 @@ function startVerificationScript(contextMarker: string): string {
         }
         await page.waitForTimeout(500);
       }
-      return { status: 'drift', reason: 'composer model/mode selector control is not unique or did not open' };
+      return { status: 'drift', reason: 'composer model/Power selector control is not unique or did not open' };
     };
 
-    const readRadio = (target) => evaluate((name) => {
+    const readPower = () => evaluate(() => {
       const visible = (element) => {
         if (!(element instanceof HTMLElement)) return false;
         const style = getComputedStyle(element);
         return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
       };
-      const radios = [...document.querySelectorAll('[role="menuitemradio"]')].filter((element) => {
-        return visible(element) &&
-          (element.getAttribute('aria-label') ?? (element.textContent ?? '').trim()) === name;
-      });
-      return { count: radios.length, checked: radios.length === 1 && radios[0].getAttribute('aria-checked') === 'true' };
-    }, target);
+      const sliders = [...document.querySelectorAll('[role="slider"]')].filter(visible);
+      if (sliders.length === 0) {
+        return { status: 'unavailable' };
+      }
+      if (sliders.length !== 1) {
+        return { status: 'drift', reason: 'Power slider is not unique' };
+      }
+      const now = sliders[0].getAttribute('aria-valuenow');
+      const max = sliders[0].getAttribute('aria-valuemax');
+      if (now === null || max === null) {
+        return { status: 'drift', reason: 'Power slider omitted its numeric state' };
+      }
+      return { status: 'ok', now: Number(now), max: Number(max) };
+    });
 
-    const waitForRadio = (target) => page.waitForFunction((name) => {
-      const visible = (element) => {
-        if (!(element instanceof HTMLElement)) return false;
-        const style = getComputedStyle(element);
-        return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
-      };
-      return [...document.querySelectorAll('[role="menuitemradio"]')].some((element) => {
-        return visible(element) &&
-          (element.getAttribute('aria-label') ?? (element.textContent ?? '').trim()) === name;
-      });
-    }, target, { timeout: 10000, polling: 100 });
+    const confirmPower = async () => {
+      const opened = await ensureMenuOpen();
+      if (opened.status === 'drift') return opened;
+      let power = await readPower();
+      if (power.status === 'drift') return power;
+      if (power.status === 'unavailable') return power;
+      if (power.now !== power.max || power.max !== 5) {
+        const slider = page.locator('[role="slider"]');
+        if (await slider.count() !== 1) {
+          return { status: 'drift', reason: 'Power slider is not unique' };
+        }
+        await slider.focus();
+        await page.keyboard.press('End');
+        await page.waitForTimeout(400);
+        power = await readPower();
+        if (power.status === 'drift') return power;
+        if (power.status === 'unavailable') return power;
+      }
+      if (power.now !== power.max || power.max !== 5) {
+        return { status: 'unconfirmed', now: power.now, max: power.max };
+      }
+      return { status: 'confirmed', now: power.now, max: power.max };
+    };
 
     const modelOpener = page.locator('[role="menuitem"][aria-haspopup]');
     const readOpener = () => evaluate(() => {
@@ -1968,113 +2000,115 @@ function startVerificationScript(contextMarker: string): string {
       return [...document.querySelectorAll('[role="menuitem"][aria-haspopup]')].filter(visible).length;
     });
 
-    const ensureModeVisible = async () => {
-      const opened = await ensureMenuOpen();
-      if (opened.status === 'drift') return opened;
-      try {
-        await waitForRadio(targetMode);
-      } catch {
-        return { status: 'unavailable' };
+    const readCurrentModel = () => evaluate(() => {
+      const visible = (element) => {
+        if (!(element instanceof HTMLElement)) return false;
+        const style = getComputedStyle(element);
+        return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
+      };
+      const nameOf = (element) => element.getAttribute('aria-label') ?? (element.textContent ?? '').trim();
+      const modelItems = [...document.querySelectorAll('[role="menuitem"], [role="option"]')].filter((element) => {
+        return visible(element) && /^Model\\s+/u.test(nameOf(element));
+      });
+      const checkedRadios = [...document.querySelectorAll('[role="menuitemradio"]')].filter((element) => {
+        return visible(element) && element.getAttribute('aria-checked') === 'true';
+      });
+      const itemModel = modelItems.length === 1 ? nameOf(modelItems[0]).replace(/^Model\\s+/u, '') : null;
+      if (modelItems.length > 1) {
+        return { status: 'drift', reason: 'current model readback is not unique' };
       }
-      return { status: 'ok' };
-    };
-    const ensureModelVisible = async () => {
-      const opened = await ensureMenuOpen();
-      if (opened.status === 'drift') return opened;
-      const current = await readRadio(targetModel);
-      if (current.count === 0) {
-        if (await readOpener() !== 1) {
-          return { status: 'drift', reason: 'model submenu opener is not unique' };
+      if (itemModel !== null) {
+        if (checkedRadios.length === 1 && nameOf(checkedRadios[0]) !== itemModel) {
+          return { status: 'drift', reason: 'current model readback paths disagree' };
         }
-        if (await modelOpener.count() !== 1) {
-          return { status: 'drift', reason: 'model submenu opener is not unique' };
-        }
-        await modelOpener.first().click();
-        await page.waitForTimeout(400);
+        return { status: 'ok', model: itemModel };
       }
-      try {
-        await waitForRadio(targetModel);
-      } catch {
-        return { status: 'unavailable' };
+      if (checkedRadios.length > 1) {
+        return { status: 'drift', reason: 'checked model radio is not unique' };
       }
-      return { status: 'ok' };
-    };
+      if (checkedRadios.length === 1) {
+        return { status: 'ok', model: nameOf(checkedRadios[0]) };
+      }
+      return { status: 'none' };
+    });
 
-    const confirmRadio = async (target, ensureVisible) => {
-      const visibleState = await ensureVisible();
-      if (visibleState.status === 'drift') return visibleState;
-      if (visibleState.status === 'unavailable') return { status: 'unavailable' };
-      const before = await readRadio(target);
-      if (before.count !== 1) return { status: 'unavailable', count: before.count };
-      if (before.checked) return { status: 'confirmed' };
-      const control = page.getByRole('menuitemradio', { name: target, exact: true });
-      if (await control.count() !== 1) return { status: 'unavailable' };
-      await control.first().click();
+    const confirmModel = async () => {
+      const opened = await ensureMenuOpen();
+      if (opened.status === 'drift') return opened;
+      const current = await readCurrentModel();
+      if (current.status === 'drift') return current;
+      if (current.status === 'ok' && current.model === targetModel) {
+        return { status: 'confirmed' };
+      }
+      if (await readOpener() !== 1) {
+        return { status: 'drift', reason: 'model submenu opener is not unique' };
+      }
+      if (await modelOpener.count() !== 1) {
+        return { status: 'drift', reason: 'model submenu opener is not unique' };
+      }
+      await modelOpener.first().click();
       await page.waitForTimeout(400);
-      const reopened = await ensureVisible();
+      let option = page.getByRole('menuitemradio', { name: targetModel, exact: true });
+      if (await option.count() !== 1) {
+        option = page.getByRole('menuitem', { name: targetModel, exact: true });
+      }
+      if (await option.count() !== 1) {
+        return { status: 'unavailable' };
+      }
+      await option.first().click();
+      await page.waitForTimeout(400);
+      const reopened = await ensureMenuOpen();
       if (reopened.status === 'drift') return reopened;
-      if (reopened.status === 'unavailable') return { status: 'unconfirmed' };
-      const after = await readRadio(target);
-      if (after.count !== 1 || !after.checked) return { status: 'unconfirmed' };
+      const after = await readCurrentModel();
+      if (after.status === 'drift') return after;
+      if (after.status !== 'ok' || after.model !== targetModel) {
+        return { status: 'unconfirmed' };
+      }
       return { status: 'confirmed' };
     };
 
-    const modeVisible = await ensureModeVisible();
-    if (modeVisible.status === 'drift') return fail('PAGE_CONTRACT_DRIFT', modeVisible.reason);
-    if (modeVisible.status === 'unavailable') {
-      return fail('FIXED_TARGET_UNAVAILABLE', 'fixed mode Pro is not available or not unique as a menuitemradio');
+    const powerResult = await confirmPower();
+    if (powerResult.status === 'drift') return fail('PAGE_CONTRACT_DRIFT', powerResult.reason);
+    if (powerResult.status === 'unavailable') {
+      return fail('FIXED_TARGET_UNAVAILABLE', 'fixed Power slider is not available or not unique as a slider');
     }
-    const modeResult = await confirmRadio(targetMode, ensureModeVisible);
-    if (modeResult.status === 'drift') return fail('PAGE_CONTRACT_DRIFT', modeResult.reason);
-    if (modeResult.status === 'unavailable') {
-      return fail('FIXED_TARGET_UNAVAILABLE', 'fixed mode Pro is not available or not unique as a menuitemradio');
-    }
-    if (modeResult.status === 'unconfirmed') {
-      return fail('SELECTION_UNCONFIRMED', 'fixed mode Pro could not be read back as aria-checked=true');
+    if (powerResult.status === 'unconfirmed') {
+      return fail(
+        'SELECTION_UNCONFIRMED',
+        'fixed Power could not be set to the maximum level with aria-valuenow == aria-valuemax',
+      );
     }
 
-    const modelVisible = await ensureModelVisible();
-    if (modelVisible.status === 'drift') return fail('PAGE_CONTRACT_DRIFT', modelVisible.reason);
-    if (modelVisible.status === 'unavailable') {
-      return fail('FIXED_TARGET_UNAVAILABLE', 'fixed model GPT-5.6 Sol was not observed in the model submenu');
-    }
-    const modelResult = await confirmRadio(targetModel, ensureModelVisible);
+    const modelResult = await confirmModel();
     if (modelResult.status === 'drift') return fail('PAGE_CONTRACT_DRIFT', modelResult.reason);
     if (modelResult.status === 'unavailable') {
-      return fail('FIXED_TARGET_UNAVAILABLE', 'fixed model GPT-5.6 Sol is not available or not unique as a menuitemradio');
+      return fail('FIXED_TARGET_UNAVAILABLE', 'fixed model GPT-5.6 Sol is not available in the model submenu');
     }
     if (modelResult.status === 'unconfirmed') {
-      return fail('SELECTION_UNCONFIRMED', 'fixed model GPT-5.6 Sol could not be read back as aria-checked=true');
+      return fail('SELECTION_UNCONFIRMED', 'fixed model GPT-5.6 Sol could not be read back as the current model');
     }
 
     const jointReadback = async () => {
-      const modeVisible = await ensureModeVisible();
-      if (modeVisible.status === 'drift') return modeVisible;
-      if (modeVisible.status === 'unavailable') {
-        return { status: 'unconfirmed', target: targetMode };
+      const opened = await ensureMenuOpen();
+      if (opened.status === 'drift') return opened;
+      const modelState = await readCurrentModel();
+      if (modelState.status === 'drift') return modelState;
+      if (modelState.status !== 'ok' || modelState.model !== targetModel) {
+        return { status: 'unconfirmed', target: 'model GPT-5.6 Sol' };
       }
-      const modelVisible = await ensureModelVisible();
-      if (modelVisible.status === 'drift') return modelVisible;
-      if (modelVisible.status === 'unavailable') {
-        return { status: 'unconfirmed', target: targetModel };
+      const powerState = await readPower();
+      if (powerState.status === 'drift') return powerState;
+      if (powerState.status !== 'ok' || powerState.now !== powerState.max || powerState.max !== 5) {
+        return { status: 'unconfirmed', target: 'Power 5/5' };
       }
-      const modeState = await readRadio(targetMode);
-      if (modeState.count !== 1 || !modeState.checked) {
-        return { status: 'unconfirmed', target: targetMode };
-      }
-      const modelState = await readRadio(targetModel);
-      if (modelState.count !== 1 || !modelState.checked) {
-        return { status: 'unconfirmed', target: targetModel };
-      }
-      return { status: 'confirmed' };
+      return { status: 'confirmed', now: powerState.now, max: powerState.max };
     };
     const joint = await jointReadback();
     if (joint.status === 'drift') return fail('PAGE_CONTRACT_DRIFT', joint.reason);
     if (joint.status === 'unconfirmed') {
-      const target = joint.target === targetMode ? 'mode Pro' : 'model GPT-5.6 Sol';
       return fail(
         'SELECTION_UNCONFIRMED',
-        'fixed ' + target + ' was not jointly read back as a unique aria-checked=true menuitemradio after all selections',
+        'fixed ' + joint.target + ' was not jointly read back after all selections',
       );
     }
 
@@ -2095,7 +2129,7 @@ function startVerificationScript(contextMarker: string): string {
         return urlOk && titleOk && composerOk;
       }, targetProject, { timeout: 60000, polling: 250 });
     } catch {
-      return fail('PAGE_CONTRACT_DRIFT', 'project context drifted during model and mode confirmation');
+      return fail('PAGE_CONTRACT_DRIFT', 'project context drifted during model and Power confirmation');
     }
 
     try {
@@ -2131,7 +2165,9 @@ function startVerificationScript(contextMarker: string): string {
       contextMarker: observedContextMarker,
       projectId: projectMatch[1],
       modelConfirmed: true,
-      modeConfirmed: true,
+      powerConfirmed: true,
+      powerNow: joint.now,
+      powerMax: joint.max,
     });
   }`;
 }

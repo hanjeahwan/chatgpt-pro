@@ -9,14 +9,14 @@ export interface StartPageOptions {
   readonly existingTurns?: boolean;
   readonly selectorControlCount?: number;
   readonly plusMenuTrigger?: boolean;
-  readonly modelOpenerCount?: number;
-  readonly modeRadioPresent?: boolean;
-  readonly modelRadioPresent?: boolean;
-  readonly modeInitiallyChecked?: boolean;
+  readonly powerSliderPresent?: boolean;
+  readonly powerInitiallyMax?: boolean;
+  readonly powerEndApplies?: boolean;
   readonly modelInitiallyChecked?: boolean;
-  readonly modeClickApplies?: boolean;
+  readonly modelOpenerCount?: number;
+  readonly modelRadioPresent?: boolean;
   readonly modelClickApplies?: boolean;
-  readonly modelClickResetsMode?: boolean;
+  readonly modelClickResetsPower?: boolean;
 }
 
 export interface StartPageFixture {
@@ -43,6 +43,7 @@ interface StartDomNode {
   querySelector(selector: string): StartDomNode | null;
   querySelectorAll(selector: string): readonly StartDomNode[];
   click(): void;
+  focus(): void;
 }
 
 class StartHtmlElement implements StartDomNode {
@@ -166,6 +167,13 @@ class StartHtmlElement implements StartDomNode {
     this.clickAction?.();
   }
 
+  /**
+   * Focuses the node without scrolling or layout side effects.
+   *
+   * @returns Nothing.
+   */
+  focus(): void {}
+
   private descendants(): readonly StartDomNode[] {
     const direct = this.#childrenByNode.get(this) ?? [];
     return [
@@ -192,21 +200,24 @@ export function startPageFixture(options: StartPageOptions): StartPageFixture {
   const state = {
     authenticated: options.authenticated ?? true,
     composerCount: options.composerCount ?? 1,
+    currentModel: (options.modelInitiallyChecked ?? false) ? 'GPT-5.6 Sol' : 'GPT-5.5',
     existingTurns: options.existingTurns ?? false,
+    focusedElement: null as StartDomNode | null,
     mainTitleCount: options.mainTitleCount ?? 1,
     menuOpen: false,
-    modeChecked: options.modeInitiallyChecked ?? false,
-    modeClickApplies: options.modeClickApplies ?? true,
-    modeRadioPresent: options.modeRadioPresent ?? true,
-    modelChecked: options.modelInitiallyChecked ?? false,
     modelClickApplies: options.modelClickApplies ?? true,
-    modelClickResetsMode: options.modelClickResetsMode ?? false,
+    modelClickResetsPower: options.modelClickResetsPower ?? false,
     modelOpenerCount: options.modelOpenerCount ?? 1,
     modelRadioPresent: options.modelRadioPresent ?? true,
     navigateOnProjectClick: options.navigateOnProjectClick ?? true,
     otherRowCount: options.otherRowCount ?? 0,
     pathname: '/projects',
     plusMenuTrigger: options.plusMenuTrigger ?? false,
+    powerEndApplies: options.powerEndApplies ?? true,
+    powerInitiallyMax: options.powerInitiallyMax ?? false,
+    powerMax: 5,
+    powerNow: (options.powerInitiallyMax ?? false) ? 5 : 2,
+    powerSliderPresent: options.powerSliderPresent ?? true,
     projectLoadsRows: options.projectLoadsRows ?? true,
     projectRowCount: options.projectRowCount ?? 1,
     selectorControlCount: options.selectorControlCount ?? 1,
@@ -290,7 +301,7 @@ export function startPageFixture(options: StartPageOptions): StartPageFixture {
 
   const selectorControl: StartDomNode | null =
     state.selectorControlCount === 1
-      ? node('button', 'Pro', { 'aria-haspopup': 'menu', 'aria-expanded': 'false' }, [], () => {
+      ? node('button', 'Power 2 of 5', { 'aria-haspopup': 'menu', 'aria-expanded': 'false' }, [], () => {
           events.push('selector-click');
           if (state.menuOpen) {
             closeMenu();
@@ -333,44 +344,51 @@ export function startPageFixture(options: StartPageOptions): StartPageFixture {
   const main = node('main', '', {});
   setChildren(main, [...titleNodes, ...composerNodes, ...turnNodes]);
 
-  const modeRadios: StartDomNode[] = (['Instant 5.5', 'Medium', 'High', 'Extra High', 'Pro'] as const)
-    .filter((mode) => {
-      return mode !== 'Pro' || state.modeRadioPresent;
-    })
-    .map((mode) => {
-      return node(
-        'div',
-        mode,
-        { 'role': 'menuitemradio', 'aria-checked': 'false' },
-        [],
-        () => {
-          if (mode === 'Pro') {
-            events.push('mode-click');
-            if (state.modeClickApplies) {
-              state.modeChecked = true;
-            }
-            closeMenu();
-          }
-        },
-        'first',
-      );
-    });
-  const modelOpeners: StartDomNode[] = Array.from({ length: state.modelOpenerCount }, () => {
-    return node(
-      'div',
-      'Models',
-      { 'role': 'menuitem', 'aria-haspopup': 'menu' },
-      [],
-      () => {
-        events.push('opener-click');
-        state.menuOpen = true;
-        state.submenuOpen = true;
-      },
-      'first',
-    );
+  const modelItem = node(
+    'div',
+    `Model ${state.currentModel}`,
+    { 'role': 'menuitem', 'aria-haspopup': 'menu' },
+    [],
+    () => {
+      events.push('opener-click');
+      state.menuOpen = true;
+      state.submenuOpen = true;
+    },
+    'first',
+  );
+  Object.defineProperty(modelItem, 'textContent', {
+    configurable: true,
+    get() {
+      return `Model ${state.currentModel}`;
+    },
   });
+  const modelOpeners: StartDomNode[] = Array.from({ length: state.modelOpenerCount }, () => {
+    return modelItem;
+  });
+
+  const powerSlider = node(
+    'div',
+    `Medium, ${state.powerNow} of ${state.powerMax}`,
+    {
+      'role': 'slider',
+      'aria-valuemin': '1',
+      'aria-valuenow': String(state.powerNow),
+      'aria-valuemax': String(state.powerMax),
+      'tabindex': '0',
+    },
+    [],
+    () => {},
+    'first',
+  );
+  Object.defineProperty(powerSlider, 'textContent', {
+    configurable: true,
+    get() {
+      return `Medium, ${state.powerNow} of ${state.powerMax}`;
+    },
+  });
+  const powerSliders: StartDomNode[] = state.powerSliderPresent ? [powerSlider] : [];
   const firstLayer = node('div', '', { role: 'menu' });
-  setChildren(firstLayer, [...modeRadios, ...modelOpeners]);
+  setChildren(firstLayer, [...modelOpeners, ...powerSliders]);
 
   const modelRadios: StartDomNode[] = (['GPT-5.6 Sol', 'GPT-5.5', 'GPT-5.3', 'o3'] as const)
     .filter((model) => {
@@ -386,10 +404,10 @@ export function startPageFixture(options: StartPageOptions): StartPageFixture {
           if (model === 'GPT-5.6 Sol') {
             events.push('model-click');
             if (state.modelClickApplies) {
-              state.modelChecked = true;
+              state.currentModel = 'GPT-5.6 Sol';
             }
-            if (state.modelClickResetsMode) {
-              state.modeChecked = false;
+            if (state.modelClickResetsPower) {
+              state.powerNow = 2;
             }
             closeMenu();
           }
@@ -401,21 +419,42 @@ export function startPageFixture(options: StartPageOptions): StartPageFixture {
   setChildren(submenu, modelRadios);
 
   const radioChecked = (element: StartDomNode): string => {
-    if (element.textContent.trim() === 'Pro') {
-      return state.modeChecked ? 'true' : 'false';
-    }
-    if (element.textContent.trim() === 'GPT-5.6 Sol') {
-      return state.modelChecked ? 'true' : 'false';
+    if (element.textContent.trim() === state.currentModel) {
+      return 'true';
     }
     return element.attributes['aria-checked'] ?? 'false';
   };
-  for (const radio of [...modeRadios, ...modelRadios]) {
+  for (const radio of modelRadios) {
     const readAttribute = radio.getAttribute.bind(radio);
     radio.getAttribute = (name: string): string | null => {
       if (name === 'aria-checked') {
         return radioChecked(radio);
       }
       return readAttribute(name);
+    };
+  }
+  const sliderAttributes = (name: string): string | null => {
+    if (name === 'aria-valuenow') {
+      return String(state.powerNow);
+    }
+    if (name === 'aria-valuemax') {
+      return String(state.powerMax);
+    }
+    return null;
+  };
+  for (const slider of powerSliders) {
+    const readAttribute = slider.getAttribute.bind(slider);
+    slider.getAttribute = (name: string): string | null => {
+      return sliderAttributes(name) ?? readAttribute(name);
+    };
+    const readHasAttribute = slider.hasAttribute.bind(slider);
+    slider.hasAttribute = (name: string): boolean => {
+      return sliderAttributes(name) !== null || readHasAttribute(name);
+    };
+    const originalFocus = slider.focus.bind(slider);
+    slider.focus = (): void => {
+      state.focusedElement = slider;
+      originalFocus();
     };
   }
 
@@ -525,7 +564,33 @@ export function startPageFixture(options: StartPageOptions): StartPageFixture {
             },
           };
         },
+        focus() {
+          const target = matches(selector)[0];
+          if (target === undefined) {
+            throw new Error(`fixture locator is absent: ${selector}`);
+          }
+          target.focus();
+          return Promise.resolve();
+        },
       };
+    },
+    keyboard: {
+      async press(key: string) {
+        if (key !== 'End') {
+          throw new Error(`unsupported fixture keyboard key: ${key}`);
+        }
+        const focused = state.focusedElement;
+        if (focused === null) {
+          throw new Error('fixture keyboard press requires a focused element');
+        }
+        if (focused.getAttribute('role') !== 'slider') {
+          throw new Error('fixture keyboard End is only supported on a focused slider');
+        }
+        events.push('power-end');
+        if (state.powerEndApplies) {
+          state.powerNow = state.powerMax;
+        }
+      },
     },
     url() {
       return `https://chatgpt.com${state.pathname}`;
@@ -634,6 +699,12 @@ function matchesSingleSelector(element: StartDomNode, selector: string): boolean
     matchesBase = element.attributes['role'] === 'row';
   } else if (base === '[role="menuitemradio"]') {
     matchesBase = element.attributes['role'] === 'menuitemradio';
+  } else if (base === '[role="menuitem"]') {
+    matchesBase = element.attributes['role'] === 'menuitem';
+  } else if (base === '[role="option"]') {
+    matchesBase = element.attributes['role'] === 'option';
+  } else if (base === '[role="slider"]') {
+    matchesBase = element.attributes['role'] === 'slider';
   } else if (base === '[role="menuitem"][aria-haspopup]') {
     matchesBase = element.attributes['role'] === 'menuitem' && 'aria-haspopup' in element.attributes;
   } else if (base === '[aria-haspopup]') {

@@ -196,13 +196,23 @@
     {
       "id": "IMP-009",
       "title": "建立固定 Project 与 GPT-5.6 Sol Power 5/5 启动上下文",
-      "status": "pending",
+      "status": "implemented",
       "covers": ["BEH-002"],
       "verifies": ["VER-002"],
       "dependsOn": ["IMP-001", "IMP-010"],
       "scope": ["CLI", "Browser boundary", "State store", "Test suite"],
       "evidence": {
-        "checks": [],
+        "checks": [
+          "pnpm format:check",
+          "pnpm lint",
+          "pnpm typecheck",
+          "pnpm test (179 passed)",
+          "用户裁决：固定 GPT-5.6 Sol + Power 5/5（Spec 已由协调员修订，Ready Gate 已在 main 0f08d8c 通过）",
+          "start 脚本改为：打开唯一模型/Power 菜单（沿用 send/composer-plus 身份排除的 selectorControl），把唯一 Power slider 经 focus+End 设置到最大并回读 aria-valuenow == aria-valuemax 且 max==5；模型经当前模型项（Model <model>）/模型子菜单读回与选择 GPT-5.6 Sol；联合回读后才返回成功",
+          "确定性回归：start-page-fixture 以 Model 项 + Power slider 建模新菜单合同；成功/已选中/滑块缺失/End 不可回读/模型缺失/模型重置 Power 联合失败/plus 菜单 aria-haspopup/opener 缺失等夹具全绿；旧代码在 plusMenuTrigger 下精确复现 live 失败消息",
+          "start evidence 改为 projectIdentity/modelConfirmed/powerConfirmed/powerNow/powerMax",
+          "VER-002 live 重跑待协调员执行；2026-08-07 两次 live 失败现场（a1b558c6/3abda0f6/ad1aec41/33141986）均因旧 Pro menuitemradio 合同失效，已由用户裁决与本次实现取代"
+        ],
         "reviews": []
       }
     },

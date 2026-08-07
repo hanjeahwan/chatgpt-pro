@@ -72,7 +72,9 @@ export interface OperationEvidence {
   readonly sessionClosed?: boolean;
   readonly projectIdentity?: string | null;
   readonly modelConfirmed?: boolean;
-  readonly modeConfirmed?: boolean;
+  readonly powerConfirmed?: boolean;
+  readonly powerNow?: number;
+  readonly powerMax?: number;
   readonly conversationId?: string | null;
   readonly userTurnIdentity?: string | null;
   readonly promptVerbatimMatch?: boolean;

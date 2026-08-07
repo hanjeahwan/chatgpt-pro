@@ -74,7 +74,9 @@ describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
         contextMarker: 'context-a',
         projectId: 'g-p-123',
         modelConfirmed: true,
-        modeConfirmed: true,
+        powerConfirmed: true,
+        powerNow: 5,
+        powerMax: 5,
       }),
     ]);
     await writeFile(fixture.paths.seedState, '{}');
@@ -87,7 +89,9 @@ describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
       contextMarker: 'context-a',
       projectId: 'g-p-123',
       modelConfirmed: true,
-      modeConfirmed: true,
+      powerConfirmed: true,
+      powerNow: 5,
+      powerMax: 5,
       persistent: false,
     });
     expect(fixture.invocations[0]?.arguments).toEqual([
@@ -171,8 +175,8 @@ describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
   });
 });
 
-describe('BEH-002 fixed Project and GPT-5.6 Sol Pro start context', () => {
-  it('succeeds only in the unique Project blank composer after model and mode readback', async () => {
+describe('BEH-002 fixed Project and GPT-5.6 Sol Power 5/5 start context', () => {
+  it('succeeds only in the unique Project blank composer after model and Power readback', async () => {
     const fixture = await executableStartFixture({});
     await writeFile(fixture.paths.seedState, '{}');
 
@@ -180,15 +184,19 @@ describe('BEH-002 fixed Project and GPT-5.6 Sol Pro start context', () => {
 
     expect(result.url).toBe('https://chatgpt.com/g/g-p-123/project');
     expect(result.contextMarker).toBeTruthy();
+    expect(result).toMatchObject({
+      modelConfirmed: true,
+      powerConfirmed: true,
+      powerNow: 5,
+      powerMax: 5,
+    });
     expect(fixture.events).toEqual([
       'project-row-click',
       'selector-click',
-      'mode-click',
-      'selector-click',
+      'power-end',
       'opener-click',
       'model-click',
       'selector-click',
-      'opener-click',
       'selector-click',
     ]);
     expect(
@@ -201,16 +209,22 @@ describe('BEH-002 fixed Project and GPT-5.6 Sol Pro start context', () => {
       ['goto', 'https://chatgpt.com/projects'],
       ['run-code', '--filename', expect.any(String)],
     ]);
+    const startSource = await lastScript(fixture.invocations);
+    expect(startSource).toContain('role="slider"');
+    expect(startSource).toContain('aria-valuenow');
+    expect(startSource).toContain('Model');
+    expectPageFunctionSyntax(startSource);
   });
 
   it('confirms already selected targets by readback without clicking', async () => {
-    const fixture = await executableStartFixture({ modeInitiallyChecked: true, modelInitiallyChecked: true });
+    const fixture = await executableStartFixture({ powerInitiallyMax: true, modelInitiallyChecked: true });
     await writeFile(fixture.paths.seedState, '{}');
 
     const result = await fixture.browser.startTask('task-a', 'session-a', fixture.paths.seedState);
 
     expect(result.contextMarker).toBeTruthy();
-    expect(fixture.events).toEqual(['project-row-click', 'selector-click', 'opener-click', 'selector-click']);
+    expect(result).toMatchObject({ powerNow: 5, powerMax: 5 });
+    expect(fixture.events).toEqual(['project-row-click', 'selector-click', 'selector-click']);
   });
 
   it('rejects with PROJECT_NOT_FOUND when the target Project row is absent', async () => {
@@ -241,8 +255,8 @@ describe('BEH-002 fixed Project and GPT-5.6 Sol Pro start context', () => {
     expect(fixture.invocations.at(-1)?.arguments).toContain('close');
   });
 
-  it('rejects with FIXED_TARGET_UNAVAILABLE when the fixed mode radio is missing', async () => {
-    const fixture = await executableStartFixture({ modeRadioPresent: false });
+  it('rejects with FIXED_TARGET_UNAVAILABLE when the Power slider is missing', async () => {
+    const fixture = await executableStartFixture({ powerSliderPresent: false });
     await writeFile(fixture.paths.seedState, '{}');
 
     const failure = await startTaskFailure(fixture);
@@ -259,8 +273,8 @@ describe('BEH-002 fixed Project and GPT-5.6 Sol Pro start context', () => {
     expect(fixture.invocations.at(-1)?.arguments).toContain('close');
   });
 
-  it('rejects with SELECTION_UNCONFIRMED when the mode click cannot be read back', async () => {
-    const fixture = await executableStartFixture({ modeClickApplies: false });
+  it('rejects with SELECTION_UNCONFIRMED when the Power End key cannot be read back', async () => {
+    const fixture = await executableStartFixture({ powerEndApplies: false });
     await writeFile(fixture.paths.seedState, '{}');
 
     const failure = await startTaskFailure(fixture);
@@ -313,7 +327,7 @@ describe('BEH-002 fixed Project and GPT-5.6 Sol Pro start context', () => {
     expect(fixture.invocations.at(-1)?.arguments).toContain('close');
   });
 
-  it('still selects model and mode when the composer plus menu also declares aria-haspopup', async () => {
+  it('still selects model and Power when the composer plus menu also declares aria-haspopup', async () => {
     const fixture = await executableStartFixture({ plusMenuTrigger: true });
     await writeFile(fixture.paths.seedState, '{}');
 
@@ -323,12 +337,10 @@ describe('BEH-002 fixed Project and GPT-5.6 Sol Pro start context', () => {
     expect(fixture.events).toEqual([
       'project-row-click',
       'selector-click',
-      'mode-click',
-      'selector-click',
+      'power-end',
       'opener-click',
       'model-click',
       'selector-click',
-      'opener-click',
       'selector-click',
     ]);
     const startSource = await lastScript(fixture.invocations);
@@ -355,8 +367,8 @@ describe('BEH-002 fixed Project and GPT-5.6 Sol Pro start context', () => {
     expect(fixture.invocations.at(-1)?.arguments).toContain('close');
   });
 
-  it('rejects with SELECTION_UNCONFIRMED when the model selection resets the mode readback', async () => {
-    const fixture = await executableStartFixture({ modelClickResetsMode: true });
+  it('rejects with SELECTION_UNCONFIRMED when the model selection resets the Power readback', async () => {
+    const fixture = await executableStartFixture({ modelClickResetsPower: true });
     await writeFile(fixture.paths.seedState, '{}');
 
     const failure = await startTaskFailure(fixture);
@@ -1252,7 +1264,9 @@ describe('BEH-013 browser boundary support', () => {
         contextMarker: 'ctx',
         projectId: 'g-p-123',
         modelConfirmed: true,
-        modeConfirmed: true,
+        powerConfirmed: true,
+        powerNow: 5,
+        powerMax: 5,
       }),
       output('Sessions:\n  - name: session-a\n    state: open\n    pid: 4123\n'),
     ]);
@@ -1266,7 +1280,9 @@ describe('BEH-013 browser boundary support', () => {
       contextMarker: 'ctx',
       projectId: 'g-p-123',
       modelConfirmed: true,
-      modeConfirmed: true,
+      powerConfirmed: true,
+      powerNow: 5,
+      powerMax: 5,
       persistent: false,
     });
     expect(

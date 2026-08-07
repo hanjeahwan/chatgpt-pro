@@ -510,10 +510,12 @@ export class CollabService {
         observedAt: new Date().toISOString(),
         sessionName,
         pageUrl: browser.url,
-        postcondition: 'unique GPT-5.6 Sol and Pro menuitemradios read back aria-checked=true',
+        postcondition: 'current model GPT-5.6 Sol read back and Power slider at the maximum level',
         projectIdentity: browser.projectId,
         modelConfirmed: browser.modelConfirmed,
-        modeConfirmed: browser.modeConfirmed,
+        powerConfirmed: browser.powerConfirmed,
+        powerNow: browser.powerNow,
+        powerMax: browser.powerMax,
       });
       store.commitOperation(effectOperation.id, 'automatic', {
         observedAt: new Date().toISOString(),
@@ -522,7 +524,9 @@ export class CollabService {
         postcondition: 'fixed start context confirmed',
         projectIdentity: browser.projectId,
         modelConfirmed: browser.modelConfirmed,
-        modeConfirmed: browser.modeConfirmed,
+        powerConfirmed: browser.powerConfirmed,
+        powerNow: browser.powerNow,
+        powerMax: browser.powerMax,
       });
       if (task.status === 'starting') {
         store.activateTask(taskId);

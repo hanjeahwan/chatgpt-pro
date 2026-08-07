@@ -187,7 +187,9 @@ describe('BEH-007 per-turn audit record', () => {
       sessionName: 'session-a',
       projectIdentity: 'g-p-123',
       modelConfirmed: true,
-      modeConfirmed: true,
+      powerConfirmed: true,
+      powerNow: 5,
+      powerMax: 5,
     });
     first.closeTask('task-a');
     first.close();
@@ -199,7 +201,7 @@ describe('BEH-007 per-turn audit record', () => {
         kind: 'start',
         step: 'configuration',
         phase: 'committed',
-        evidence: { projectIdentity: 'g-p-123', modelConfirmed: true, modeConfirmed: true },
+        evidence: { projectIdentity: 'g-p-123', modelConfirmed: true, powerConfirmed: true, powerNow: 5, powerMax: 5 },
       },
     ]);
     expect(reopened.requireTask('task-a').status).toBe('closed');
