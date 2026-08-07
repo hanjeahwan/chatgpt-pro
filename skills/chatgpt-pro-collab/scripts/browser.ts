@@ -2215,6 +2215,53 @@ const SEND_TARGET_OK = `
       return match !== null && !match[1].startsWith('WEB:') && match[1] === expectedConversationId;
     };`;
 
+const USER_TURN_EVIDENCE = `
+    const readUserTurnEvidence = (element, expectedPrompt, names) => {
+      const visible = (candidate) => {
+        if (!(candidate instanceof HTMLElement)) return false;
+        const style = getComputedStyle(candidate);
+        return style.visibility !== 'hidden' && style.display !== 'none' && candidate.getClientRects().length > 0;
+      };
+      const leaves = [...element.querySelectorAll('*')].filter((leaf) => visible(leaf) && leaf.children.length === 0);
+      const leafInside = (leaf, container) => {
+        let ancestor = leaf.parentElement;
+        while (ancestor !== null && ancestor !== element) {
+          if (ancestor === container) return true;
+          ancestor = ancestor.parentElement;
+        }
+        return false;
+      };
+      const chipContainers = new Set();
+      for (const leaf of leaves) {
+        const text = (leaf.textContent || '').trim();
+        if (!names.includes(text)) continue;
+        let container = leaf.parentElement;
+        while (container !== null && container !== element) {
+          const inside = leaves.filter((candidate) => leafInside(candidate, container));
+          if (inside.length > 1) break;
+          container = container.parentElement;
+        }
+        chipContainers.add(container === null || container === element ? leaf : container);
+      }
+      const attachmentTexts = [];
+      const promptParts = [];
+      for (const leaf of leaves) {
+        const inChip = [...chipContainers].some((container) => leafInside(leaf, container));
+        const text = (leaf.textContent || '').trim();
+        if (inChip) {
+          if (names.includes(text)) attachmentTexts.push(text);
+          continue;
+        }
+        promptParts.push(leaf.textContent || '');
+      }
+      if (attachmentTexts.length !== names.length) return false;
+      for (let index = 0; index < names.length; index += 1) {
+        if (attachmentTexts[index] !== names[index]) return false;
+      }
+      const promptText = promptParts.join('').replace(/^You said:\\s*/u, '').trim();
+      return promptText === expectedPrompt.trim();
+    };`;
+
 /**
  * Builds the fixed Project blank-composer identity wait for a first send.
  *
@@ -3152,26 +3199,7 @@ function autoVerifySubmissionScript(
         if (!(element instanceof HTMLElement)) return false;
         const style = getComputedStyle(element);
         return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
-      };
-      const readUserTurnEvidence = (element) => {
-        const leaves = [...element.querySelectorAll('*')].filter((leaf) => visible(leaf) && leaf.children.length === 0);
-        const attachmentTexts = [];
-        const promptParts = [];
-        for (const leaf of leaves) {
-          const text = (leaf.textContent || '').trim();
-          if (names.includes(text)) {
-            attachmentTexts.push(text);
-          } else {
-            promptParts.push(leaf.textContent || '');
-          }
-        }
-        if (attachmentTexts.length !== names.length) return false;
-        for (let index = 0; index < names.length; index += 1) {
-          if (attachmentTexts[index] !== names[index]) return false;
-        }
-        const promptText = promptParts.join('').replace(/^You said:\\s*/u, '').trim();
-        return promptText === expectedPrompt.trim();
-      };
+      };${USER_TURN_EVIDENCE}
       const elements = [...document.querySelectorAll('[data-testid^="conversation-turn-"][data-turn]')].filter(visible);
       let anchorIndex = -1;
       if (previous !== null) {
@@ -3193,7 +3221,7 @@ function autoVerifySubmissionScript(
       for (let index = anchorIndex + 1; index < elements.length; index += 1) {
         if (elements[index].getAttribute('data-turn') !== 'user') continue;
         if (previous === null && index !== anchorIndex + 1) continue;
-        if (!readUserTurnEvidence(elements[index])) continue;
+        if (!readUserTurnEvidence(elements[index], expectedPrompt, names)) continue;
         candidates.push({ identity: elements[index].getAttribute('data-testid') });
       }
       if (candidates.length !== 1) {
@@ -3267,11 +3295,16 @@ function resolveSubmittedScript(
       return match === null || match[1] === undefined ? null : match[1];
     };
     await page.goto(canonicalUrl, { waitUntil: 'domcontentloaded' });
-    await page.waitForFunction((id) => {
+    await page.waitForFunction(({ id, projectId }) => {
       const match = /\\/c\\/([^/?#]+)\\/?$/.exec(location.pathname);
-      return location.hostname === 'chatgpt.com' &&
+      const projectMatch = /\\/g\\/g-p-([^/]+?)(?:-chatgpt-pro-collab)?\\/c\\//.exec(location.pathname);
+      const conversationOk =
+        location.hostname === 'chatgpt.com' &&
         match !== null && !match[1].startsWith('WEB:') && (id === null || match[1] === id);
-    }, expectedConversationId, { timeout: 60000, polling: 100 });
+      if (!conversationOk) return false;
+      if (projectId === null) return projectMatch !== null;
+      return projectMatch !== null && projectMatch[1] === projectId;
+    }, { id: expectedConversationId, projectId: expectedProjectIdentity }, { timeout: 60000, polling: 100 });
     const url = await page.evaluate(() => {
       return { hostname: location.hostname, pathname: location.pathname, origin: location.origin };
     });
@@ -3331,26 +3364,7 @@ function resolveSubmittedScript(
         if (!(element instanceof HTMLElement)) return false;
         const style = getComputedStyle(element);
         return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
-      };
-      const readUserTurnEvidence = (element) => {
-        const leaves = [...element.querySelectorAll('*')].filter((leaf) => visible(leaf) && leaf.children.length === 0);
-        const attachmentTexts = [];
-        const promptParts = [];
-        for (const leaf of leaves) {
-          const text = (leaf.textContent || '').trim();
-          if (names.includes(text)) {
-            attachmentTexts.push(text);
-          } else {
-            promptParts.push(leaf.textContent || '');
-          }
-        }
-        if (attachmentTexts.length !== names.length) return false;
-        for (let index = 0; index < names.length; index += 1) {
-          if (attachmentTexts[index] !== names[index]) return false;
-        }
-        const promptText = promptParts.join('').replace(/^You said:\\s*/u, '').trim();
-        return promptText === expectedPrompt.trim();
-      };
+      };${USER_TURN_EVIDENCE}
       const elements = [...document.querySelectorAll('[data-testid^="conversation-turn-"][data-turn]')].filter(visible);
       let anchorIndex = -1;
       if (previous !== null) {
@@ -3372,7 +3386,7 @@ function resolveSubmittedScript(
       for (let index = anchorIndex + 1; index < elements.length; index += 1) {
         if (elements[index].getAttribute('data-turn') !== 'user') continue;
         if (previous === null && index !== anchorIndex + 1) continue;
-        if (!readUserTurnEvidence(elements[index])) continue;
+        if (!readUserTurnEvidence(elements[index], expectedPrompt, names)) continue;
         candidates.push({ index, identity: elements[index].getAttribute('data-testid') });
       }
       if (candidates.length !== 1) {
@@ -3498,26 +3512,7 @@ function resolveNotSubmittedScript(
           if (!(element instanceof HTMLElement)) return false;
           const style = getComputedStyle(element);
           return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
-        };
-        const readUserTurnEvidence = (element) => {
-          const leaves = [...element.querySelectorAll('*')].filter((leaf) => visible(leaf) && leaf.children.length === 0);
-          const attachmentTexts = [];
-          const promptParts = [];
-          for (const leaf of leaves) {
-            const text = (leaf.textContent || '').trim();
-            if (names.includes(text)) {
-              attachmentTexts.push(text);
-            } else {
-              promptParts.push(leaf.textContent || '');
-            }
-          }
-          if (attachmentTexts.length !== names.length) return false;
-          for (let index = 0; index < names.length; index += 1) {
-            if (attachmentTexts[index] !== names[index]) return false;
-          }
-          const promptText = promptParts.join('').replace(/^You said:\\s*/u, '').trim();
-          return promptText === expectedPrompt.trim();
-        };
+        };${USER_TURN_EVIDENCE}
         const elements = [...document.querySelectorAll('[data-testid^="conversation-turn-"][data-turn]')]
           .filter(visible);
         let anchorIndex = -1;
@@ -3539,7 +3534,7 @@ function resolveNotSubmittedScript(
         for (let index = anchorIndex + 1; index < elements.length; index += 1) {
           if (elements[index].getAttribute('data-turn') !== 'user') continue;
           if (previous === null && index !== anchorIndex + 1) continue;
-          if (!readUserTurnEvidence(elements[index])) continue;
+          if (!readUserTurnEvidence(elements[index], expectedPrompt, names)) continue;
           return { status: 'matching' };
         }
         return { status: 'safe' };

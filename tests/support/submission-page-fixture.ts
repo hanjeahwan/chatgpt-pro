@@ -23,6 +23,7 @@ export interface SubmissionPageFixture {
 interface LeafElement {
   readonly textContent: string;
   readonly children: readonly unknown[];
+  readonly parentElement: LeafElement | null;
   getClientRects(): readonly object[];
 }
 
@@ -34,17 +35,20 @@ interface TurnElement extends LeafElement {
 class SubmissionHtmlElement implements TurnElement {
   readonly textContent: string;
   readonly children: readonly LeafElement[];
+  readonly parentElement: LeafElement | null;
 
   /**
    * Creates one fixture DOM node with optional leaf children.
    *
    * @param textContent Element text.
    * @param children Leaf children returned by `querySelectorAll('*')`.
+   * @param parentElement Parent used by the attachment chip traversal.
    * @throws {Error} This constructor does not perform I/O.
    */
-  constructor(textContent: string, children: readonly LeafElement[] = []) {
+  constructor(textContent: string, children: readonly LeafElement[] = [], parentElement: LeafElement | null = null) {
     this.textContent = textContent;
     this.children = children;
+    this.parentElement = parentElement;
   }
 
   /**
@@ -97,16 +101,24 @@ export function submissionPageFixture(options: SubmissionPageOptions): Submissio
     stopVisible: options.stopVisible ?? false,
   };
 
-  const promptLeaf = (promptText: string | undefined): LeafElement => {
-    return new SubmissionHtmlElement(`You said: ${promptText ?? ''}`);
+  const promptLeaf = (promptText: string | undefined, parentElement: LeafElement | null): LeafElement => {
+    return new SubmissionHtmlElement(`You said: ${promptText ?? ''}`, [], parentElement);
   };
-  const chipLeaf = (name: string): LeafElement => {
-    return new SubmissionHtmlElement(name);
+  const chipLeaf = (name: string, parentElement: LeafElement | null): LeafElement => {
+    return new SubmissionHtmlElement(name, [], parentElement);
   };
   const turnElements = (): readonly TurnElement[] => {
     return (options.turns ?? []).map((turn) => {
-      const chips = (turn.chips ?? []).map(chipLeaf);
-      const leaves = [...chips, promptLeaf(turn.promptText)];
+      const descendants: LeafElement[] = [];
+      for (const name of turn.chips ?? []) {
+        const container = new SubmissionHtmlElement('', [], null);
+        const basename = chipLeaf(name, container);
+        const label = chipLeaf('Document', container);
+        (container.children as LeafElement[]).push(basename, label);
+        descendants.push(container, basename, label);
+      }
+      const prompt = promptLeaf(turn.promptText, null);
+      descendants.push(prompt);
       return new (class extends SubmissionHtmlElement {
         getAttribute(name: string): string | null {
           if (name === 'data-testid') {
@@ -117,7 +129,10 @@ export function submissionPageFixture(options: SubmissionPageOptions): Submissio
           }
           return null;
         }
-      })([...chips, turn.promptText ?? ''].filter(Boolean).join(' '), leaves);
+        querySelectorAll(selector: string): readonly LeafElement[] {
+          return selector === '*' ? descendants : [];
+        }
+      })([...(turn.chips ?? []), turn.promptText ?? ''].filter(Boolean).join(' '), descendants, null);
     });
   };
 
@@ -244,7 +259,7 @@ export function submissionPageFixture(options: SubmissionPageOptions): Submissio
           if (typeof callback !== 'function') {
             return Promise.reject(new TypeError('fixture getByText callback is not a function'));
           }
-          const chips = visible ? [chipLeaf(text)] : [];
+          const chips = visible ? [chipLeaf(text, null)] : [];
           return Promise.resolve(withSubmissionGlobals(globals(), callback, chips, argument));
         },
       };

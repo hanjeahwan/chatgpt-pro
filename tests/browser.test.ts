@@ -1583,13 +1583,13 @@ describe('BEH-003 and BEH-013 submission verification against page evidence', ()
       runSubmissionScript(fixture.page, {
         canonicalUrl: 'https://chatgpt.com/c/conversation-a',
         conversationId: 'conversation-a',
-        projectIdentity: 'g-p-123',
+        projectIdentity: '123',
         previousUserTurnIdentity: null,
         prompt: 'exact prompt',
         attachmentNames: [],
         expectKind: 'resolve-submitted',
       }),
-    ).rejects.toThrow(/not inside the fixed chatgpt-pro-collab Project/);
+    ).rejects.toThrow(/fixture waitForFunction deadline exceeded/);
   });
 
   it('accepts a submitted adjudication for the recorded Project conversation', async () => {
