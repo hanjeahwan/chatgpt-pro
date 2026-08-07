@@ -392,6 +392,7 @@ export class PlaywrightBrowser {
    * @param sessionName Unique Playwright named session.
    * @param seedStatePath Readable setup state loaded but never saved by the task.
    * @param rebuild When true, only create the session when the named session is absent.
+   * @param observer Task-lease child-process observer.
    * @returns PID reported by Playwright plus observed page and context identity.
    * @throws {BrowserError} If the fixed Project, model, or mode context cannot be confirmed.
    * @throws {Error} If a local Playwright artifact cannot be written.
@@ -401,6 +402,7 @@ export class PlaywrightBrowser {
     sessionName: string,
     seedStatePath: string,
     rebuild: boolean = false,
+    observer?: BrowserOperationObserver,
   ): Promise<BrowserSessionInfo> {
     await ensureTaskDirectories(this.#paths, taskId);
     const contextMarker = randomUUID();
@@ -413,12 +415,13 @@ export class PlaywrightBrowser {
           taskId,
           ['open', 'about:blank', '--browser=chrome', '--headed'],
           'open task browser',
+          observer,
         );
         opened = true;
         pid = parseOpenPid(openOutput.stdout, sessionName);
-        await this.#invoke(sessionName, taskId, ['state-load', seedStatePath], 'load authentication state');
+        await this.#invoke(sessionName, taskId, ['state-load', seedStatePath], 'load authentication state', observer);
       }
-      await this.#invoke(sessionName, taskId, ['goto', PROJECTS_URL], 'open ChatGPT projects');
+      await this.#invoke(sessionName, taskId, ['goto', PROJECTS_URL], 'open ChatGPT projects', observer);
       const scriptPath = await savePlaywrightScript(
         this.#paths,
         taskId,
@@ -430,6 +433,7 @@ export class PlaywrightBrowser {
         taskId,
         ['run-code', '--filename', scriptPath],
         'verify fixed project start context',
+        observer,
       );
       const result = parseStartProtocolResult(output.stdout);
       if (result.kind === 'start-failed') {
@@ -464,7 +468,7 @@ export class PlaywrightBrowser {
     } catch (error) {
       if (opened) {
         try {
-          await this.#invoke(sessionName, taskId, ['close'], 'close failed task browser');
+          await this.#invoke(sessionName, taskId, ['close'], 'close failed task browser', observer);
         } catch (closeError) {
           throw new BrowserError(
             'BROWSER_CLEANUP_FAILED',
@@ -1056,6 +1060,7 @@ export class PlaywrightBrowser {
    * @param sessionName Owning Playwright named session.
    * @param canonicalUrl Canonical conversation URL supplied by the user.
    * @param expectedConversationId Database-bound canonical identity, or null before binding.
+   * @param expectedProjectIdentity Project identity recorded by the start operation, or null when unknown.
    * @param previousUserTurnIdentity Anchor of the previous completed turn, or null for a first turn.
    * @param prompt Saved prompt text the unique user turn must match verbatim.
    * @param attachmentNames Ordered saved attachment basenames the turn must match.
@@ -1069,6 +1074,7 @@ export class PlaywrightBrowser {
     sessionName: string,
     canonicalUrl: string,
     expectedConversationId: string | null,
+    expectedProjectIdentity: string | null,
     previousUserTurnIdentity: string | null,
     prompt: string,
     attachmentNames: readonly string[],
@@ -1078,7 +1084,14 @@ export class PlaywrightBrowser {
       sessionName,
       taskId,
       'resolve-submitted',
-      resolveSubmittedScript(canonicalUrl, expectedConversationId, previousUserTurnIdentity, prompt, attachmentNames),
+      resolveSubmittedScript(
+        canonicalUrl,
+        expectedConversationId,
+        expectedProjectIdentity,
+        previousUserTurnIdentity,
+        prompt,
+        attachmentNames,
+      ),
       'verify submitted conversation',
       'resolve-submitted',
       observer,
@@ -3140,6 +3153,25 @@ function autoVerifySubmissionScript(
         const style = getComputedStyle(element);
         return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
       };
+      const readUserTurnEvidence = (element) => {
+        const leaves = [...element.querySelectorAll('*')].filter((leaf) => visible(leaf) && leaf.children.length === 0);
+        const attachmentTexts = [];
+        const promptParts = [];
+        for (const leaf of leaves) {
+          const text = (leaf.textContent || '').trim();
+          if (names.includes(text)) {
+            attachmentTexts.push(text);
+          } else {
+            promptParts.push(leaf.textContent || '');
+          }
+        }
+        if (attachmentTexts.length !== names.length) return false;
+        for (let index = 0; index < names.length; index += 1) {
+          if (attachmentTexts[index] !== names[index]) return false;
+        }
+        const promptText = promptParts.join('').replace(/^You said:\\s*/u, '').trim();
+        return promptText === expectedPrompt.trim();
+      };
       const elements = [...document.querySelectorAll('[data-testid^="conversation-turn-"][data-turn]')].filter(visible);
       let anchorIndex = -1;
       if (previous !== null) {
@@ -3150,14 +3182,18 @@ function autoVerifySubmissionScript(
           return { status: 'drift', reason: 'previous user turn anchor is absent or not unique' };
         }
         anchorIndex = matches[0];
+      } else {
+        const firstUserIndex = elements.findIndex((element) => element.getAttribute('data-turn') === 'user');
+        if (firstUserIndex < 0) {
+          return { status: 'none', count: 0 };
+        }
+        anchorIndex = firstUserIndex - 1;
       }
-      const normalizeUserTurnText = (value) => value.replace(/^You said:\\s*/u, '').trim();
       const candidates = [];
       for (let index = anchorIndex + 1; index < elements.length; index += 1) {
         if (elements[index].getAttribute('data-turn') !== 'user') continue;
-        const text = normalizeUserTurnText(elements[index].textContent || '');
-        if (text !== expectedPrompt.trim()) continue;
-        if (!names.every((name) => text.includes(name))) continue;
+        if (previous === null && index !== anchorIndex + 1) continue;
+        if (!readUserTurnEvidence(elements[index])) continue;
         candidates.push({ identity: elements[index].getAttribute('data-testid') });
       }
       if (candidates.length !== 1) {
@@ -3200,6 +3236,7 @@ function autoVerifySubmissionScript(
  *
  * @param canonicalUrl Canonical conversation URL supplied by the user.
  * @param expectedConversationId Database-bound identity, or null before binding.
+ * @param expectedProjectIdentity Project identity recorded by the start operation, or null when unknown.
  * @param previousUserTurnIdentity Anchor identity, or null for a first turn.
  * @param prompt Saved prompt text for verbatim user-turn matching.
  * @param attachmentNames Ordered saved attachment basenames.
@@ -3209,6 +3246,7 @@ function autoVerifySubmissionScript(
 function resolveSubmittedScript(
   canonicalUrl: string,
   expectedConversationId: string | null,
+  expectedProjectIdentity: string | null,
   previousUserTurnIdentity: string | null,
   prompt: string,
   attachmentNames: readonly string[],
@@ -3216,12 +3254,17 @@ function resolveSubmittedScript(
   return `async (page) => {
     const canonicalUrl = ${JSON.stringify(canonicalUrl)};
     const expectedConversationId = ${JSON.stringify(expectedConversationId)};
+    const expectedProjectIdentity = ${JSON.stringify(expectedProjectIdentity)};
     const previousUserTurnIdentity = ${JSON.stringify(previousUserTurnIdentity)};
     const prompt = ${JSON.stringify(prompt)};
     const attachmentNames = ${JSON.stringify(attachmentNames)};
     const conversationIdOf = (pathname) => {
       const match = /\\/c\\/([^/?#]+)\\/?$/.exec(pathname);
       return match === null || match[1].startsWith('WEB:') ? null : match[1];
+    };
+    const projectIdOf = (pathname) => {
+      const match = /\\/g\\/g-p-([^/]+?)(?:-chatgpt-pro-collab)?\\/c\\//.exec(pathname);
+      return match === null || match[1] === undefined ? null : match[1];
     };
     await page.goto(canonicalUrl, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction((id) => {
@@ -3242,16 +3285,26 @@ function resolveSubmittedScript(
     if (expectedConversationId !== null && conversationId !== expectedConversationId) {
       throw new Error('submitted adjudication conversation differs from the bound task');
     }
-    await page.waitForFunction((target) => {
-      const visible = (element) => {
-        if (!(element instanceof HTMLElement)) return false;
-        const style = getComputedStyle(element);
-        return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
-      };
-      return [...document.querySelectorAll('*')].some((element) => {
-        return visible(element) && element.children.length === 0 && element.textContent.trim() === target;
-      });
-    }, 'chatgpt-pro-collab', { timeout: 60000, polling: 250 });
+    const projectId = projectIdOf(url.pathname);
+    if (projectId === null) {
+      throw new Error('submitted adjudication URL is not project-scoped and cannot prove Project membership');
+    }
+    if (expectedProjectIdentity !== null && projectId !== expectedProjectIdentity) {
+      throw new Error('submitted adjudication conversation is not inside the fixed chatgpt-pro-collab Project');
+    }
+    if (expectedProjectIdentity === null) {
+      await page.waitForFunction((target) => {
+        const visible = (element) => {
+          if (!(element instanceof HTMLElement)) return false;
+          const style = getComputedStyle(element);
+          return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
+        };
+        const main = document.querySelector('main') ?? document.querySelector('[role="main"]');
+        return main !== null && [...main.querySelectorAll('*')].some((element) => {
+          return visible(element) && element.children.length === 0 && element.textContent.trim() === target;
+        });
+      }, 'chatgpt-pro-collab', { timeout: 60000, polling: 250 });
+    }
     if (previousUserTurnIdentity !== null) {
       await page.waitForFunction((anchorId) => {
         const visible = (element) => {
@@ -3279,6 +3332,25 @@ function resolveSubmittedScript(
         const style = getComputedStyle(element);
         return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
       };
+      const readUserTurnEvidence = (element) => {
+        const leaves = [...element.querySelectorAll('*')].filter((leaf) => visible(leaf) && leaf.children.length === 0);
+        const attachmentTexts = [];
+        const promptParts = [];
+        for (const leaf of leaves) {
+          const text = (leaf.textContent || '').trim();
+          if (names.includes(text)) {
+            attachmentTexts.push(text);
+          } else {
+            promptParts.push(leaf.textContent || '');
+          }
+        }
+        if (attachmentTexts.length !== names.length) return false;
+        for (let index = 0; index < names.length; index += 1) {
+          if (attachmentTexts[index] !== names[index]) return false;
+        }
+        const promptText = promptParts.join('').replace(/^You said:\\s*/u, '').trim();
+        return promptText === expectedPrompt.trim();
+      };
       const elements = [...document.querySelectorAll('[data-testid^="conversation-turn-"][data-turn]')].filter(visible);
       let anchorIndex = -1;
       if (previous !== null) {
@@ -3289,17 +3361,18 @@ function resolveSubmittedScript(
           return { status: 'drift', reason: 'previous user turn anchor is absent or not unique' };
         }
         anchorIndex = matches[0];
+      } else {
+        const firstUserIndex = elements.findIndex((element) => element.getAttribute('data-turn') === 'user');
+        if (firstUserIndex < 0) {
+          return { status: 'none', count: 0 };
+        }
+        anchorIndex = firstUserIndex - 1;
       }
-      const normalizeUserTurnText = (value) => value.replace(/^You said:\\s*/u, '').trim();
       const candidates = [];
       for (let index = anchorIndex + 1; index < elements.length; index += 1) {
         if (elements[index].getAttribute('data-turn') !== 'user') continue;
-        const text = normalizeUserTurnText(elements[index].textContent || '');
-        if (text !== expectedPrompt.trim()) continue;
-        const position = text.indexOf(names[0] || '');
-        if (position < 0) continue;
-        const ordered = names.every((name) => text.includes(name));
-        if (!ordered) continue;
+        if (previous === null && index !== anchorIndex + 1) continue;
+        if (!readUserTurnEvidence(elements[index])) continue;
         candidates.push({ index, identity: elements[index].getAttribute('data-testid') });
       }
       if (candidates.length !== 1) {
@@ -3318,6 +3391,9 @@ function resolveSubmittedScript(
     });
     if (finalUrl.hostname !== 'chatgpt.com' || conversationIdOf(finalUrl.pathname) !== conversationId) {
       throw new Error('conversation identity changed while resolving the submission');
+    }
+    if (expectedProjectIdentity !== null && projectIdOf(finalUrl.pathname) !== expectedProjectIdentity) {
+      throw new Error('conversation Project membership changed while resolving the submission');
     }
     return JSON.stringify({
       protocol: '${PROTOCOL}',
@@ -3350,6 +3426,37 @@ function resolveNotSubmittedScript(
     const previousUserTurnIdentity = ${JSON.stringify(previousUserTurnIdentity)};
     const prompt = ${JSON.stringify(prompt)};
     const attachmentNames = ${JSON.stringify(attachmentNames)};
+    const verifyComposerResidueFree = async () => {
+      const composer = page.locator('#prompt-textarea');
+      await composer.waitFor({ state: 'visible', timeout: 60000 });
+      if (await composer.count() !== 1) throw new Error('page contract drift: composer is not unique');
+      const composerForm = page.locator('form').filter({ has: composer });
+      if (await composerForm.count() !== 1) throw new Error('page contract drift: composer form is not unique');
+      const composerText = await composer.evaluateAll((elements) => {
+        return elements.filter((element) => element instanceof HTMLElement).map((element) => {
+          return (element.textContent || '').trim();
+        });
+      });
+      if (composerText.length !== 1 || composerText[0] !== '') {
+        throw new Error('composer still contains draft text after not-submitted adjudication');
+      }
+      const populatedFileInputCount = await composerForm.locator('input[type="file"]').evaluateAll((elements) => {
+        return elements.filter((element) => element instanceof HTMLInputElement && element.value !== '').length;
+      });
+      if (populatedFileInputCount !== 0) {
+        throw new Error('composer still has a populated file input after not-submitted adjudication');
+      }
+      const visibleAttachmentFileNames = [];
+      for (const fileName of attachmentNames) {
+        const visible = await composerForm.getByText(fileName, { exact: true }).evaluateAll((elements) => {
+          return elements.some((element) => element instanceof HTMLElement && element.getClientRects().length > 0);
+        });
+        if (visible) visibleAttachmentFileNames.push(fileName);
+      }
+      if (visibleAttachmentFileNames.length !== 0) {
+        throw new Error('composer still shows staged attachment names after not-submitted adjudication');
+      }
+    };
     if (expectedConversationId === null) {
       await page.waitForFunction(() => {
         const visible = (element) => {
@@ -3369,6 +3476,7 @@ function resolveNotSubmittedScript(
           .filter(visible).length === 0;
         return urlOk && titleOk && composerOk && turnsOk;
       }, undefined, { timeout: 60000, polling: 250 });
+      await verifyComposerResidueFree();
     } else {
       const conversationIdOf = (pathname) => {
         const match = /\\/c\\/([^/?#]+)\\/?$/.exec(pathname);
@@ -3391,6 +3499,25 @@ function resolveNotSubmittedScript(
           const style = getComputedStyle(element);
           return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
         };
+        const readUserTurnEvidence = (element) => {
+          const leaves = [...element.querySelectorAll('*')].filter((leaf) => visible(leaf) && leaf.children.length === 0);
+          const attachmentTexts = [];
+          const promptParts = [];
+          for (const leaf of leaves) {
+            const text = (leaf.textContent || '').trim();
+            if (names.includes(text)) {
+              attachmentTexts.push(text);
+            } else {
+              promptParts.push(leaf.textContent || '');
+            }
+          }
+          if (attachmentTexts.length !== names.length) return false;
+          for (let index = 0; index < names.length; index += 1) {
+            if (attachmentTexts[index] !== names[index]) return false;
+          }
+          const promptText = promptParts.join('').replace(/^You said:\\s*/u, '').trim();
+          return promptText === expectedPrompt.trim();
+        };
         const elements = [...document.querySelectorAll('[data-testid^="conversation-turn-"][data-turn]')]
           .filter(visible);
         let anchorIndex = -1;
@@ -3402,14 +3529,18 @@ function resolveNotSubmittedScript(
             return { status: 'drift', reason: 'previous user turn anchor is absent or not unique' };
           }
           anchorIndex = matches[0];
+        } else {
+          const firstUserIndex = elements.findIndex((element) => element.getAttribute('data-turn') === 'user');
+          if (firstUserIndex < 0) {
+            return { status: 'safe' };
+          }
+          anchorIndex = firstUserIndex - 1;
         }
-        const normalizeUserTurnText = (value) => value.replace(/^You said:\\s*/u, '').trim();
         for (let index = anchorIndex + 1; index < elements.length; index += 1) {
           if (elements[index].getAttribute('data-turn') !== 'user') continue;
-          const text = normalizeUserTurnText(elements[index].textContent || '');
-          if (text === expectedPrompt.trim() && names.every((name) => text.includes(name))) {
-            return { status: 'matching' };
-          }
+          if (previous === null && index !== anchorIndex + 1) continue;
+          if (!readUserTurnEvidence(elements[index])) continue;
+          return { status: 'matching' };
         }
         return { status: 'safe' };
       }, { previous: previousUserTurnIdentity, expectedPrompt: prompt, names: attachmentNames });
@@ -3417,6 +3548,7 @@ function resolveNotSubmittedScript(
       if (state.status === 'matching') {
         throw new Error('not-submitted adjudication found a matching submitted user turn after the anchor');
       }
+      await verifyComposerResidueFree();
       const stop = page.getByRole('button', { name: 'Stop answering', exact: true });
       if (await stop.count() > 0 && await stop.first().isVisible()) {
         throw new Error('not-submitted adjudication found an in-flight submission state');

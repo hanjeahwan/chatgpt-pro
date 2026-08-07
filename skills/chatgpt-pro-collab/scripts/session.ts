@@ -120,14 +120,43 @@ export async function requireSeedState(paths: CollabPaths): Promise<string> {
 /**
  * Reports whether setup produced a currently readable authentication seed.
  *
+ * The seed must be a Playwright storage state that can authenticate a ChatGPT
+ * session: a JSON object carrying `cookies` and `origins`, with at least one
+ * chatgpt.com cookie or a chatgpt.com origin entry. A readable regular file
+ * that is not such a storage state is never treated as an authenticated seed.
+ *
  * @param paths Resolved Collab paths.
- * @returns `true` only when the seed is a readable regular file.
- * @throws {Error} This probe does not throw for ordinary absence.
+ * @returns `true` only when the seed is a loadable authenticated storage state.
+ * @throws {Error} This probe does not throw for ordinary absence or malformed content.
  */
 export async function seedStateValid(paths: CollabPaths): Promise<boolean> {
   try {
     await requireSeedState(paths);
-    return true;
+    const seed = JSON.parse(await readFile(paths.seedState, 'utf8')) as unknown;
+    if (typeof seed !== 'object' || seed === null) {
+      return false;
+    }
+    const state = seed as { readonly cookies?: unknown; readonly origins?: unknown };
+    if (!Array.isArray(state.cookies) || !Array.isArray(state.origins)) {
+      return false;
+    }
+    const hasChatGptCookie = state.cookies.some((cookie) => {
+      return (
+        typeof cookie === 'object' &&
+        cookie !== null &&
+        typeof (cookie as { readonly domain?: unknown }).domain === 'string' &&
+        /(^|\.)chatgpt\.com$/u.test((cookie as { readonly domain: string }).domain)
+      );
+    });
+    const hasChatGptOrigin = state.origins.some((origin) => {
+      return (
+        typeof origin === 'object' &&
+        origin !== null &&
+        (origin as { readonly origin?: unknown }).origin === 'https://chatgpt.com' &&
+        Array.isArray((origin as { readonly localStorage?: unknown }).localStorage)
+      );
+    });
+    return hasChatGptCookie || hasChatGptOrigin;
   } catch {
     return false;
   }

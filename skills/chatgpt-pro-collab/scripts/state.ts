@@ -191,7 +191,7 @@ export class StateStore {
         browser_operation_command_pid INTEGER
       ) STRICT;
     `);
-    migrateTaskStatuses(this.#database);
+    requireCurrentTaskSchema(this.#database);
 
     this.#database.exec(`
       CREATE TABLE IF NOT EXISTS turn (
@@ -204,6 +204,7 @@ export class StateStore {
         attachments_json TEXT NOT NULL,
         response_path TEXT,
         artifact_set_recorded INTEGER NOT NULL DEFAULT 0 CHECK (artifact_set_recorded IN (0, 1)),
+        user_turn_identity TEXT,
         error TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
@@ -211,7 +212,10 @@ export class StateStore {
         FOREIGN KEY (task_id) REFERENCES task(id)
       ) STRICT;
     `);
-    migrateTurnIdentity(this.#database);
+    this.#database.exec(
+      'CREATE UNIQUE INDEX IF NOT EXISTS turn_task_user_identity ON turn (task_id, user_turn_identity)',
+    );
+    requireCurrentTurnSchema(this.#database);
 
     this.#database.exec(`
       CREATE TABLE IF NOT EXISTS artifact (
@@ -1627,6 +1631,30 @@ export class StateStore {
   }
 
   /**
+   * Returns the project identity recorded by the task's committed start operation, or null.
+   *
+   * @param taskId Task whose start evidence is queried.
+   * @returns The recorded `projectIdentity`, or `null` when no start evidence carries it.
+   * @throws {Error} If SQLite cannot execute or decode the query.
+   */
+  getStartProjectIdentity(taskId: string): string | null {
+    const rows = this.#database
+      .prepare(
+        `SELECT * FROM operation
+         WHERE task_id = ? AND kind = 'start' AND phase = 'committed' AND evidence_json != 'null'
+         ORDER BY created_at`,
+      )
+      .all(taskId);
+    for (const row of rows.reverse()) {
+      const projectIdentity = decodeOperation(row).evidence.projectIdentity;
+      if (projectIdentity !== undefined && projectIdentity !== null) {
+        return projectIdentity;
+      }
+    }
+    return null;
+  }
+
+  /**
    * Returns the global uncommitted setup operation, or null.
    *
    * @returns The uncommitted setup operation, or `null` when none exists.
@@ -2315,63 +2343,88 @@ function computeNextAction(
 }
 
 /**
- * Adds the caller-provided user turn identity column and its unique index to an older database.
+ * Rejects a task table that does not carry the current schema.
+ *
+ * The repository does not migrate older task schemas; a mismatched table means the
+ * local state database must be rebuilt. Detection only compares the current schema
+ * contract, never recognizes or converts a specific older schema, and never deletes data.
  *
  * @param database Process-local SQLite connection.
- * @returns Nothing after the column and index exist.
- * @throws {Error} If SQLite cannot alter or index the table.
+ * @returns Nothing when the current `task` schema is present.
+ * @throws {StateError} If the task table is absent or its columns differ from the current schema.
  */
-function migrateTurnIdentity(database: DatabaseSync): void {
+function requireCurrentTaskSchema(database: DatabaseSync): void {
+  const columns = database
+    .prepare('PRAGMA table_info(task)')
+    .all()
+    .map((value) => {
+      return text(record(value).name, 'task column name');
+    });
+  const expected = [
+    'id',
+    'playwright_session',
+    'conversation_id',
+    'conversation_url',
+    'status',
+    'created_at',
+    'updated_at',
+    'closed_at',
+    'browser_operation_token',
+    'browser_operation_pid',
+    'browser_operation_name',
+    'browser_operation_child_pid',
+    'browser_operation_command_pid',
+  ];
+  if (
+    columns.length !== expected.length ||
+    expected.some((column) => {
+      return !columns.includes(column);
+    })
+  ) {
+    throw new StateError(
+      'STATE_SCHEMA_INCOMPATIBLE',
+      'the task table does not match the current schema; rebuild the local Collab state database',
+    );
+  }
+}
+
+/**
+ * Rejects a turn table that does not carry the current schema.
+ *
+ * @param database Process-local SQLite connection.
+ * @returns Nothing when the current `turn` schema is present.
+ * @throws {StateError} If the turn table is absent or its columns differ from the current schema.
+ */
+function requireCurrentTurnSchema(database: DatabaseSync): void {
   const columns = database
     .prepare('PRAGMA table_info(turn)')
     .all()
     .map((value) => {
       return text(record(value).name, 'turn column name');
     });
-  if (!columns.includes('user_turn_identity')) {
-    database.exec('ALTER TABLE turn ADD COLUMN user_turn_identity TEXT');
-  }
-  database.exec('CREATE UNIQUE INDEX IF NOT EXISTS turn_task_user_identity ON turn (task_id, user_turn_identity)');
-}
-
-/**
- * Rebuilds an older task table whose status check lacks the starting and closing statuses.
- *
- * @param database Process-local SQLite connection.
- * @returns Nothing after the table carries the current check.
- * @throws {Error} If SQLite cannot rebuild or copy the table.
- */
-function migrateTaskStatuses(database: DatabaseSync): void {
-  const row = database.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'task'").get();
-  const definition = record(row);
-  const sql = text(definition.sql, 'task table sql');
-  if (sql.includes("'starting'")) {
-    return;
-  }
-  database.exec('PRAGMA foreign_keys = OFF');
-  try {
-    database.exec(`
-      CREATE TABLE task_migrated (
-        id TEXT PRIMARY KEY,
-        playwright_session TEXT NOT NULL UNIQUE,
-        conversation_id TEXT,
-        conversation_url TEXT,
-        status TEXT NOT NULL CHECK (status IN ('starting', 'active', 'closing', 'closed', 'failed')),
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        closed_at TEXT,
-        browser_operation_token TEXT,
-        browser_operation_pid INTEGER,
-        browser_operation_name TEXT,
-        browser_operation_child_pid INTEGER,
-        browser_operation_command_pid INTEGER
-      ) STRICT;
-      INSERT INTO task_migrated SELECT * FROM task;
-      DROP TABLE task;
-      ALTER TABLE task_migrated RENAME TO task;
-    `);
-  } finally {
-    database.exec('PRAGMA foreign_keys = ON');
+  const expected = [
+    'task_id',
+    'id',
+    'status',
+    'prompt_path',
+    'attachments_json',
+    'response_path',
+    'artifact_set_recorded',
+    'user_turn_identity',
+    'error',
+    'created_at',
+    'updated_at',
+  ];
+  if (
+    columns.length !== expected.length ||
+    expected.some((column) => {
+      return !columns.includes(column);
+    })
+  ) {
+    throw new StateError(
+      'STATE_SCHEMA_INCOMPATIBLE',
+      'the turn table does not match the current schema; rebuild the local Collab state database',
+    );
   }
 }
 

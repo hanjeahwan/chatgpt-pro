@@ -43,7 +43,13 @@ export interface CollabBrowser {
   setupOpen(sessionName: string): Promise<void>;
   setupSaveSeed(sessionName: string, seedStatePath: string): Promise<{ readonly seedValidated: boolean }>;
   setupClose(sessionName: string): Promise<{ readonly sessionClosed: boolean }>;
-  startTask(taskId: string, sessionName: string, seedStatePath: string, rebuild?: boolean): Promise<BrowserSessionInfo>;
+  startTask(
+    taskId: string,
+    sessionName: string,
+    seedStatePath: string,
+    rebuild?: boolean,
+    observer?: BrowserOperationObserver,
+  ): Promise<BrowserSessionInfo>;
   sessionAvailability(sessionName: string): Promise<BrowserAvailability>;
   recoverConversation(
     taskId: string,
@@ -106,6 +112,7 @@ export interface CollabBrowser {
     sessionName: string,
     canonicalUrl: string,
     expectedConversationId: string | null,
+    expectedProjectIdentity: string | null,
     previousUserTurnIdentity: string | null,
     prompt: string,
     attachmentNames: readonly string[],
@@ -287,6 +294,13 @@ export class CollabService {
             await this.#browser.setupSaveSeed(sessionName, seedPath);
           }
         }
+        const validated = await seedStateValid(this.#paths);
+        if (!validated) {
+          throw new CollabError(
+            'SEED_NOT_AUTHENTICATED',
+            'saved authentication state is not a loadable ChatGPT storage state; run setup again and complete the login',
+          );
+        }
         operation = store.advanceOperationStep(operation.id, 'cleanup', {
           observedAt: now(),
           sessionName,
@@ -333,7 +347,8 @@ export class CollabService {
     requireCanonicalTaskId(taskId);
     await ensureCollabDirectories(this.#paths);
     return this.#withStore(async (store) => {
-      const existing = store.getTask(taskId);
+      const sessionName = `chatgpt-pro-collab-${taskId}`;
+      let existing = store.getTask(taskId);
       if (
         existing !== null &&
         existing.status !== 'starting' &&
@@ -341,16 +356,29 @@ export class CollabService {
       ) {
         throw new CollabError('TASK_CONFLICT', `task is ${existing.status}: ${taskId}`);
       }
-      const sessionName = `chatgpt-pro-collab-${taskId}`;
       if (existing === null) {
-        store.createStartingTask(taskId, sessionName, this.#idGenerator());
+        try {
+          store.createStartingTask(taskId, sessionName, this.#idGenerator());
+        } catch (error) {
+          if (!(error instanceof StateError) || error.code !== 'TASK_CONFLICT') {
+            throw error;
+          }
+          const raced = store.getTask(taskId);
+          if (raced === null || raced.playwrightSession !== sessionName) {
+            throw error;
+          }
+          if (raced.status !== 'starting' && !(raced.status === 'active' && raced.conversationId === null)) {
+            throw error;
+          }
+          existing = raced;
+        }
       }
       while (true) {
         const token = randomUUID();
         try {
           store.acquireTaskOperation(taskId, 'start', token);
-          return await this.#withAcquiredTaskOperation(store, taskId, token, async () => {
-            return this.#startTaskUnderLease(store, taskId, sessionName);
+          return await this.#withAcquiredTaskOperation(store, taskId, token, async (observer) => {
+            return this.#startTaskUnderLease(store, taskId, sessionName, observer);
           });
         } catch (error) {
           if (!(error instanceof StateError) || error.code !== 'TASK_OPERATION_IN_PROGRESS') {
@@ -402,15 +430,43 @@ export class CollabService {
     });
     const previousUserTurnIdentity = await previousCompletedTurnIdentity(store, taskId, sendingTurn.id);
     if ((await this.#browser.sessionAvailability(task.playwrightSession)) === 'missing') {
+      const seedStatePath = await requireSeedState(this.#paths);
+      await this.#browser.startTask(taskId, task.playwrightSession, seedStatePath, true, observer);
+      if (task.conversationId !== null && task.conversationUrl !== null) {
+        await this.#browser.recoverConversation(
+          taskId,
+          task.playwrightSession,
+          task.conversationUrl,
+          task.conversationId,
+          observer,
+        );
+      }
+    }
+    if ((await this.#browser.sessionAvailability(task.playwrightSession)) === 'missing') {
       store.markSubmissionUnknownAndNeedsDecision(
         taskId,
         sendingTurn.id,
         operation.id,
-        'browser session missing; submission outcome could not be verified',
+        'browser session could not be rebuilt; submission outcome could not be verified',
         {
           observedAt,
           sessionName: task.playwrightSession,
           postcondition: 'no page evidence available for automatic proof',
+        },
+      );
+      const after = await this.#browser.sessionAvailability(task.playwrightSession);
+      return store.getStatus(taskId, after);
+    }
+    if (task.conversationId === null) {
+      store.markSubmissionUnknownAndNeedsDecision(
+        taskId,
+        sendingTurn.id,
+        operation.id,
+        'task has no bound conversation; automatic proof is impossible without an adjudication',
+        {
+          observedAt,
+          sessionName: task.playwrightSession,
+          postcondition: 'unbound submission requires a human adjudication',
         },
       );
       const after = await this.#browser.sessionAvailability(task.playwrightSession);
@@ -473,13 +529,28 @@ export class CollabService {
    * @throws {CollabError} If the fixed context cannot be confirmed or the start conflicts.
    * @throws {Error} If setup is missing or the browser cannot start.
    */
-  async #startTaskUnderLease(store: StateStore, taskId: string, sessionName: string): Promise<StartResult> {
+  async #startTaskUnderLease(
+    store: StateStore,
+    taskId: string,
+    sessionName: string,
+    observer: BrowserOperationObserver,
+  ): Promise<StartResult> {
     const seedStatePath = await requireSeedState(this.#paths);
     const task = store.requireTask(taskId);
     const operation = store.getUncommittedTaskOperation(taskId);
     if (operation === null || operation.kind !== 'start') {
+      if (task.status === 'starting') {
+        const resumed = await this.#browser.startTask(taskId, task.playwrightSession, seedStatePath, true, observer);
+        store.activateTask(taskId);
+        return {
+          taskId,
+          browserPid: resumed.pid,
+          contextMarker: resumed.contextMarker,
+          sessionDirectory: resolve(this.#paths.sessionsDirectory, taskId),
+        };
+      }
       if (task.status === 'active' && task.conversationId === null) {
-        const resumed = await this.#browser.startTask(taskId, task.playwrightSession, seedStatePath, true);
+        const resumed = await this.#browser.startTask(taskId, task.playwrightSession, seedStatePath, true, observer);
         return {
           taskId,
           browserPid: resumed.pid,
@@ -499,25 +570,29 @@ export class CollabService {
     }
     try {
       const resumed = task.status === 'active' && task.conversationId === null;
-      const browser = await this.#browser.startTask(taskId, task.playwrightSession, seedStatePath, resumed);
-      const project = store.advanceOperationStep(effectOperation.id, 'project', {
-        observedAt: new Date().toISOString(),
-        sessionName,
-        pageUrl: browser.url,
-        postcondition: 'fixed Project and blank composer verified',
-      });
-      store.advanceOperationStep(project.id, 'configuration', {
-        observedAt: new Date().toISOString(),
-        sessionName,
-        pageUrl: browser.url,
-        postcondition: 'current model GPT-5.6 Sol read back and Power slider at the maximum level',
-        projectIdentity: browser.projectId,
-        modelConfirmed: browser.modelConfirmed,
-        powerConfirmed: browser.powerConfirmed,
-        powerNow: browser.powerNow,
-        powerMin: browser.powerMin,
-        powerMax: browser.powerMax,
-      });
+      const browser = await this.#browser.startTask(taskId, task.playwrightSession, seedStatePath, resumed, observer);
+      if (effectOperation.step === 'session') {
+        effectOperation = store.advanceOperationStep(effectOperation.id, 'project', {
+          observedAt: new Date().toISOString(),
+          sessionName,
+          pageUrl: browser.url,
+          postcondition: 'fixed Project and blank composer verified',
+        });
+      }
+      if (effectOperation.step === 'project') {
+        effectOperation = store.advanceOperationStep(effectOperation.id, 'configuration', {
+          observedAt: new Date().toISOString(),
+          sessionName,
+          pageUrl: browser.url,
+          postcondition: 'current model GPT-5.6 Sol read back and Power slider at the maximum level',
+          projectIdentity: browser.projectId,
+          modelConfirmed: browser.modelConfirmed,
+          powerConfirmed: browser.powerConfirmed,
+          powerNow: browser.powerNow,
+          powerMin: browser.powerMin,
+          powerMax: browser.powerMax,
+        });
+      }
       store.commitOperation(effectOperation.id, 'automatic', {
         observedAt: new Date().toISOString(),
         sessionName,
@@ -1145,7 +1220,7 @@ export class CollabService {
    */
   async #recoverSnapshot(store: StateStore, taskId: string, observer: BrowserOperationObserver): Promise<StatusRecord> {
     const task = store.requireTask(taskId);
-    const browserStatus = await this.#browser.sessionAvailability(task.playwrightSession);
+    let browserStatus = await this.#browser.sessionAvailability(task.playwrightSession);
     const before = store.getStatus(taskId, browserStatus);
     if (before.nextAction === 'none') {
       return before;
@@ -1166,15 +1241,31 @@ export class CollabService {
     if (task.status === 'closing') {
       return before;
     }
+    const pageWorkPending =
+      browserStatus === 'missing' && task.status !== 'starting' && (pendingTurn !== undefined || operation !== null);
+    if (pageWorkPending) {
+      const seedStatePath = await requireSeedState(this.#paths);
+      await this.#browser.startTask(taskId, task.playwrightSession, seedStatePath, true, observer);
+      if (task.conversationId !== null && task.conversationUrl !== null) {
+        await this.#browser.recoverConversation(
+          taskId,
+          task.playwrightSession,
+          task.conversationUrl,
+          task.conversationId,
+          observer,
+        );
+      }
+      browserStatus = await this.#browser.sessionAvailability(task.playwrightSession);
+    }
     if (pendingTurn !== undefined && (pendingTurn.status === 'pending' || pendingTurn.status === 'capturing')) {
-      return before;
+      return store.getStatus(taskId, browserStatus);
     }
     if (pendingTurn !== undefined && pendingTurn.status === 'unknown-submission') {
-      return before;
+      return store.getStatus(taskId, browserStatus);
     }
     if (operation !== null && operation.kind === 'send' && operation.step === 'submit') {
       if (operation.phase === 'needs-decision') {
-        return before;
+        return store.getStatus(taskId, browserStatus);
       }
       if (operation.phase !== 'effect-unknown') {
         throw new CollabError(
@@ -1228,24 +1319,53 @@ export class CollabService {
     }
     if (task.status === 'starting' || operation?.kind === 'start') {
       const seedStatePath = await requireSeedState(this.#paths);
-      const browser = await this.#browser.startTask(taskId, task.playwrightSession, seedStatePath, true);
-      if (task.status === 'starting') {
-        store.activateTask(taskId);
+      const browser = await this.#browser.startTask(taskId, task.playwrightSession, seedStatePath, true, observer);
+      let recoveredOperation = operation;
+      if (recoveredOperation !== null && recoveredOperation.step === 'session') {
+        recoveredOperation = store.advanceOperationStep(recoveredOperation.id, 'project', {
+          observedAt: new Date().toISOString(),
+          sessionName: task.playwrightSession,
+          pageUrl: browser.url,
+          postcondition: 'fixed Project and blank composer verified',
+        });
       }
-      if (operation !== null) {
-        store.commitOperation(operation.id, 'automatic', {
+      if (recoveredOperation !== null && recoveredOperation.step === 'project') {
+        recoveredOperation = store.advanceOperationStep(recoveredOperation.id, 'configuration', {
+          observedAt: new Date().toISOString(),
+          sessionName: task.playwrightSession,
+          pageUrl: browser.url,
+          postcondition: 'current model GPT-5.6 Sol read back and Power slider at the maximum level',
+          projectIdentity: browser.projectId,
+          modelConfirmed: browser.modelConfirmed,
+          powerConfirmed: browser.powerConfirmed,
+          powerNow: browser.powerNow,
+          powerMin: browser.powerMin,
+          powerMax: browser.powerMax,
+        });
+      }
+      if (recoveredOperation !== null) {
+        store.commitOperation(recoveredOperation.id, 'automatic', {
           observedAt: new Date().toISOString(),
           sessionName: task.playwrightSession,
           pageUrl: browser.url,
           postcondition: 'start session resumed from seed',
+          projectIdentity: browser.projectId,
+          modelConfirmed: browser.modelConfirmed,
+          powerConfirmed: browser.powerConfirmed,
+          powerNow: browser.powerNow,
+          powerMin: browser.powerMin,
+          powerMax: browser.powerMax,
         });
+      }
+      if (task.status === 'starting') {
+        store.activateTask(taskId);
       }
       const after = await this.#browser.sessionAvailability(task.playwrightSession);
       return store.getStatus(taskId, after);
     }
     if (browserStatus === 'missing') {
       const seedStatePath = await requireSeedState(this.#paths);
-      await this.#browser.startTask(taskId, task.playwrightSession, seedStatePath, true);
+      await this.#browser.startTask(taskId, task.playwrightSession, seedStatePath, true, observer);
       const rebuilt = store.requireTask(taskId);
       if (rebuilt.conversationId !== null && rebuilt.conversationUrl !== null) {
         await this.#browser.recoverConversation(
@@ -1259,7 +1379,7 @@ export class CollabService {
       const after = await this.#browser.sessionAvailability(task.playwrightSession);
       return store.getStatus(taskId, after);
     }
-    return before;
+    return store.getStatus(taskId, browserStatus);
   }
 
   /**
@@ -1298,12 +1418,26 @@ export class CollabService {
         const previousUserTurnIdentity = await previousCompletedTurnIdentity(store, taskId, turnId);
         const sessionName = task.playwrightSession;
         const resolvedAt = new Date().toISOString();
+        if ((await this.#browser.sessionAvailability(sessionName)) === 'missing') {
+          const seedStatePath = await requireSeedState(this.#paths);
+          await this.#browser.startTask(taskId, sessionName, seedStatePath, true, observer);
+          if (task.conversationId !== null && task.conversationUrl !== null) {
+            await this.#browser.recoverConversation(
+              taskId,
+              sessionName,
+              task.conversationUrl,
+              task.conversationId,
+              observer,
+            );
+          }
+        }
         if (verdict === 'submitted' && canonicalUrl !== null) {
           const verified = await this.#browser.resolveSubmittedConversation(
             taskId,
             sessionName,
             canonicalUrl,
             task.conversationId,
+            store.getStartProjectIdentity(taskId),
             previousUserTurnIdentity,
             prompt,
             attachmentNames,
