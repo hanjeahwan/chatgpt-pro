@@ -193,7 +193,11 @@ describe('BEH-002 fixed Project and GPT-5.6 Sol Power 5/5 start context', () => 
     expect(fixture.events).toEqual([
       'project-row-click',
       'selector-click',
-      'power-end',
+      'power-home',
+      'power-arrow-right',
+      'power-arrow-right',
+      'power-arrow-right',
+      'power-arrow-right',
       'opener-click',
       'model-click',
       'selector-click',
@@ -273,8 +277,8 @@ describe('BEH-002 fixed Project and GPT-5.6 Sol Power 5/5 start context', () => 
     expect(fixture.invocations.at(-1)?.arguments).toContain('close');
   });
 
-  it('rejects with SELECTION_UNCONFIRMED when the Power End key cannot be read back', async () => {
-    const fixture = await executableStartFixture({ powerEndApplies: false });
+  it('rejects with SELECTION_UNCONFIRMED when the Power keys cannot be read back', async () => {
+    const fixture = await executableStartFixture({ powerKeysApplies: false });
     await writeFile(fixture.paths.seedState, '{}');
 
     const failure = await startTaskFailure(fixture);
@@ -337,7 +341,11 @@ describe('BEH-002 fixed Project and GPT-5.6 Sol Power 5/5 start context', () => 
     expect(fixture.events).toEqual([
       'project-row-click',
       'selector-click',
-      'power-end',
+      'power-home',
+      'power-arrow-right',
+      'power-arrow-right',
+      'power-arrow-right',
+      'power-arrow-right',
       'opener-click',
       'model-click',
       'selector-click',

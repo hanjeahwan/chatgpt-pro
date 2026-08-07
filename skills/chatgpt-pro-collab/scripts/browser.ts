@@ -1977,9 +1977,16 @@ function startVerificationScript(contextMarker: string): string {
         if (await slider.count() !== 1) {
           return { status: 'drift', reason: 'Power slider is not unique' };
         }
-        await slider.focus();
-        await page.keyboard.press('End');
-        await page.waitForTimeout(400);
+        await slider.press('Home');
+        await page.waitForTimeout(200);
+        const afterHome = await readPower();
+        if (afterHome.status === 'drift') return afterHome;
+        if (afterHome.status === 'unavailable') return afterHome;
+        const steps = afterHome.max - afterHome.now;
+        for (let step = 0; step < steps; step += 1) {
+          await slider.press('ArrowRight');
+          await page.waitForTimeout(120);
+        }
         power = await readPower();
         if (power.status === 'drift') return power;
         if (power.status === 'unavailable') return power;

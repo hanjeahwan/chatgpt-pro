@@ -11,7 +11,7 @@ export interface StartPageOptions {
   readonly plusMenuTrigger?: boolean;
   readonly powerSliderPresent?: boolean;
   readonly powerInitiallyMax?: boolean;
-  readonly powerEndApplies?: boolean;
+  readonly powerKeysApplies?: boolean;
   readonly modelInitiallyChecked?: boolean;
   readonly modelOpenerCount?: number;
   readonly modelRadioPresent?: boolean;
@@ -213,7 +213,7 @@ export function startPageFixture(options: StartPageOptions): StartPageFixture {
     otherRowCount: options.otherRowCount ?? 0,
     pathname: '/projects',
     plusMenuTrigger: options.plusMenuTrigger ?? false,
-    powerEndApplies: options.powerEndApplies ?? true,
+    powerKeysApplies: options.powerKeysApplies ?? true,
     powerInitiallyMax: options.powerInitiallyMax ?? false,
     powerMax: 5,
     powerNow: (options.powerInitiallyMax ?? false) ? 5 : 2,
@@ -263,6 +263,42 @@ export function startPageFixture(options: StartPageOptions): StartPageFixture {
   const closeMenu = (): void => {
     state.menuOpen = false;
     state.submenuOpen = false;
+  };
+
+  /**
+   * Dispatches one slider keyboard interaction, mirroring the live contract where
+   * `End` is ignored and only `Home`/`ArrowRight` move the value.
+   *
+   * @param key Key name dispatched by the generated page function.
+   * @returns Nothing after the slider state is updated.
+   * @throws {Error} If no slider is focused or the key is unsupported.
+   */
+  const dispatchSliderKey = (key: string): void => {
+    const focused = state.focusedElement;
+    if (focused === null) {
+      throw new Error('fixture keyboard press requires a focused element');
+    }
+    if (focused.getAttribute('role') !== 'slider') {
+      throw new Error('fixture slider keys are only supported on a focused slider');
+    }
+    if (key === 'Home') {
+      events.push('power-home');
+      if (state.powerKeysApplies) {
+        state.powerNow = 1;
+      }
+      return;
+    }
+    if (key === 'ArrowRight') {
+      events.push('power-arrow-right');
+      if (state.powerKeysApplies) {
+        state.powerNow = Math.min(state.powerNow + 1, state.powerMax);
+      }
+      return;
+    }
+    if (key === 'End') {
+      return;
+    }
+    throw new Error(`unsupported fixture slider key: ${key}`);
   };
 
   const authControls: StartDomNode[] = state.authenticated ? [] : [anchor('Log in', { href: '/auth/login' })];
@@ -572,24 +608,20 @@ export function startPageFixture(options: StartPageOptions): StartPageFixture {
           target.focus();
           return Promise.resolve();
         },
+        press(key: string) {
+          const target = matches(selector)[0];
+          if (target === undefined) {
+            throw new Error(`fixture locator is absent: ${selector}`);
+          }
+          target.focus();
+          dispatchSliderKey(key);
+          return Promise.resolve();
+        },
       };
     },
     keyboard: {
       async press(key: string) {
-        if (key !== 'End') {
-          throw new Error(`unsupported fixture keyboard key: ${key}`);
-        }
-        const focused = state.focusedElement;
-        if (focused === null) {
-          throw new Error('fixture keyboard press requires a focused element');
-        }
-        if (focused.getAttribute('role') !== 'slider') {
-          throw new Error('fixture keyboard End is only supported on a focused slider');
-        }
-        events.push('power-end');
-        if (state.powerEndApplies) {
-          state.powerNow = state.powerMax;
-        }
+        dispatchSliderKey(key);
       },
     },
     url() {
