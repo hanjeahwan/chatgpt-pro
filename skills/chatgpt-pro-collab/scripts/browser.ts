@@ -376,12 +376,15 @@ export class PlaywrightBrowser {
    * interactive setup session's own authentication can never mask an invalid seed, and that
    * verification session is always closed after success, unauthenticated, and error paths.
    * A leftover verification session from an interrupted prior run is closed first so a setup
-   * retry can cleanly re-verify without touching the interactive setup session.
+   * retry can cleanly re-verify without touching the interactive setup session. Closing the
+   * verification session is mandatory: a close failure fails the whole verification so setup
+   * can never commit while a verification session may remain.
    *
    * @param sessionName Recorded setup session name; never opened or closed by this method.
    * @param seedStatePath Absolute authentication seed path.
    * @returns Whether the loaded seed produced an authenticated ChatGPT page.
-   * @throws {Error} If the browser cannot be opened or the seed cannot be loaded.
+   * @throws {BrowserError} If the browser cannot be opened or the seed cannot be loaded,
+   *   or the verification session cannot be closed (combining the original failure when present).
    */
   async verifyAuthenticatedSeed(
     sessionName: string,
@@ -391,6 +394,8 @@ export class PlaywrightBrowser {
     const verificationSession = `${sessionName}-verify`;
     const verificationId = `${setupId}-verify`;
     await ensureTaskDirectories(this.#paths, verificationId);
+    let hardFailure: unknown = null;
+    let authenticated = false;
     try {
       if ((await this.sessionAvailability(verificationSession)) !== 'missing') {
         await this.#invoke(verificationSession, verificationId, ['close'], 'close leftover seed verification browser');
@@ -416,17 +421,28 @@ export class PlaywrightBrowser {
           authenticatedPageScript(),
           'verify seed',
         );
-        return { authenticated: true };
+        authenticated = true;
       } catch {
-        return { authenticated: false };
+        // The seed did not produce an authenticated page: a normal unauthenticated verdict.
       }
-    } finally {
-      try {
-        await this.#invoke(verificationSession, verificationId, ['close'], 'close seed verification browser');
-      } catch {
-        // The verification session may already be gone; the setup retry closes any leftover.
-      }
+    } catch (error) {
+      hardFailure = error;
     }
+    try {
+      await this.#invoke(verificationSession, verificationId, ['close'], 'close seed verification browser');
+    } catch (closeError) {
+      throw new BrowserError(
+        'BROWSER_CLEANUP_FAILED',
+        'verify seed',
+        hardFailure === null
+          ? `seed verification finished (authenticated: ${authenticated}) but its verification session could not be closed: ${errorMessage(closeError)}`
+          : `${errorMessage(hardFailure)}; verification session cleanup also failed: ${errorMessage(closeError)}`,
+      );
+    }
+    if (hardFailure !== null) {
+      throw hardFailure instanceof Error ? hardFailure : new Error(String(hardFailure));
+    }
+    return { authenticated };
   }
 
   /**

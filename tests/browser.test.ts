@@ -153,6 +153,121 @@ describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
     expect(commands).toEqual([[], ['open', 'about:blank', '--browser=chrome', '--headed'], ['close']]);
   });
 
+  it('fails the verification when the page check succeeds but closing the verification session fails', async () => {
+    const fixture = await browserFixture([
+      output('  (no browsers)'),
+      output('verification opened'),
+      output('seed loaded'),
+      output('navigated to chatgpt.com'),
+      output('verify-seed passed'),
+      new Error('fixture close failed'),
+    ]);
+    await writeFile(fixture.paths.seedState, '{}');
+
+    const error = await fixture.browser
+      .verifyAuthenticatedSeed('chatgpt-pro-collab-setup-live', fixture.paths.seedState)
+      .then(
+        () => {
+          return null;
+        },
+        (reason: unknown) => {
+          return reason;
+        },
+      );
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/authenticated: true/);
+    expect((error as Error).message).toMatch(/could not be closed/);
+    expect((error as Error).message).toMatch(/fixture close failed/);
+
+    const commands = fixture.invocations.map((invocation) => {
+      return invocation.arguments.slice(4);
+    });
+    expect(commands).toEqual([
+      [],
+      ['open', 'about:blank', '--browser=chrome', '--headed'],
+      ['state-load', fixture.paths.seedState],
+      ['goto', 'https://chatgpt.com/'],
+      ['run-code', '--filename', expect.any(String)],
+      ['close'],
+    ]);
+    const setupSessionClosed = fixture.invocations.some((invocation) => {
+      return invocation.arguments[2] === '-s=chatgpt-pro-collab-setup-live' && invocation.arguments[4] === 'close';
+    });
+    expect(setupSessionClosed).toBe(false);
+  });
+
+  it('reports both the verification failure and the cleanup failure when both fail', async () => {
+    const fixture = await browserFixture([
+      output('  (no browsers)'),
+      new Error('fixture open failed'),
+      new Error('fixture close failed'),
+    ]);
+    await writeFile(fixture.paths.seedState, '{}');
+
+    const error = await fixture.browser
+      .verifyAuthenticatedSeed('chatgpt-pro-collab-setup-live', fixture.paths.seedState)
+      .then(
+        () => {
+          return null;
+        },
+        (reason: unknown) => {
+          return reason;
+        },
+      );
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/fixture open failed/);
+    expect((error as Error).message).toMatch(/cleanup also failed/);
+    expect((error as Error).message).toMatch(/fixture close failed/);
+
+    const commands = fixture.invocations.map((invocation) => {
+      return invocation.arguments.slice(4);
+    });
+    expect(commands).toEqual([[], ['open', 'about:blank', '--browser=chrome', '--headed'], ['close']]);
+    const setupSessionClosed = fixture.invocations.some((invocation) => {
+      return invocation.arguments[2] === '-s=chatgpt-pro-collab-setup-live' && invocation.arguments[4] === 'close';
+    });
+    expect(setupSessionClosed).toBe(false);
+  });
+
+  it('fails an unauthenticated verdict when closing the verification session fails', async () => {
+    const fixture = await browserFixture([
+      output('  (no browsers)'),
+      output('verification opened'),
+      output('seed loaded'),
+      output('navigated to chatgpt.com'),
+      new Error('fixture verify-seed failed'),
+      new Error('fixture close failed'),
+    ]);
+    await writeFile(fixture.paths.seedState, '{}');
+
+    const error = await fixture.browser
+      .verifyAuthenticatedSeed('chatgpt-pro-collab-setup-live', fixture.paths.seedState)
+      .then(
+        () => {
+          return null;
+        },
+        (reason: unknown) => {
+          return reason;
+        },
+      );
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/authenticated: false/);
+    expect((error as Error).message).toMatch(/could not be closed/);
+    expect((error as Error).message).toMatch(/fixture close failed/);
+
+    const commands = fixture.invocations.map((invocation) => {
+      return invocation.arguments.slice(4);
+    });
+    expect(commands).toEqual([
+      [],
+      ['open', 'about:blank', '--browser=chrome', '--headed'],
+      ['state-load', fixture.paths.seedState],
+      ['goto', 'https://chatgpt.com/'],
+      ['run-code', '--filename', expect.any(String)],
+      ['close'],
+    ]);
+  });
+
   it('uses the fixed CLI prefix, task output directory, and shared seed without persistence', async () => {
     const fixture = await browserFixture([
       output('### Browser `session-a` opened with pid 4123.'),
