@@ -1052,6 +1052,45 @@ describe('BEH-002 caller-provided task start', () => {
   });
 });
 
+describe('BEH-012 returned file capture and recoverable publication', () => {
+  it('returns completed with an empty artifact list when the reply has no files', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const promptPath = join(fixture.root, 'no-files.md');
+    await writeFile(promptPath, 'no files');
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+
+    const completed = await fixture.service.wait(task.taskId, turn.turnId, 20_000, 20_000);
+    expect(completed).toMatchObject({ status: 'completed', artifactPaths: [] });
+    const store = new StateStore(fixture.paths.database);
+    expect(store.listArtifacts(task.taskId, turn.turnId)).toEqual([]);
+    store.close();
+  });
+
+  it('never returns a successful pending after completion was observed even across the observation deadline', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const promptPath = join(fixture.root, 'late-files.md');
+    await writeFile(promptPath, 'late files');
+    fixture.browser.responseArtifacts.push({
+      sourceUrl: 'sandbox:/mnt/data/late.txt',
+      label: 'late.txt',
+    });
+    fixture.browser.captureDelayMs = 60;
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+
+    const completed = await fixture.service.wait(task.taskId, turn.turnId, 1, 20_000);
+    expect(completed).toMatchObject({ status: 'completed', artifactPaths: [expect.any(String)] });
+    const artifactPaths = (completed as unknown as { artifactPaths: string[] }).artifactPaths;
+    expect(await readFile(artifactPaths[0] ?? '', 'utf8')).toBe('artifact for sandbox:/mnt/data/late.txt');
+    const store = new StateStore(fixture.paths.database);
+    expect(store.requireTurn(task.taskId, turn.turnId).status).toBe('completed');
+    store.close();
+  });
+});
+
 describe('BEH-004 wait observation anchored on the persisted user turn', () => {
   it('observes only the assistant after the exact persisted user turn identity', async () => {
     const fixture = await serviceFixture();

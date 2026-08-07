@@ -115,7 +115,7 @@
     {
       "id": "IMP-005",
       "title": "捕获返回文件并支持可恢复发布",
-      "status": "pending",
+      "status": "implemented",
       "covers": ["BEH-012"],
       "verifies": ["VER-015"],
       "dependsOn": ["IMP-002", "IMP-004", "IMP-010"],
