@@ -101,8 +101,11 @@ export function submissionPageFixture(options: SubmissionPageOptions): Submissio
     stopVisible: options.stopVisible ?? false,
   };
 
+  const headingLeaf = (parentElement: LeafElement | null): LeafElement => {
+    return new SubmissionHtmlElement('You said:', [], parentElement);
+  };
   const promptLeaf = (promptText: string | undefined, parentElement: LeafElement | null): LeafElement => {
-    return new SubmissionHtmlElement(`You said: ${promptText ?? ''}`, [], parentElement);
+    return new SubmissionHtmlElement(promptText ?? '', [], parentElement);
   };
   const chipLeaf = (name: string, parentElement: LeafElement | null): LeafElement => {
     return new SubmissionHtmlElement(name, [], parentElement);
@@ -117,8 +120,9 @@ export function submissionPageFixture(options: SubmissionPageOptions): Submissio
         (container.children as LeafElement[]).push(basename, label);
         descendants.push(container, basename, label);
       }
+      const heading = headingLeaf(null);
       const prompt = promptLeaf(turn.promptText, null);
-      descendants.push(prompt);
+      descendants.push(heading, prompt);
       return new (class extends SubmissionHtmlElement {
         getAttribute(name: string): string | null {
           if (name === 'data-testid') {
@@ -247,6 +251,22 @@ export function submissionPageFixture(options: SubmissionPageOptions): Submissio
               return fileInput('staged');
             });
             return Promise.resolve(withSubmissionGlobals(globals(), callback, inputs, argument));
+          },
+        };
+      }
+      if (selector === '*') {
+        return {
+          evaluateAll(callback: unknown, argument?: unknown) {
+            if (typeof callback !== 'function') {
+              return Promise.reject(new TypeError('fixture locator callback is not a function'));
+            }
+            const leaves = [
+              new SubmissionHtmlElement(state.composerText, [], null),
+              ...state.composerChips.map((name) => {
+                return chipLeaf(name, null);
+              }),
+            ];
+            return Promise.resolve(withSubmissionGlobals(globals(), callback, leaves, argument));
           },
         };
       }

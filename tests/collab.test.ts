@@ -175,6 +175,21 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     await expect(fixture.service.close(task.taskId)).resolves.toMatchObject({ alreadyClosed: false });
   });
 
+  it('rejects a prompt whose surrounding whitespace cannot be proven verbatim on the page', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const promptPath = join(fixture.root, 'whitespace-prompt.md');
+    await writeFile(promptPath, '  exact prompt  ');
+
+    await expect(fixture.service.send(task.taskId, promptPath, [])).rejects.toMatchObject({
+      code: 'PROMPT_NOT_VERBATIM_PROVABLE',
+    });
+    const store = new StateStore(fixture.paths.database);
+    expect(store.listTurns(task.taskId)).toEqual([]);
+    store.close();
+  });
+
   it('lets close take the task between bounded wait polls', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
@@ -765,7 +780,7 @@ describe('BEH-001 setup journal and interruption recovery', () => {
     expect(fixture.browser.setupSessions).toEqual(['chatgpt-pro-collab-setup-interrupted']);
   });
 
-  it('skips repeated login and only finishes cleanup when the seed is already valid', async () => {
+  it('skips repeated login and only finishes cleanup when the seed already authenticates', async () => {
     const fixture = await serviceFixture();
     await writeFile(fixture.paths.seedState, validSeedText());
     const store = new StateStore(fixture.paths.database);
@@ -787,8 +802,41 @@ describe('BEH-001 setup journal and interruption recovery', () => {
       evidence: { seedValidated: true, sessionClosed: true },
     });
     reopened.close();
+    expect(fixture.browser.seedVerifications).toBe(2);
     expect(fixture.browser.setupSessions).toEqual([]);
     expect(fixture.browser.setupClosedSessions).toEqual(['chatgpt-pro-collab-setup-halfway']);
+  });
+
+  it('re-enters the interactive login flow when an existing seed does not authenticate', async () => {
+    const fixture = await serviceFixture();
+    await writeFile(fixture.paths.seedState, validSeedText());
+    fixture.browser.seedAuthenticated = false;
+
+    await fixture.service.setup();
+    expect(fixture.browser.setupSessions).toHaveLength(1);
+    expect(fixture.browser.seedVerifications).toBeGreaterThanOrEqual(2);
+    const reopened = new StateStore(fixture.paths.database);
+    const setupOperation = reopened.listOperations().find((operation) => {
+      return operation.kind === 'setup';
+    });
+    expect(setupOperation).toMatchObject({ phase: 'committed', evidence: { seedValidated: true } });
+    reopened.close();
+  });
+
+  it('does not skip login for a structurally valid pseudo-cookie seed that fails page verification', async () => {
+    const fixture = await serviceFixture();
+    await writeFile(
+      fixture.paths.seedState,
+      JSON.stringify({
+        cookies: [{ name: 'definitely-not-a-session-cookie', domain: '.chatgpt.com', path: '/', value: '' }],
+        origins: [],
+      }),
+    );
+    fixture.browser.seedAuthenticated = false;
+
+    await fixture.service.setup();
+    expect(fixture.browser.setupSessions).toHaveLength(1);
+    expect(fixture.browser.seedVerifications).toBeGreaterThanOrEqual(2);
   });
 
   it('finishes an interrupted cleanup step without repeating login or state save', async () => {
@@ -1223,10 +1271,41 @@ describe('BEH-013 recovery matrix completion', () => {
       browserStatus: 'available',
       nextAction: 'resolve-submission',
     });
-    expect(fixture.browser.autoVerifications).toEqual([]);
+    expect(fixture.browser.autoVerifications).toEqual([taskId]);
     expect(fixture.browser.startCount).toBe(1);
     const reopened = new StateStore(fixture.paths.database);
     expect(reopened.requireOperation('send-op')).toMatchObject({ phase: 'needs-decision' });
+    reopened.close();
+  });
+
+  it('auto-verifies and binds an unbound first submission when the original session shows the canonical conversation', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const taskId = randomUUID();
+    const turnId = 'unbound-canonical-turn';
+    const promptPath = join(fixture.root, 'unbound-canonical.md');
+    await writeFile(promptPath, 'unbound canonical prompt');
+    const store = new StateStore(fixture.paths.database);
+    store.createTask(taskId, `chatgpt-pro-collab-${taskId}`);
+    store.beginSendTurn(taskId, turnId, promptPath, [], 'send-op');
+    store.advanceSendToSubmitEffectUnknown('send-op');
+    store.close();
+    await savePromptCopy(fixture.paths, taskId, turnId, Buffer.from('unbound canonical prompt'));
+    fixture.browser.autoVerifyConversationId = `canonical-${taskId}`;
+
+    const status = await fixture.service.recover(taskId);
+    expect(status).toMatchObject({
+      turnStatus: 'pending',
+      browserStatus: 'available',
+      nextAction: 'wait',
+    });
+    expect(fixture.browser.autoVerifications).toEqual([taskId]);
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireTask(taskId)).toMatchObject({
+      conversationId: `canonical-${taskId}`,
+    });
+    expect(reopened.requireTurn(taskId, turnId)).toMatchObject({ status: 'pending' });
+    expect(reopened.requireOperation('send-op')).toMatchObject({ phase: 'committed' });
     reopened.close();
   });
 
@@ -1912,12 +1991,15 @@ class FakeBrowser implements CollabBrowser {
   readonly safeComposersVerified: string[] = [];
   readonly setupSessions: string[] = [];
   readonly setupClosedSessions: string[] = [];
+  seedAuthenticated = true;
+  seedVerifications = 0;
   readonly cleanedComposers: string[] = [];
   readonly archiveObservations: string[] = [];
   readonly autoVerifications: string[] = [];
   nextArchiveState: 'archived' | 'not-archived' = 'archived';
   nextArchiveStateUnknown: string | null = null;
   nextAutoVerifyUnresolved: string | null = null;
+  autoVerifyConversationId: string | null = null;
   readonly expectedConversationIds: Array<string | null> = [];
   readonly expectedAssistantTurnIds: Array<string | null> = [];
   readonly responseArtifacts: Array<{ readonly sourceUrl: string; readonly label: string }> = [];
@@ -1989,6 +2071,7 @@ class FakeBrowser implements CollabBrowser {
    */
   async setupSaveSeed(sessionName: string, seedStatePath: string): Promise<{ readonly seedValidated: boolean }> {
     await writeFile(seedStatePath, validSeedText());
+    this.seedAuthenticated = true;
     return { seedValidated: true };
   }
 
@@ -2002,6 +2085,22 @@ class FakeBrowser implements CollabBrowser {
   async setupClose(sessionName: string): Promise<{ readonly sessionClosed: boolean }> {
     this.setupClosedSessions.push(sessionName);
     return { sessionClosed: true };
+  }
+
+  /**
+   * Reports whether the fake seed would produce an authenticated ChatGPT page.
+   *
+   * @param _sessionName Unused named session.
+   * @param _seedStatePath Unused authentication seed path.
+   * @returns The configured seed-authentication verdict.
+   * @throws {Error} This fake verification does not throw.
+   */
+  async verifyAuthenticatedSeed(
+    _sessionName: string,
+    _seedStatePath: string,
+  ): Promise<{ readonly authenticated: boolean }> {
+    this.seedVerifications += 1;
+    return { authenticated: this.seedAuthenticated };
   }
 
   /**
@@ -2133,6 +2232,7 @@ class FakeBrowser implements CollabBrowser {
    * @param taskId Task identifier.
    * @param _sessionName Unused named session.
    * @param expectedConversationId Database-bound identity.
+   * @param _expectedProjectIdentity Unused recorded project identity.
    * @param _previousUserTurnIdentity Unused anchor.
    * @param _prompt Unused saved prompt.
    * @param _attachmentNames Unused ordered attachment names.
@@ -2144,6 +2244,7 @@ class FakeBrowser implements CollabBrowser {
     taskId: string,
     _sessionName: string,
     expectedConversationId: string | null,
+    _expectedProjectIdentity: string | null,
     _previousUserTurnIdentity: string | null,
     _prompt: string,
     _attachmentNames: readonly string[],
@@ -2155,7 +2256,22 @@ class FakeBrowser implements CollabBrowser {
       this.nextAutoVerifyUnresolved = null;
       return { status: 'unresolved' as const, reason: 'injected unresolved auto-verification' };
     }
-    const conversationId = expectedConversationId ?? `conversation-${taskId}`;
+    if (expectedConversationId === null) {
+      if (this.autoVerifyConversationId === null) {
+        return {
+          status: 'unresolved' as const,
+          reason: 'the current page is not a canonical conversation',
+        };
+      }
+      const conversationId = this.autoVerifyConversationId;
+      return {
+        status: 'submitted' as const,
+        conversationId,
+        conversationUrl: `https://chatgpt.com/c/${conversationId}`,
+        userTurnIdentity: `user-turn-${taskId}`,
+      };
+    }
+    const conversationId = expectedConversationId;
     return {
       status: 'submitted' as const,
       conversationId,
@@ -2258,6 +2374,7 @@ class FakeBrowser implements CollabBrowser {
    * @param taskId Task identifier.
    * @param _sessionName Unused named session.
    * @param _expectedConversationId Unused bound identity.
+   * @param _expectedProjectIdentity Unused recorded project identity.
    * @param _previousUserTurnIdentity Unused anchor.
    * @param _prompt Unused saved prompt.
    * @param _attachmentNames Unused ordered attachment names.
@@ -2269,6 +2386,7 @@ class FakeBrowser implements CollabBrowser {
     taskId: string,
     _sessionName: string,
     _expectedConversationId: string | null,
+    _expectedProjectIdentity: string | null,
     _previousUserTurnIdentity: string | null,
     _prompt: string,
     _attachmentNames: readonly string[],

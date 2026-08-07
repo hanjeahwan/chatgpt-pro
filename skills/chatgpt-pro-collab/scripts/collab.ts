@@ -43,6 +43,7 @@ export interface CollabBrowser {
   setupOpen(sessionName: string): Promise<void>;
   setupSaveSeed(sessionName: string, seedStatePath: string): Promise<{ readonly seedValidated: boolean }>;
   setupClose(sessionName: string): Promise<{ readonly sessionClosed: boolean }>;
+  verifyAuthenticatedSeed(sessionName: string, seedStatePath: string): Promise<{ readonly authenticated: boolean }>;
   startTask(
     taskId: string,
     sessionName: string,
@@ -122,6 +123,7 @@ export interface CollabBrowser {
     taskId: string,
     sessionName: string,
     expectedConversationId: string | null,
+    expectedProjectIdentity: string | null,
     previousUserTurnIdentity: string | null,
     prompt: string,
     attachmentNames: readonly string[],
@@ -145,6 +147,7 @@ export interface CollabBrowser {
     taskId: string,
     sessionName: string,
     expectedConversationId: string | null,
+    expectedProjectIdentity: string | null,
     previousUserTurnIdentity: string | null,
     prompt: string,
     attachmentNames: readonly string[],
@@ -256,12 +259,29 @@ export class CollabService {
       if (operation.step === 'login') {
         const seedValid = await seedStateValid(this.#paths);
         if (seedValid) {
-          operation = store.advanceOperationStep(operation.id, 'seed', {
-            observedAt: now(),
-            sessionName,
-            postcondition: 'seed was already valid; skipping repeated login',
-            seedValidated: true,
-          });
+          const verified = await this.#browser.verifyAuthenticatedSeed(sessionName, seedPath);
+          if (verified.authenticated) {
+            operation = store.advanceOperationStep(operation.id, 'seed', {
+              observedAt: now(),
+              sessionName,
+              postcondition: 'seed loaded in an isolated session and the authenticated page was verified',
+              seedValidated: true,
+            });
+          } else {
+            if (operation.phase === 'prepared') {
+              operation = store.markOperationEffectUnknown(operation.id, {
+                observedAt: now(),
+                sessionName,
+                postcondition: 'setup browser command released',
+              });
+            }
+            await this.#browser.setupOpen(sessionName);
+            operation = store.advanceOperationStep(operation.id, 'seed', {
+              observedAt: now(),
+              sessionName,
+              postcondition: 'interactive login observed',
+            });
+          }
         } else {
           if (operation.phase === 'prepared') {
             operation = store.markOperationEffectUnknown(operation.id, {
@@ -301,10 +321,26 @@ export class CollabService {
             'saved authentication state is not a loadable ChatGPT storage state; run setup again and complete the login',
           );
         }
+        let verified = await this.#browser.verifyAuthenticatedSeed(sessionName, seedPath);
+        if (!verified.authenticated && operation.phase === 'prepared') {
+          operation = store.markOperationEffectUnknown(operation.id, {
+            observedAt: now(),
+            sessionName,
+            postcondition: 'state-save command released after an interactive login',
+          });
+          await this.#browser.setupSaveSeed(sessionName, seedPath);
+          verified = await this.#browser.verifyAuthenticatedSeed(sessionName, seedPath);
+        }
+        if (!verified.authenticated) {
+          throw new CollabError(
+            'SEED_NOT_AUTHENTICATED',
+            'saved authentication state did not produce an authenticated ChatGPT page; run setup again and complete the login',
+          );
+        }
         operation = store.advanceOperationStep(operation.id, 'cleanup', {
           observedAt: now(),
           sessionName,
-          postcondition: 'authentication seed saved and validated',
+          postcondition: 'authentication seed saved, loaded, and authenticated on the page',
           seedValidated: true,
         });
       }
@@ -457,25 +493,11 @@ export class CollabService {
       const after = await this.#browser.sessionAvailability(task.playwrightSession);
       return store.getStatus(taskId, after);
     }
-    if (task.conversationId === null) {
-      store.markSubmissionUnknownAndNeedsDecision(
-        taskId,
-        sendingTurn.id,
-        operation.id,
-        'task has no bound conversation; automatic proof is impossible without an adjudication',
-        {
-          observedAt,
-          sessionName: task.playwrightSession,
-          postcondition: 'unbound submission requires a human adjudication',
-        },
-      );
-      const after = await this.#browser.sessionAvailability(task.playwrightSession);
-      return store.getStatus(taskId, after);
-    }
     const verified = await this.#browser.autoVerifySubmission(
       taskId,
       task.playwrightSession,
       task.conversationId,
+      store.getStartProjectIdentity(taskId),
       previousUserTurnIdentity,
       prompt,
       attachmentNames,
@@ -643,6 +665,12 @@ export class CollabService {
    */
   async send(taskId: string, promptPath: string, attachmentPaths: readonly string[]): Promise<SendResult> {
     const input = await prepareInputs(promptPath, attachmentPaths);
+    if (input.promptText !== input.promptText.trim()) {
+      throw new CollabError(
+        'PROMPT_NOT_VERBATIM_PROVABLE',
+        'prompt has leading or trailing whitespace that cannot be proven verbatim on the page; trim it before sending',
+      );
+    }
     const turnId = this.#idGenerator();
 
     return this.#withStore(async (store) => {
@@ -1470,6 +1498,7 @@ export class CollabService {
             taskId,
             sessionName,
             task.conversationId,
+            store.getStartProjectIdentity(taskId),
             previousUserTurnIdentity,
             prompt,
             attachmentNames,

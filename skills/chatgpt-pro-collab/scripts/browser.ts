@@ -368,6 +368,53 @@ export class PlaywrightBrowser {
   }
 
   /**
+   * Loads an existing seed into an isolated session and verifies the authenticated page.
+   *
+   * The structural storage-state check is not enough: the seed must actually load and the
+   * ChatGPT page must show no login controls. The isolated session is always closed.
+   *
+   * @param sessionName Recorded setup session name.
+   * @param seedStatePath Absolute authentication seed path.
+   * @returns Whether the loaded seed produced an authenticated ChatGPT page.
+   * @throws {Error} If the browser cannot be opened or the seed cannot be loaded.
+   */
+  async verifyAuthenticatedSeed(
+    sessionName: string,
+    seedStatePath: string,
+  ): Promise<{ readonly authenticated: boolean }> {
+    const setupId = sessionName.replace(/^chatgpt-pro-collab-/u, '');
+    await ensureTaskDirectories(this.#paths, setupId);
+    let opened = false;
+    try {
+      if ((await this.sessionAvailability(sessionName)) === 'missing') {
+        await this.#invoke(
+          sessionName,
+          setupId,
+          ['open', 'about:blank', '--browser=chrome', '--headed'],
+          'open seed verification browser',
+        );
+        opened = true;
+      }
+      await this.#invoke(sessionName, setupId, ['state-load', seedStatePath], 'load authentication state');
+      await this.#invoke(sessionName, setupId, ['goto', CHATGPT_URL], 'open chatgpt.com');
+      try {
+        await this.#runCodeWithoutResult(sessionName, setupId, 'verify-seed', authenticatedPageScript(), 'verify seed');
+        return { authenticated: true };
+      } catch {
+        return { authenticated: false };
+      }
+    } finally {
+      if (opened) {
+        try {
+          await this.#invoke(sessionName, setupId, ['close'], 'close seed verification browser');
+        } catch {
+          // The verification session may already be gone; the setup close re-verifies.
+        }
+      }
+    }
+  }
+
+  /**
    * Closes the recorded setup session and verifies the session is gone.
    *
    * @param sessionName Recorded setup session name.
@@ -407,6 +454,7 @@ export class PlaywrightBrowser {
     await ensureTaskDirectories(this.#paths, taskId);
     const contextMarker = randomUUID();
     let opened = false;
+    let reused = false;
     try {
       let pid = -1;
       if (!rebuild || (await this.sessionAvailability(sessionName)) === 'missing') {
@@ -420,6 +468,8 @@ export class PlaywrightBrowser {
         opened = true;
         pid = parseOpenPid(openOutput.stdout, sessionName);
         await this.#invoke(sessionName, taskId, ['state-load', seedStatePath], 'load authentication state', observer);
+      } else {
+        reused = true;
       }
       await this.#invoke(sessionName, taskId, ['goto', PROJECTS_URL], 'open ChatGPT projects', observer);
       const scriptPath = await savePlaywrightScript(
@@ -466,7 +516,7 @@ export class PlaywrightBrowser {
         persistent: false,
       };
     } catch (error) {
-      if (opened) {
+      if (opened || (reused && isDefiniteStartFailure(error))) {
         try {
           await this.#invoke(sessionName, taskId, ['close'], 'close failed task browser', observer);
         } catch (closeError) {
@@ -1011,6 +1061,7 @@ export class PlaywrightBrowser {
    * @param taskId Owning task identifier.
    * @param sessionName Owning Playwright named session.
    * @param expectedConversationId Bound conversation, or null before binding.
+   * @param expectedProjectIdentity Project identity recorded by the start operation, or null when unknown.
    * @param previousUserTurnIdentity Anchor of the previous completed turn, or null for a first turn.
    * @param prompt Saved prompt text for verbatim user-turn matching.
    * @param attachmentNames Ordered saved attachment basenames.
@@ -1023,6 +1074,7 @@ export class PlaywrightBrowser {
     taskId: string,
     sessionName: string,
     expectedConversationId: string | null,
+    expectedProjectIdentity: string | null,
     previousUserTurnIdentity: string | null,
     prompt: string,
     attachmentNames: readonly string[],
@@ -1032,7 +1084,13 @@ export class PlaywrightBrowser {
       sessionName,
       taskId,
       'auto-verify-submission',
-      autoVerifySubmissionScript(expectedConversationId, previousUserTurnIdentity, prompt, attachmentNames),
+      autoVerifySubmissionScript(
+        expectedConversationId,
+        expectedProjectIdentity,
+        previousUserTurnIdentity,
+        prompt,
+        attachmentNames,
+      ),
       'auto-verify submission outcome',
       'auto-verify-submission',
       observer,
@@ -1109,6 +1167,7 @@ export class PlaywrightBrowser {
    * @param taskId Owning task identifier.
    * @param sessionName Owning Playwright named session.
    * @param expectedConversationId Bound conversation, or null before binding.
+   * @param expectedProjectIdentity Project identity recorded by the start operation, or null when unknown.
    * @param previousUserTurnIdentity Anchor of the previous completed turn, or null for a first turn.
    * @param prompt Saved prompt text that must not match any post-anchor user turn.
    * @param attachmentNames Ordered saved attachment basenames.
@@ -1121,6 +1180,7 @@ export class PlaywrightBrowser {
     taskId: string,
     sessionName: string,
     expectedConversationId: string | null,
+    expectedProjectIdentity: string | null,
     previousUserTurnIdentity: string | null,
     prompt: string,
     attachmentNames: readonly string[],
@@ -1130,7 +1190,13 @@ export class PlaywrightBrowser {
       sessionName,
       taskId,
       'resolve-not-submitted',
-      resolveNotSubmittedScript(expectedConversationId, previousUserTurnIdentity, prompt, attachmentNames),
+      resolveNotSubmittedScript(
+        expectedConversationId,
+        expectedProjectIdentity,
+        previousUserTurnIdentity,
+        prompt,
+        attachmentNames,
+      ),
       'verify safe composer',
       'resolve-not-submitted',
       observer,
@@ -1756,6 +1822,30 @@ function loginWaitScript(): string {
 }
 
 /**
+ * Builds the authenticated-page postcondition used to prove a loaded seed is currently valid.
+ *
+ * @returns A Playwright page function source.
+ * @throws {Error} This pure source builder does not throw.
+ */
+function authenticatedPageScript(): string {
+  return `async (page) => {
+    await page.waitForFunction(() => {
+      const visible = (element) => {
+        if (!(element instanceof HTMLElement)) return false;
+        const style = getComputedStyle(element);
+        return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
+      };
+      const authControls = [...document.querySelectorAll('a, button')].filter((element) => {
+        const label = (element.textContent || '').trim();
+        const href = element instanceof HTMLAnchorElement ? element.getAttribute('href') || '' : '';
+        return visible(element) && (label === 'Log in' || label === 'Sign up' || href.includes('/auth/login'));
+      });
+      return authControls.length === 0;
+    }, undefined, { timeout: 60000, polling: 500 });
+  }`;
+}
+
+/**
  * Builds the fixed Project and model/mode start-context verification.
  *
  * The page function locates the unique `chatgpt-pro-collab` Project row on the projects
@@ -2252,14 +2342,14 @@ const USER_TURN_EVIDENCE = `
           if (names.includes(text)) attachmentTexts.push(text);
           continue;
         }
+        if (text === 'You said:' || text === 'You said') continue;
         promptParts.push(leaf.textContent || '');
       }
       if (attachmentTexts.length !== names.length) return false;
       for (let index = 0; index < names.length; index += 1) {
         if (attachmentTexts[index] !== names[index]) return false;
       }
-      const promptText = promptParts.join('').replace(/^You said:\\s*/u, '').trim();
-      return promptText === expectedPrompt.trim();
+      return promptParts.join('') === expectedPrompt;
     };`;
 
 /**
@@ -3124,6 +3214,7 @@ function observeArchiveScript(canonicalUrl: string, expectedConversationId: stri
  * Builds the automatic submission verification from the current page state.
  *
  * @param expectedConversationId Bound conversation, or null before binding.
+ * @param expectedProjectIdentity Project identity recorded by the start operation, or null when unknown.
  * @param previousUserTurnIdentity Anchor of the previous completed turn, or null for a first turn.
  * @param prompt Saved prompt text for verbatim user-turn matching.
  * @param attachmentNames Ordered saved attachment basenames.
@@ -3132,18 +3223,24 @@ function observeArchiveScript(canonicalUrl: string, expectedConversationId: stri
  */
 function autoVerifySubmissionScript(
   expectedConversationId: string | null,
+  expectedProjectIdentity: string | null,
   previousUserTurnIdentity: string | null,
   prompt: string,
   attachmentNames: readonly string[],
 ): string {
   return `async (page) => {
     const expectedConversationId = ${JSON.stringify(expectedConversationId)};
+    const expectedProjectIdentity = ${JSON.stringify(expectedProjectIdentity)};
     const previousUserTurnIdentity = ${JSON.stringify(previousUserTurnIdentity)};
     const prompt = ${JSON.stringify(prompt)};
     const attachmentNames = ${JSON.stringify(attachmentNames)};
     const conversationIdOf = (pathname) => {
       const match = /\\/c\\/([^/?#]+)\\/?$/.exec(pathname);
       return match === null || match[1].startsWith('WEB:') ? null : match[1];
+    };
+    const projectIdOf = (pathname) => {
+      const match = /\\/g\\/g-p-([^/]+?)(?:-chatgpt-pro-collab)?\\/c\\//.exec(pathname);
+      return match === null || match[1] === undefined ? null : match[1];
     };
     const url = await page.evaluate(() => {
       return { hostname: location.hostname, pathname: location.pathname, origin: location.origin };
@@ -3171,6 +3268,23 @@ function autoVerifySubmissionScript(
         kind: 'auto-verify-submission',
         status: 'unresolved',
         error: 'the current conversation differs from the bound task',
+      });
+    }
+    const projectId = projectIdOf(url.pathname);
+    if (projectId === null) {
+      return JSON.stringify({
+        protocol: '${PROTOCOL}',
+        kind: 'auto-verify-submission',
+        status: 'unresolved',
+        error: 'the current page is not project-scoped and cannot prove membership',
+      });
+    }
+    if (expectedProjectIdentity !== null && projectId !== expectedProjectIdentity) {
+      return JSON.stringify({
+        protocol: '${PROTOCOL}',
+        kind: 'auto-verify-submission',
+        status: 'unresolved',
+        error: 'the current conversation is not inside the fixed chatgpt-pro-collab Project',
       });
     }
     if (previousUserTurnIdentity !== null) {
@@ -3248,6 +3362,18 @@ function autoVerifySubmissionScript(
     const finalUrl = await page.evaluate(() => {
       return { hostname: location.hostname, pathname: location.pathname, origin: location.origin };
     });
+    if (
+      finalUrl.hostname !== 'chatgpt.com' ||
+      conversationIdOf(finalUrl.pathname) !== conversationId ||
+      projectIdOf(finalUrl.pathname) !== projectId
+    ) {
+      return JSON.stringify({
+        protocol: '${PROTOCOL}',
+        kind: 'auto-verify-submission',
+        status: 'unresolved',
+        error: 'conversation identity changed while verifying the submission',
+      });
+    }
     return JSON.stringify({
       protocol: '${PROTOCOL}',
       kind: 'auto-verify-submission',
@@ -3423,6 +3549,7 @@ function resolveSubmittedScript(
  * Builds the human `not-submitted` adjudication verification of a safe composer.
  *
  * @param expectedConversationId Bound conversation, or null before binding.
+ * @param expectedProjectIdentity Project identity recorded by the start operation, or null when unknown.
  * @param previousUserTurnIdentity Anchor identity, or null for a first turn.
  * @param prompt Saved prompt text that must not match any post-anchor user turn.
  * @param attachmentNames Ordered saved attachment basenames.
@@ -3431,12 +3558,14 @@ function resolveSubmittedScript(
  */
 function resolveNotSubmittedScript(
   expectedConversationId: string | null,
+  expectedProjectIdentity: string | null,
   previousUserTurnIdentity: string | null,
   prompt: string,
   attachmentNames: readonly string[],
 ): string {
   return `async (page) => {
     const expectedConversationId = ${JSON.stringify(expectedConversationId)};
+    const expectedProjectIdentity = ${JSON.stringify(expectedProjectIdentity)};
     const previousUserTurnIdentity = ${JSON.stringify(previousUserTurnIdentity)};
     const prompt = ${JSON.stringify(prompt)};
     const attachmentNames = ${JSON.stringify(attachmentNames)};
@@ -3460,16 +3589,26 @@ function resolveNotSubmittedScript(
       if (populatedFileInputCount !== 0) {
         throw new Error('composer still has a populated file input after not-submitted adjudication');
       }
-      const visibleAttachmentFileNames = [];
-      for (const fileName of attachmentNames) {
-        const visible = await composerForm.getByText(fileName, { exact: true }).evaluateAll((elements) => {
-          return elements.some((element) => element instanceof HTMLElement && element.getClientRects().length > 0);
-        });
-        if (visible) visibleAttachmentFileNames.push(fileName);
+      const visibleAttachmentTexts = await composerForm.locator('*').evaluateAll((elements) => {
+        const visible = (element) => {
+          if (!(element instanceof HTMLElement)) return false;
+          const style = getComputedStyle(element);
+          return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
+        };
+        return elements
+          .filter((element) => visible(element) && element.children.length === 0)
+          .map((element) => (element.textContent || '').trim())
+          .filter((text) => text !== '' && (/\\.[A-Za-z0-9]{1,12}$/u.test(text) || attachmentNames.includes(text)));
+      });
+      if (visibleAttachmentTexts.length !== 0) {
+        throw new Error('composer still shows staged attachment chips after not-submitted adjudication');
       }
-      if (visibleAttachmentFileNames.length !== 0) {
-        throw new Error('composer still shows staged attachment names after not-submitted adjudication');
+    };
+    const projectPathOk = () => {
+      if (expectedProjectIdentity !== null) {
+        return location.pathname === '/g/g-p-' + expectedProjectIdentity + '/project';
       }
+      return /^\\/g\\/g-p-[^/]+\\/project$/.test(location.pathname);
     };
     if (expectedConversationId === null) {
       await page.waitForFunction(() => {
@@ -3478,7 +3617,7 @@ function resolveNotSubmittedScript(
           const style = getComputedStyle(element);
           return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
         };
-        const urlOk = /^\\/g\\/g-p-[^/]+\\/project$/.test(location.pathname);
+        const urlOk = projectPathOk();
         const main = document.querySelector('main') ?? document.querySelector('[role="main"]');
         const titleOk = main !== null && [...main.querySelectorAll('h1')].some((element) => {
           return element instanceof HTMLElement && element.getClientRects().length > 0 &&
@@ -3491,6 +3630,10 @@ function resolveNotSubmittedScript(
         return urlOk && titleOk && composerOk && turnsOk;
       }, undefined, { timeout: 60000, polling: 250 });
       await verifyComposerResidueFree();
+      const stop = page.getByRole('button', { name: 'Stop answering', exact: true });
+      if (await stop.count() > 0 && await stop.first().isVisible()) {
+        throw new Error('not-submitted adjudication found an in-flight submission state');
+      }
     } else {
       const conversationIdOf = (pathname) => {
         const match = /\\/c\\/([^/?#]+)\\/?$/.exec(pathname);
@@ -3635,6 +3778,25 @@ function archiveScript(canonicalUrl: string, expectedConversationId: string): st
  * @returns True only for an existing regular file.
  * @throws {Error} This probe does not throw for ordinary absence.
  */
+/**
+ * Classifies a start failure whose outcome is definite rather than effect-unknown.
+ *
+ * @param error Unknown thrown value.
+ * @returns `true` only for definite page-verdict failures that must close the task session.
+ */
+function isDefiniteStartFailure(error: unknown): boolean {
+  return (
+    error instanceof BrowserError &&
+    [
+      'PROJECT_NOT_FOUND',
+      'PROJECT_NOT_UNIQUE',
+      'FIXED_TARGET_UNAVAILABLE',
+      'SELECTION_UNCONFIRMED',
+      'PAGE_CONTRACT_DRIFT',
+    ].includes(error.code)
+  );
+}
+
 function isReadableFile(path: string): boolean {
   return existsSync(path) && statSync(path).isFile();
 }

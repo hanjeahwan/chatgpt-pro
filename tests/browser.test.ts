@@ -1404,6 +1404,38 @@ describe('BEH-013 browser boundary support', () => {
     expectPageFunctionSyntax(source);
   });
 
+  it('closes a reused session when the start context fails definitely', async () => {
+    const fixture = await browserFixture([
+      output('Sessions:\n  - name: session-a\n    state: open\n    pid: 4123\n'),
+      output('navigated to projects'),
+      pageResult({
+        protocol,
+        kind: 'start-failed',
+        errorCode: 'PROJECT_NOT_FOUND',
+        message: 'no Project exactly named chatgpt-pro-collab was found',
+      }),
+      output('closed'),
+    ]);
+    await writeFile(fixture.paths.seedState, '{}');
+
+    const failure = await fixture.browser
+      .startTask('task-a', 'session-a', fixture.paths.seedState, true)
+      .then(() => {
+        throw new Error('start unexpectedly succeeded');
+      })
+      .catch((error: unknown) => {
+        return error;
+      });
+    const typed = failure as Error & { readonly code?: string };
+    expect(typed.code).toBe('PROJECT_NOT_FOUND');
+    const flat = fixture.invocations.flatMap((invocation) => {
+      return invocation.arguments;
+    });
+    expect(flat).not.toContain('open');
+    expect(flat).toContain('close');
+    expect(flat).not.toContain('state-load');
+  });
+
   it('generates the submitted adjudication verification with prompt and attachment matching', async () => {
     const fixture = await browserFixture([
       pageResult({
@@ -1442,7 +1474,7 @@ describe('BEH-013 browser boundary support', () => {
   it('generates the not-submitted safe-composer verification for bound and unbound tasks', async () => {
     const fixture = await browserFixture([pageResult({ protocol, kind: 'resolve-not-submitted' })]);
 
-    await fixture.browser.verifySafeComposer('task-a', 'session-a', null, null, 'not sent', []);
+    await fixture.browser.verifySafeComposer('task-a', 'session-a', null, null, null, 'not sent', []);
     const source = await lastScript(fixture.invocations);
     expect(source).toContain('chatgpt-pro-collab');
     expect(source).toContain('resolve-not-submitted');
@@ -1648,7 +1680,7 @@ describe('BEH-003 and BEH-013 submission verification against page evidence', ()
         attachmentNames: ['a.txt'],
         expectKind: 'resolve-not-submitted',
       }),
-    ).rejects.toThrow(/staged attachment names/);
+    ).rejects.toThrow(/staged attachment chips/);
   });
 
   it('accepts a not-submitted adjudication with a residue-free bound composer', async () => {
@@ -1664,6 +1696,122 @@ describe('BEH-003 and BEH-013 submission verification against page evidence', ()
       conversationId: 'conversation-a',
       previousUserTurnIdentity: null,
       prompt: 'different prompt',
+      attachmentNames: [],
+      expectKind: 'resolve-not-submitted',
+    });
+
+    expect(verified).toMatchObject({ kind: 'resolve-not-submitted' });
+  });
+
+  it('does not claim a verbatim match when the page trimmed leading and trailing whitespace', async () => {
+    const fixture = submissionPageFixture({
+      pathname: '/g/g-p-123-chatgpt-pro-collab/c/conversation-a',
+      turns: [
+        { testId: 'conversation-turn-1', turn: 'user', promptText: 'exact prompt' },
+        { testId: 'conversation-turn-2', turn: 'assistant' },
+      ],
+    });
+
+    const verified = await runSubmissionScript(fixture.page, {
+      conversationId: 'conversation-a',
+      previousUserTurnIdentity: null,
+      prompt: '  exact prompt  ',
+      attachmentNames: [],
+      expectKind: 'auto-verify-submission',
+    });
+
+    expect(verified).toMatchObject({ status: 'unresolved' });
+  });
+
+  it('rejects a submitted adjudication whose page prompt differs by surrounding whitespace', async () => {
+    const fixture = submissionPageFixture({
+      pathname: '/g/g-p-123-chatgpt-pro-collab/c/conversation-a',
+      turns: [
+        { testId: 'conversation-turn-1', turn: 'user', promptText: 'exact prompt' },
+        { testId: 'conversation-turn-2', turn: 'assistant' },
+      ],
+    });
+
+    await expect(
+      runSubmissionScript(fixture.page, {
+        canonicalUrl: 'https://chatgpt.com/c/conversation-a',
+        conversationId: 'conversation-a',
+        projectIdentity: '123',
+        previousUserTurnIdentity: null,
+        prompt: '  exact prompt  ',
+        attachmentNames: [],
+        expectKind: 'resolve-submitted',
+      }),
+    ).rejects.toThrow(/exactly one matching user turn/);
+  });
+
+  it('rejects an unbound not-submitted adjudication on a different Project', async () => {
+    const fixture = submissionPageFixture({
+      pathname: '/g/g-p-other/project',
+      turns: [],
+    });
+
+    await expect(
+      runSubmissionScript(fixture.page, {
+        conversationId: null,
+        projectIdentity: '123',
+        previousUserTurnIdentity: null,
+        prompt: 'exact prompt',
+        attachmentNames: [],
+        expectKind: 'resolve-not-submitted',
+      }),
+    ).rejects.toThrow(/fixture waitForFunction deadline exceeded/);
+  });
+
+  it('rejects an unbound not-submitted adjudication with a renamed staged attachment chip', async () => {
+    const fixture = submissionPageFixture({
+      pathname: '/g/g-p-123/project',
+      composerChips: ['renamed(1).txt'],
+      turns: [],
+    });
+
+    await expect(
+      runSubmissionScript(fixture.page, {
+        conversationId: null,
+        projectIdentity: '123',
+        previousUserTurnIdentity: null,
+        prompt: 'exact prompt',
+        attachmentNames: ['beta.txt'],
+        expectKind: 'resolve-not-submitted',
+      }),
+    ).rejects.toThrow(/staged attachment chips/);
+  });
+
+  it('rejects an unbound not-submitted adjudication while Stop answering is visible', async () => {
+    const fixture = submissionPageFixture({
+      pathname: '/g/g-p-123/project',
+      stopVisible: true,
+      turns: [],
+    });
+
+    await expect(
+      runSubmissionScript(fixture.page, {
+        conversationId: null,
+        projectIdentity: '123',
+        previousUserTurnIdentity: null,
+        prompt: 'exact prompt',
+        attachmentNames: [],
+        expectKind: 'resolve-not-submitted',
+      }),
+    ).rejects.toThrow(/in-flight submission state/);
+  });
+
+  it('accepts an unbound not-submitted adjudication only on the recorded Project with a clean composer', async () => {
+    const fixture = submissionPageFixture({
+      pathname: '/g/g-p-123/project',
+      turns: [],
+    });
+
+    const verified = await runSubmissionScript(fixture.page, {
+      conversationId: null,
+      projectIdentity: '123',
+      previousUserTurnIdentity: null,
+      prompt: 'exact prompt',
       attachmentNames: [],
       expectKind: 'resolve-not-submitted',
     });
@@ -1747,6 +1895,7 @@ async function captureSubmissionScript(
       'task-a',
       'session-a',
       options.conversationId,
+      options.projectIdentity ?? null,
       options.previousUserTurnIdentity,
       options.prompt,
       options.attachmentNames,
@@ -1767,6 +1916,7 @@ async function captureSubmissionScript(
       'task-a',
       'session-a',
       options.conversationId,
+      options.projectIdentity ?? null,
       options.previousUserTurnIdentity,
       options.prompt,
       options.attachmentNames,
