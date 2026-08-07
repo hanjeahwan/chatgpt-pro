@@ -816,6 +816,116 @@ describe('BEH-001 setup journal and interruption recovery', () => {
   });
 });
 
+describe('BEH-003 send journal and archive attachments', () => {
+  it('reserves the sending turn and draft operation before the browser side effect', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const promptPath = join(fixture.root, 'journal-prompt.md');
+    await writeFile(promptPath, 'journaled prompt');
+    const result = await fixture.service.send(task.taskId, promptPath, []);
+    const store = new StateStore(fixture.paths.database);
+    expect(store.requireTurn(task.taskId, result.turnId)).toMatchObject({ status: 'pending' });
+    expect(store.listOperations(task.taskId)).toMatchObject([
+      { kind: 'start', phase: 'committed' },
+      {
+        kind: 'send',
+        phase: 'committed',
+        resolutionSource: 'automatic',
+        evidence: {
+          conversationId: `conversation-${task.taskId}`,
+          userTurnIdentity: expect.stringContaining('user-turn'),
+          promptVerbatimMatch: true,
+          attachmentNamesMatch: true,
+        },
+      },
+    ]);
+    store.close();
+  });
+
+  it('enters needs-decision with the turn unknown-submission when the outcome cannot be proven', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const promptPath = join(fixture.root, 'ambiguous-prompt.md');
+    await writeFile(promptPath, 'ambiguous');
+    fixture.browser.nextSendStatus = 'unknown-submission';
+
+    await expect(fixture.service.send(task.taskId, promptPath, [])).rejects.toMatchObject({
+      code: 'SUBMISSION_UNKNOWN',
+    });
+    const store = new StateStore(fixture.paths.database);
+    const turns = store.listTurns(task.taskId);
+    const sendOperation = store.listOperations(task.taskId).find((operation) => {
+      return operation.kind === 'send';
+    });
+    expect(turns).toMatchObject([{ status: 'unknown-submission' }]);
+    expect(sendOperation).toMatchObject({ kind: 'send', step: 'submit', phase: 'needs-decision' });
+    store.close();
+  });
+
+  it('commits a failed send operation for a proven non-submission', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const promptPath = join(fixture.root, 'not-sent-prompt.md');
+    await writeFile(promptPath, 'not sent');
+    fixture.browser.nextSendStatus = 'not-submitted';
+
+    await expect(fixture.service.send(task.taskId, promptPath, [])).rejects.toMatchObject({
+      code: 'SUBMISSION_FAILED',
+    });
+    const store = new StateStore(fixture.paths.database);
+    expect(store.listTurns(task.taskId)).toMatchObject([{ status: 'failed' }]);
+    const failedSendOperation = store.listOperations(task.taskId).find((operation) => {
+      return operation.kind === 'send';
+    });
+    expect(failedSendOperation).toMatchObject({
+      phase: 'committed',
+      resolutionSource: 'automatic',
+      error: expect.stringContaining('preflight failed'),
+    });
+    store.close();
+  });
+
+  it('recovers an interrupted draft to a safe composer and returns nextAction send', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const promptPath = join(fixture.root, 'draft-prompt.md');
+    await writeFile(promptPath, 'draft');
+    const store = new StateStore(fixture.paths.database);
+    const turn = store.beginSendTurn(task.taskId, 'draft-turn', promptPath, [join(fixture.root, 'a.txt')], 'draft-op');
+    await savePromptCopy(fixture.paths, task.taskId, turn.turn.id, Buffer.from('draft'));
+    store.close();
+
+    const status = await fixture.service.recover(task.taskId);
+    expect(status).toMatchObject({ nextAction: 'send', turnStatus: null });
+    expect(fixture.browser.cleanedComposers).toEqual([task.taskId]);
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireTurn(task.taskId, 'draft-turn')).toMatchObject({
+      status: 'failed',
+      error: expect.stringContaining('interrupted before submission'),
+    });
+    expect(reopened.requireOperation('draft-op')).toMatchObject({ phase: 'committed' });
+    reopened.close();
+  });
+
+  it('treats a single archive attachment as one opaque upload item', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const promptPath = join(fixture.root, 'archive-prompt.md');
+    const archivePath = join(fixture.root, 'inputs.tar.gz');
+    await Promise.all([writeFile(promptPath, 'archive'), writeFile(archivePath, 'not-a-real-tarball')]);
+    const result = await fixture.service.send(task.taskId, promptPath, [archivePath]);
+    const store = new StateStore(fixture.paths.database);
+    expect(store.requireTurn(task.taskId, result.turnId).attachmentPaths).toEqual([archivePath]);
+    store.close();
+    expect(fixture.browser.expectedConversationIds).toEqual([null]);
+  });
+});
+
 describe('BEH-002 caller-provided task start', () => {
   it('rejects a non-canonical taskId before any database or browser side effect', async () => {
     const fixture = await serviceFixture();
@@ -1206,6 +1316,7 @@ class FakeBrowser implements CollabBrowser {
   readonly safeComposersVerified: string[] = [];
   readonly setupSessions: string[] = [];
   readonly setupClosedSessions: string[] = [];
+  readonly cleanedComposers: string[] = [];
   readonly expectedConversationIds: Array<string | null> = [];
   readonly expectedAssistantTurnIds: Array<string | null> = [];
   readonly responseArtifacts: Array<{ readonly sourceUrl: string; readonly label: string }> = [];
@@ -1400,6 +1511,28 @@ class FakeBrowser implements CollabBrowser {
     this.observe(observer);
     this.recoveredConversations.push(taskId);
     return Promise.resolve({ conversationId, conversationUrl });
+  }
+
+  /**
+   * Records one fake composer cleanup.
+   *
+   * @param taskId Task identifier.
+   * @param _sessionName Unused named session.
+   * @param _expectedConversationId Unused bound identity.
+   * @param _attachmentFileNames Unused attachment basenames.
+   * @param observer Task-lease child-process observer.
+   * @returns Nothing after the fake cleanup.
+   * @throws {Error} This fake cleanup does not throw.
+   */
+  async cleanSendComposer(
+    taskId: string,
+    _sessionName: string,
+    _expectedConversationId: string | null,
+    _attachmentFileNames: readonly string[],
+    observer?: BrowserOperationObserver,
+  ) {
+    this.observe(observer);
+    this.cleanedComposers.push(taskId);
   }
 
   /**

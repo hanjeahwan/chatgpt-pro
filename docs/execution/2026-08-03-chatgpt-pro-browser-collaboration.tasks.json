@@ -75,7 +75,7 @@
     {
       "id": "IMP-003",
       "title": "发送显式输入并支持单归档附件",
-      "status": "pending",
+      "status": "implemented",
       "covers": ["BEH-003", "BEH-010"],
       "verifies": ["VER-003", "VER-013"],
       "dependsOn": ["IMP-001", "IMP-002", "IMP-009", "IMP-010"],

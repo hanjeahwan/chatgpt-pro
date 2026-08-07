@@ -588,6 +588,219 @@ export class StateStore {
   }
 
   /**
+   * Reserves the only unfinished turn allowed for one active task together with its send operation.
+   *
+   * @param taskId Owning task identifier.
+   * @param turnId Collision-resistant turn identifier.
+   * @param promptPath Absolute host prompt path retained for audit.
+   * @param attachmentPaths Ordered absolute attachment paths retained for audit.
+   * @param operationId Collision-resistant operation identifier.
+   * @returns The inserted `sending` turn and its prepared send operation.
+   * @throws {StateError} If the task is inactive, a turn conflicts, another turn is unfinished,
+   *   or the task already has an uncommitted operation.
+   * @throws {Error} If SQLite cannot commit the reservation.
+   */
+  beginSendTurn(
+    taskId: string,
+    turnId: string,
+    promptPath: string,
+    attachmentPaths: readonly string[],
+    operationId: string,
+  ): { readonly turn: TurnRecord; readonly operation: OperationRecord } {
+    return this.#transaction(() => {
+      const turn = this.#insertTurn(taskId, turnId, promptPath, attachmentPaths);
+      const operation = this.#insertOperation({
+        id: operationId,
+        kind: 'send',
+        step: 'draft',
+        taskId,
+        turnId,
+        sessionName: this.requireTask(taskId).playwrightSession,
+      });
+      return { turn, operation };
+    });
+  }
+
+  /**
+   * Advances a send operation to the submit step and marks the release boundary atomically.
+   *
+   * @param operationId Send operation identifier.
+   * @param evidence Evidence observed before command release.
+   * @returns The submit-step effect-unknown operation.
+   * @throws {StateError} If the operation is not at the prepared draft step.
+   * @throws {Error} If SQLite cannot commit the transition.
+   */
+  advanceSendToSubmitEffectUnknown(operationId: string, evidence?: OperationEvidence): OperationRecord {
+    return this.#transaction(() => {
+      const operation = this.requireOperation(operationId);
+      if (operation.kind !== 'send' || operation.step !== 'draft' || operation.phase !== 'prepared') {
+        throw new StateError('OPERATION_PHASE_CONFLICT', `operation is not at the prepared draft step`);
+      }
+      const now = new Date().toISOString();
+      this.#database
+        .prepare(
+          `UPDATE operation
+           SET step = 'submit', phase = 'effect-unknown', progress = 1,
+               evidence_json = ?, error = NULL, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(JSON.stringify(evidence ?? null), now, operationId);
+      return this.requireOperation(operationId);
+    });
+  }
+
+  /**
+   * Binds a proven submission and commits its send operation in one transaction.
+   *
+   * @param taskId Owning task identifier.
+   * @param turnId Submission-attempt turn identifier.
+   * @param conversationId Canonical ChatGPT conversation identifier.
+   * @param conversationUrl Canonical `/c/<id>` URL observed after submission.
+   * @param userTurnIdentity Exact DOM identity of the submitted user turn.
+   * @param operationId Send operation identifier.
+   * @param evidence Observed submission evidence.
+   * @param resolutionSource Provenance of the resolution evidence.
+   * @returns The updated pending turn.
+   * @throws {StateError} If the lifecycle transition, identity, or operation is inconsistent.
+   * @throws {Error} If SQLite cannot commit the complete transition.
+   */
+  commitSubmittedTurn(
+    taskId: string,
+    turnId: string,
+    conversationId: string,
+    conversationUrl: string,
+    userTurnIdentity: string,
+    operationId: string,
+    evidence?: OperationEvidence,
+    resolutionSource: ResolutionSource = 'automatic',
+  ): TurnRecord {
+    return this.#transaction(() => {
+      const task = this.requireActiveTask(taskId);
+      const turn = this.requireTurn(taskId, turnId);
+      if (turn.status !== 'sending' && turn.status !== 'unknown-submission') {
+        throw new StateError(
+          'TURN_STATE_CONFLICT',
+          `turn is ${turn.status}, expected sending or unknown-submission: ${turnId}`,
+        );
+      }
+      if (
+        task.conversationId !== null &&
+        (task.conversationId !== conversationId || task.conversationUrl !== conversationUrl)
+      ) {
+        throw new StateError('CONVERSATION_MISMATCH', `task is already bound to a different conversation: ${taskId}`);
+      }
+      const now = new Date().toISOString();
+      this.#database
+        .prepare(
+          `UPDATE task
+           SET conversation_id = ?, conversation_url = ?, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(conversationId, conversationUrl, now, taskId);
+      try {
+        this.#database
+          .prepare(
+            `UPDATE turn
+             SET status = 'pending', user_turn_identity = ?, error = NULL, updated_at = ?
+             WHERE task_id = ? AND id = ?`,
+          )
+          .run(userTurnIdentity, now, taskId, turnId);
+      } catch (error) {
+        if (!isSqliteConstraint(error)) {
+          throw error;
+        }
+        throw new StateError(
+          'USER_TURN_IDENTITY_CONFLICT',
+          `user turn identity already belongs to another turn: ${userTurnIdentity}`,
+        );
+      }
+      this.#commitOperationRow(operationId, resolutionSource, evidence);
+      return this.requireTurn(taskId, turnId);
+    });
+  }
+
+  /**
+   * Fails a proven non-submission and commits its send operation in one transaction.
+   *
+   * @param taskId Owning task identifier.
+   * @param turnId Sending or unknown-submission turn identifier.
+   * @param operationId Send operation identifier.
+   * @param reason Concrete failed operation and cause.
+   * @param evidence Observed non-submission evidence.
+   * @param resolutionSource Provenance of the resolution.
+   * @returns The updated failed turn.
+   * @throws {StateError} If the turn or operation is in an unexpected state.
+   * @throws {Error} If SQLite cannot commit the complete transition.
+   */
+  failSubmissionAndCommit(
+    taskId: string,
+    turnId: string,
+    operationId: string,
+    reason: string,
+    evidence?: OperationEvidence,
+    resolutionSource: ResolutionSource = 'automatic',
+  ): TurnRecord {
+    return this.#transaction(() => {
+      const turn = this.requireTurn(taskId, turnId);
+      if (turn.status === 'sending') {
+        this.#finishSendingTurnRow(taskId, turnId, 'failed', reason);
+      } else if (turn.status === 'unknown-submission') {
+        this.#finishUnknownSubmissionTurnRow(taskId, turnId, 'failed', reason);
+      } else {
+        throw new StateError('TURN_STATE_CONFLICT', `turn is ${turn.status}, expected sending or unknown-submission`);
+      }
+      this.#commitOperationRow(operationId, resolutionSource, evidence, reason);
+      return this.requireTurn(taskId, turnId);
+    });
+  }
+
+  /**
+   * Records the submission ambiguity and needs-decision operation in one transaction.
+   *
+   * @param taskId Owning task identifier.
+   * @param turnId Sending turn identifier.
+   * @param operationId Send operation identifier.
+   * @param reason Concrete ambiguity at the submission boundary.
+   * @param evidence Observed insufficient evidence.
+   * @returns The updated unknown-submission turn.
+   * @throws {StateError} If the turn or operation is in an unexpected state.
+   * @throws {Error} If SQLite cannot commit the complete transition.
+   */
+  markSubmissionUnknownAndNeedsDecision(
+    taskId: string,
+    turnId: string,
+    operationId: string,
+    reason: string,
+    evidence?: OperationEvidence,
+  ): TurnRecord {
+    return this.#transaction(() => {
+      const turn = this.requireTurn(taskId, turnId);
+      if (turn.status !== 'sending') {
+        throw new StateError('TURN_STATE_CONFLICT', `turn is ${turn.status}, expected sending: ${turnId}`);
+      }
+      const now = new Date().toISOString();
+      this.#database
+        .prepare('UPDATE turn SET status = ?, error = ?, updated_at = ? WHERE task_id = ? AND id = ?')
+        .run('unknown-submission', reason, now, taskId, turnId);
+      const operation = this.requireOperation(operationId);
+      if (operation.kind !== 'send' || operation.step !== 'submit' || operation.phase !== 'effect-unknown') {
+        throw new StateError(
+          'OPERATION_PHASE_CONFLICT',
+          `only send: submit effect-unknown can enter needs-decision: ${operationId}`,
+        );
+      }
+      this.#database
+        .prepare(
+          `UPDATE operation
+           SET phase = 'needs-decision', evidence_json = ?, error = ?, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(JSON.stringify(evidence ?? null), reason, now, operationId);
+      return this.requireTurn(taskId, turnId);
+    });
+  }
+
+  /**
    * Reserves the only unfinished turn allowed for one active task.
    *
    * @param taskId Owning task identifier.
@@ -600,35 +813,7 @@ export class StateStore {
    */
   beginTurn(taskId: string, turnId: string, promptPath: string, attachmentPaths: readonly string[]): TurnRecord {
     return this.#transaction(() => {
-      this.requireActiveTask(taskId);
-      const unfinished = this.#database
-        .prepare(
-          `SELECT id FROM turn
-           WHERE task_id = ? AND status IN ('sending', 'pending', 'capturing', 'unknown-submission')
-           LIMIT 1`,
-        )
-        .get(taskId);
-      if (unfinished !== undefined) {
-        throw new StateError('TURN_IN_PROGRESS', `task already has an unfinished turn: ${taskId}`);
-      }
-
-      const now = new Date().toISOString();
-      try {
-        this.#database
-          .prepare(
-            `INSERT INTO turn (
-              task_id, id, status, prompt_path, attachments_json,
-              response_path, error, created_at, updated_at
-            ) VALUES (?, ?, 'sending', ?, ?, NULL, NULL, ?, ?)`,
-          )
-          .run(taskId, turnId, promptPath, JSON.stringify(attachmentPaths), now, now);
-      } catch (error) {
-        if (!isSqliteConstraint(error)) {
-          throw error;
-        }
-        throw new StateError('TURN_CONFLICT', `turn already exists: ${errorMessage(error)}`);
-      }
-      return this.requireTurn(taskId, turnId);
+      return this.#insertTurn(taskId, turnId, promptPath, attachmentPaths);
     });
   }
 
@@ -707,7 +892,9 @@ export class StateStore {
    * @throws {Error} If SQLite cannot commit the transition.
    */
   failSendingTurn(taskId: string, turnId: string, reason: string): TurnRecord {
-    return this.#finishSendingTurn(taskId, turnId, 'failed', reason);
+    return this.#transaction(() => {
+      return this.#finishSendingTurnRow(taskId, turnId, 'failed', reason);
+    });
   }
 
   /**
@@ -988,6 +1175,49 @@ export class StateStore {
         .run(now, taskId, turnId);
       return this.requireTurn(taskId, turnId);
     });
+  }
+
+  /**
+   * Inserts one sending turn row inside the caller's immediate transaction.
+   *
+   * @param taskId Owning task identifier.
+   * @param turnId Collision-resistant turn identifier.
+   * @param promptPath Absolute host prompt path retained for audit.
+   * @param attachmentPaths Ordered absolute attachment paths retained for audit.
+   * @returns The inserted `sending` turn.
+   * @throws {StateError} If the task is inactive, a turn conflicts, or another turn is unfinished.
+   * @throws {Error} If SQLite cannot commit the reservation.
+   */
+  #insertTurn(taskId: string, turnId: string, promptPath: string, attachmentPaths: readonly string[]): TurnRecord {
+    this.requireActiveTask(taskId);
+    const unfinished = this.#database
+      .prepare(
+        `SELECT id FROM turn
+         WHERE task_id = ? AND status IN ('sending', 'pending', 'capturing', 'unknown-submission')
+         LIMIT 1`,
+      )
+      .get(taskId);
+    if (unfinished !== undefined) {
+      throw new StateError('TURN_IN_PROGRESS', `task already has an unfinished turn: ${taskId}`);
+    }
+
+    const now = new Date().toISOString();
+    try {
+      this.#database
+        .prepare(
+          `INSERT INTO turn (
+            task_id, id, status, prompt_path, attachments_json,
+            response_path, error, created_at, updated_at
+          ) VALUES (?, ?, 'sending', ?, ?, NULL, NULL, ?, ?)`,
+        )
+        .run(taskId, turnId, promptPath, JSON.stringify(attachmentPaths), now, now);
+    } catch (error) {
+      if (!isSqliteConstraint(error)) {
+        throw error;
+      }
+      throw new StateError('TURN_CONFLICT', `turn already exists: ${errorMessage(error)}`);
+    }
+    return this.requireTurn(taskId, turnId);
   }
 
   /**
@@ -1312,21 +1542,41 @@ export class StateStore {
     error?: string,
   ): OperationRecord {
     return this.#transaction(() => {
-      const operation = this.requireOperation(operationId);
-      if (operation.phase === 'committed') {
-        throw new StateError('OPERATION_COMMITTED', `operation is already committed: ${operationId}`);
-      }
-      const now = new Date().toISOString();
-      this.#database
-        .prepare(
-          `UPDATE operation
-           SET phase = 'committed', evidence_json = ?, resolution_source = ?, error = ?,
-               committed_at = ?, updated_at = ?
-           WHERE id = ?`,
-        )
-        .run(JSON.stringify(evidence ?? null), resolutionSource, error ?? null, now, now, operationId);
-      return this.requireOperation(operationId);
+      return this.#commitOperationRow(operationId, resolutionSource, evidence, error);
     });
+  }
+
+  /**
+   * Commits one operation row inside the caller's immediate transaction.
+   *
+   * @param operationId Journal row identifier.
+   * @param resolutionSource Provenance of the resolution evidence.
+   * @param evidence Final observed postcondition evidence.
+   * @param error Optional terminal failure recorded with the commit.
+   * @returns The committed operation.
+   * @throws {StateError} If the operation is already committed.
+   * @throws {Error} If SQLite cannot commit the transition.
+   */
+  #commitOperationRow(
+    operationId: string,
+    resolutionSource: ResolutionSource,
+    evidence?: OperationEvidence,
+    error?: string,
+  ): OperationRecord {
+    const operation = this.requireOperation(operationId);
+    if (operation.phase === 'committed') {
+      throw new StateError('OPERATION_COMMITTED', `operation is already committed: ${operationId}`);
+    }
+    const now = new Date().toISOString();
+    this.#database
+      .prepare(
+        `UPDATE operation
+         SET phase = 'committed', evidence_json = ?, resolution_source = ?, error = ?,
+             committed_at = ?, updated_at = ?
+         WHERE id = ?`,
+      )
+      .run(JSON.stringify(evidence ?? null), resolutionSource, error ?? null, now, now, operationId);
+    return this.requireOperation(operationId);
   }
 
   /**
@@ -1502,16 +1752,36 @@ export class StateStore {
     reason: string,
   ): TurnRecord {
     return this.#transaction(() => {
-      const turn = this.requireTurn(taskId, turnId);
-      if (turn.status !== 'sending') {
-        throw new StateError('TURN_STATE_CONFLICT', `turn is ${turn.status}, expected sending: ${turnId}`);
-      }
-      const now = new Date().toISOString();
-      this.#database
-        .prepare('UPDATE turn SET status = ?, error = ?, updated_at = ? WHERE task_id = ? AND id = ?')
-        .run(status, reason, now, taskId, turnId);
-      return this.requireTurn(taskId, turnId);
+      return this.#finishSendingTurnRow(taskId, turnId, status, reason);
     });
+  }
+
+  /**
+   * Completes one sending-turn row transition inside the caller's immediate transaction.
+   *
+   * @param taskId Owning task identifier.
+   * @param turnId Sending turn identifier.
+   * @param status Failure classification.
+   * @param reason Concrete operation and cause.
+   * @returns The updated turn.
+   * @throws {StateError} If the turn is not `sending`.
+   * @throws {Error} If SQLite cannot commit the transition.
+   */
+  #finishSendingTurnRow(
+    taskId: string,
+    turnId: string,
+    status: 'failed' | 'unknown-submission',
+    reason: string,
+  ): TurnRecord {
+    const turn = this.requireTurn(taskId, turnId);
+    if (turn.status !== 'sending') {
+      throw new StateError('TURN_STATE_CONFLICT', `turn is ${turn.status}, expected sending: ${turnId}`);
+    }
+    const now = new Date().toISOString();
+    this.#database
+      .prepare('UPDATE turn SET status = ?, error = ?, updated_at = ? WHERE task_id = ? AND id = ?')
+      .run(status, reason, now, taskId, turnId);
+    return this.requireTurn(taskId, turnId);
   }
 
   /**
@@ -1532,16 +1802,36 @@ export class StateStore {
     reason: string,
   ): TurnRecord {
     return this.#transaction(() => {
-      const turn = this.requireTurn(taskId, turnId);
-      if (turn.status !== 'unknown-submission') {
-        throw new StateError('TURN_STATE_CONFLICT', `turn is ${turn.status}, expected unknown-submission: ${turnId}`);
-      }
-      const now = new Date().toISOString();
-      this.#database
-        .prepare('UPDATE turn SET status = ?, error = ?, updated_at = ? WHERE task_id = ? AND id = ?')
-        .run(status, reason, now, taskId, turnId);
-      return this.requireTurn(taskId, turnId);
+      return this.#finishUnknownSubmissionTurnRow(taskId, turnId, status, reason);
     });
+  }
+
+  /**
+   * Completes one unknown-submission row transition inside the caller's immediate transaction.
+   *
+   * @param taskId Owning task identifier.
+   * @param turnId Unknown-submission turn identifier.
+   * @param status Reconciled terminal classification.
+   * @param reason Concrete browser result.
+   * @returns The updated turn.
+   * @throws {StateError} If the turn is not `unknown-submission`.
+   * @throws {Error} If SQLite cannot commit the transition.
+   */
+  #finishUnknownSubmissionTurnRow(
+    taskId: string,
+    turnId: string,
+    status: 'failed' | 'unknown-submission',
+    reason: string,
+  ): TurnRecord {
+    const turn = this.requireTurn(taskId, turnId);
+    if (turn.status !== 'unknown-submission') {
+      throw new StateError('TURN_STATE_CONFLICT', `turn is ${turn.status}, expected unknown-submission: ${turnId}`);
+    }
+    const now = new Date().toISOString();
+    this.#database
+      .prepare('UPDATE turn SET status = ?, error = ?, updated_at = ? WHERE task_id = ? AND id = ?')
+      .run(status, reason, now, taskId, turnId);
+    return this.requireTurn(taskId, turnId);
   }
 
   /**

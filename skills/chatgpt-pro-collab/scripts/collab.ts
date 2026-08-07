@@ -117,6 +117,13 @@ export interface CollabBrowser {
     attachmentNames: readonly string[],
     observer?: BrowserOperationObserver,
   ): Promise<void>;
+  cleanSendComposer(
+    taskId: string,
+    sessionName: string,
+    expectedConversationId: string | null,
+    attachmentFileNames: readonly string[],
+    observer?: BrowserOperationObserver,
+  ): Promise<void>;
 }
 
 export interface StartResult {
@@ -427,6 +434,10 @@ export class CollabService {
   /**
    * Saves an immutable prompt copy, uploads explicit attachments, and submits one turn.
    *
+   * The sending turn and its `send: draft: prepared` operation are reserved in one
+   * transaction before the prompt copy or any browser command; the operation enters
+   * `send: submit: effect-unknown` immediately before the guarded submit release.
+   *
    * @param taskId Active task identifier.
    * @param promptPath Explicit host prompt file.
    * @param attachmentPaths Explicit opaque attachment files in upload order.
@@ -441,11 +452,22 @@ export class CollabService {
     return this.#withStore(async (store) => {
       return this.#withTaskOperation(store, taskId, 'send', async (observer) => {
         const task = store.requireActiveTask(taskId);
-        store.beginTurn(taskId, turnId, input.promptPath, input.attachmentPaths);
+        const reserved = store.beginSendTurn(
+          taskId,
+          turnId,
+          input.promptPath,
+          input.attachmentPaths,
+          this.#idGenerator(),
+        );
+        const operationId = reserved.operation.id;
         try {
           await savePromptCopy(this.#paths, taskId, turnId, input.prompt);
         } catch (error) {
-          store.failSendingTurn(taskId, turnId, `save prompt copy: ${errorMessage(error)}`);
+          store.failSubmissionAndCommit(taskId, turnId, operationId, `save prompt copy: ${errorMessage(error)}`, {
+            observedAt: new Date().toISOString(),
+            sessionName: task.playwrightSession,
+            postcondition: 'prompt copy could not be published before browser actions',
+          });
           throw error;
         }
         const browserResult = await this.#browser.send(
@@ -456,39 +478,58 @@ export class CollabService {
           input.attachmentPaths,
           observer,
           () => {
-            store.markSubmissionAttempting(taskId, turnId);
+            store.advanceSendToSubmitEffectUnknown(operationId, {
+              observedAt: new Date().toISOString(),
+              sessionName: task.playwrightSession,
+              postcondition: 'submit command released',
+            });
           },
         );
+        const observedAt = new Date().toISOString();
         if (browserResult.status === 'unsafe-not-submitted') {
-          failUnsubmittedTurn(store, taskId, turnId, browserResult.error);
+          store.failSubmissionAndCommit(taskId, turnId, operationId, browserResult.error, {
+            observedAt,
+            sessionName: task.playwrightSession,
+            postcondition: 'attachment draft could not be cleared safely',
+          });
           store.failTask(taskId);
           throw new CollabError('SUBMISSION_FAILED', browserResult.error);
         }
         if (browserResult.status === 'not-submitted') {
-          failUnsubmittedTurn(store, taskId, turnId, browserResult.error);
+          store.failSubmissionAndCommit(taskId, turnId, operationId, browserResult.error, {
+            observedAt,
+            sessionName: task.playwrightSession,
+            postcondition: 'browser proved the message was not submitted',
+          });
           throw new CollabError('SUBMISSION_FAILED', browserResult.error);
         }
         if (browserResult.status === 'unknown-submission') {
-          store.markUnknownSubmission(taskId, turnId, browserResult.error);
+          store.markSubmissionUnknownAndNeedsDecision(taskId, turnId, operationId, browserResult.error, {
+            observedAt,
+            sessionName: task.playwrightSession,
+            postcondition: 'submission outcome could not be proven',
+          });
           throw new CollabError('SUBMISSION_UNKNOWN', browserResult.error);
         }
 
-        try {
-          store.markTurnPending(
-            taskId,
-            turnId,
-            browserResult.conversationId,
-            browserResult.conversationUrl,
-            browserResult.userTurnIdentity,
-          );
-        } catch (error) {
-          try {
-            store.markUnknownSubmission(taskId, turnId, `bind conversation: ${errorMessage(error)}`);
-          } catch {
-            // Preserve the binding failure when SQLite itself prevents ambiguity recording.
-          }
-          throw error;
-        }
+        store.commitSubmittedTurn(
+          taskId,
+          turnId,
+          browserResult.conversationId,
+          browserResult.conversationUrl,
+          browserResult.userTurnIdentity,
+          operationId,
+          {
+            observedAt,
+            sessionName: task.playwrightSession,
+            pageUrl: browserResult.conversationUrl,
+            postcondition: 'unique user turn observed after the recorded anchor',
+            conversationId: browserResult.conversationId,
+            userTurnIdentity: browserResult.userTurnIdentity,
+            promptVerbatimMatch: true,
+            attachmentNamesMatch: true,
+          },
+        );
         return { taskId, turnId };
       });
     });
@@ -858,7 +899,34 @@ export class CollabService {
       return before;
     }
     if (operation !== null && operation.kind === 'send' && operation.step === 'draft') {
-      return before;
+      const task = store.requireTask(taskId);
+      const sendingTurn = pendingTurn;
+      await this.#browser.cleanSendComposer(
+        taskId,
+        task.playwrightSession,
+        task.conversationId,
+        sendingTurn === undefined
+          ? []
+          : sendingTurn.attachmentPaths.map((attachmentPath) => {
+              return basename(attachmentPath);
+            }),
+        observer,
+      );
+      if (sendingTurn !== undefined) {
+        store.failSubmissionAndCommit(
+          taskId,
+          sendingTurn.id,
+          operation.id,
+          'send interrupted before submission; composer cleaned to a safe state',
+          {
+            observedAt: new Date().toISOString(),
+            sessionName: task.playwrightSession,
+            postcondition: 'target composer verified safe after draft recovery',
+          },
+        );
+      }
+      const after = await this.#browser.sessionAvailability(task.playwrightSession);
+      return { ...store.getStatus(taskId, after), nextAction: 'send' };
     }
     if (operation !== null && operation.kind === 'archive') {
       return before;
@@ -946,26 +1014,28 @@ export class CollabService {
             attachmentNames,
             observer,
           );
-          store.markTurnPending(
+          store.commitSubmittedTurn(
             taskId,
             turnId,
             verified.conversationId,
             verified.conversationUrl,
             verified.userTurnIdentity,
+            operation.id,
+            {
+              observedAt: resolvedAt,
+              sessionName,
+              pageUrl: verified.conversationUrl,
+              postcondition: 'submitted adjudication verified the unique user turn',
+              conversationId: verified.conversationId,
+              userTurnIdentity: verified.userTurnIdentity,
+              promptVerbatimMatch: true,
+              attachmentNamesMatch: true,
+              decision: 'submitted',
+              canonicalUrl,
+              pageVerification: 'canonical conversation and unique matching user turn verified in the fixed Project',
+            },
+            'human',
           );
-          store.commitOperation(operation.id, 'human', {
-            observedAt: resolvedAt,
-            sessionName,
-            pageUrl: verified.conversationUrl,
-            postcondition: 'submitted adjudication verified the unique user turn',
-            conversationId: verified.conversationId,
-            userTurnIdentity: verified.userTurnIdentity,
-            promptVerbatimMatch: true,
-            attachmentNamesMatch: true,
-            decision: 'submitted',
-            canonicalUrl,
-            pageVerification: 'canonical conversation and unique matching user turn verified in the fixed Project',
-          });
         } else {
           await this.#browser.verifySafeComposer(
             taskId,
@@ -976,16 +1046,22 @@ export class CollabService {
             attachmentNames,
             observer,
           );
-          store.failSubmissionAttempt(taskId, turnId, 'human adjudication: message was not submitted');
-          store.commitOperation(operation.id, 'human', {
-            observedAt: resolvedAt,
-            sessionName,
-            pageUrl: task.conversationUrl ?? null,
-            postcondition: 'safe composer verified after not-submitted adjudication',
-            decision: 'not-submitted',
-            canonicalUrl: null,
-            pageVerification: 'safe bound composer or blank target Project composer verified',
-          });
+          store.failSubmissionAndCommit(
+            taskId,
+            turnId,
+            operation.id,
+            'human adjudication: message was not submitted',
+            {
+              observedAt: resolvedAt,
+              sessionName,
+              pageUrl: task.conversationUrl ?? null,
+              postcondition: 'safe composer verified after not-submitted adjudication',
+              decision: 'not-submitted',
+              canonicalUrl: null,
+              pageVerification: 'safe bound composer or blank target Project composer verified',
+            },
+            'human',
+          );
         }
         const browserStatus = await this.#browser.sessionAvailability(sessionName);
         return store.getStatus(taskId, browserStatus);
@@ -1242,25 +1318,6 @@ async function waitForCaptureOperationTermination<T>(outcome: Promise<CaptureOpe
  */
 function captureTimeout(turnId: string, phase: 'response' | 'artifact'): CollabError {
   return new CollabError('CAPTURE_TIMEOUT', `${phase} capture timed out: ${turnId}`);
-}
-
-/**
- * Reconciles a proven non-submission from either side of the guarded release boundary.
- *
- * @param store Current process-local state connection.
- * @param taskId Owning task identifier.
- * @param turnId Sending or ambiguity-marked turn identifier.
- * @param reason Concrete browser failure.
- * @returns Nothing after the turn is terminally failed.
- * @throws {StateError} If the turn is in any other lifecycle state.
- */
-function failUnsubmittedTurn(store: StateStore, taskId: string, turnId: string, reason: string): void {
-  const turn = store.requireTurn(taskId, turnId);
-  if (turn.status === 'sending') {
-    store.failSendingTurn(taskId, turnId, reason);
-    return;
-  }
-  store.failSubmissionAttempt(taskId, turnId, reason);
 }
 
 /**

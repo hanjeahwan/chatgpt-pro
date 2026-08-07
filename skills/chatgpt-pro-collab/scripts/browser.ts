@@ -894,6 +894,36 @@ export class PlaywrightBrowser {
   }
 
   /**
+   * Cleans or rebuilds the target composer into a safe send-ready state.
+   *
+   * @param taskId Owning task identifier.
+   * @param sessionName Owning Playwright named session.
+   * @param expectedConversationId Bound conversation, or null for a first turn.
+   * @param attachmentFileNames Basenames that must disappear from the composer.
+   * @param observer Task-lease child-process observer.
+   * @returns Nothing after the composer is verified safe.
+   * @throws {BrowserError} If the composer cannot be cleaned or the identity drifts.
+   * @throws {Error} If a local Playwright artifact cannot be written.
+   */
+  async cleanSendComposer(
+    taskId: string,
+    sessionName: string,
+    expectedConversationId: string | null,
+    attachmentFileNames: readonly string[],
+    observer?: BrowserOperationObserver,
+  ): Promise<void> {
+    await this.#runCode<DraftClearedProtocolResult>(
+      sessionName,
+      taskId,
+      'clear-upload-draft',
+      clearUploadDraftScript(expectedConversationId, attachmentFileNames),
+      'clear unsubmitted attachment draft',
+      'draft-cleared',
+      observer,
+    );
+  }
+
+  /**
    * Verifies a human `submitted` adjudication against the live canonical conversation.
    *
    * @param taskId Owning task identifier.
