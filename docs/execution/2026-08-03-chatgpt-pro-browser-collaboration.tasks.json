@@ -1,6 +1,6 @@
 {
   "spec": "docs/specs/2026-08-03-chatgpt-pro-browser-collaboration.md",
-  "contextDigest": "sha256:a0e25e4ae1035e58d44ef030f17effe883818abb56e2b9843e380661614275bc",
+  "contextDigest": "sha256:c4856f13134660474e9df4a1c94783af5d5e1ad2af47f8ac2e277c4ff9d43e36",
   "sourceDigests": {
     "BEH-001": "sha256:b80a6ac23c051d7d66654be4294776b64fa7dd37b7a1b379e3c45a193aaaa233",
     "BEH-002": "sha256:41452d00ee8429c19d98ad8b7046796694ddf276ae0e7eefb31feb787c9b7b0d",
@@ -16,7 +16,7 @@
     "BEH-012": "sha256:a1c71b8859dd105ca3fd76483afff0b5e4725059e1cc9294ee16d32bb4ca3357",
     "BEH-013": "sha256:975acf8572ba4b01384258d5a60218e481a27fcc3857ddf1bf431c54d8ea77b5",
     "VER-001": "sha256:f720a692c539e9735a96f1362e638b393ac7c57f95c29468e1e411f10a561fc4",
-    "VER-002": "sha256:63a0cfc86dcf04dae9d394d3ea8790e3152881daef1866b1429c8f828a6e62af",
+    "VER-002": "sha256:10271f4a71e396d293a67428356a4ca11b1f05e9a66a3b1db83fb7e590e246ea",
     "VER-003": "sha256:28fffc8270002dcd7cc42d3519e7f2aaed22aaba73e511be7b21d6799f5e8a9d",
     "VER-004": "sha256:6e7a3e3547c14389346cc8c60fa30e76aed1010ab4f42c3a4ea3cca2e9d6a00a",
     "VER-005": "sha256:5b723ada9786cd3d392edffec5f5fa356489ad9f61d0379b925bcc889c8d6368",
@@ -36,13 +36,20 @@
     {
       "id": "IMP-001",
       "title": "固化共享认证源",
-      "status": "pending",
+      "status": "implemented",
       "covers": ["BEH-001"],
       "verifies": ["VER-001"],
       "dependsOn": ["IMP-010"],
       "scope": ["Skill entry", "CLI", "Browser boundary", "State store"],
       "evidence": {
-        "checks": [],
+        "checks": [
+          "pnpm format:check",
+          "pnpm lint",
+          "pnpm typecheck",
+          "pnpm test (179 passed)",
+          "VER-001 前置条件仅措辞修订（提及 Power 控件），无代码行为变化；setup journal 恢复路径检查重跑",
+          "VER-001 live 登录验证待协调员执行"
+        ],
         "reviews": []
       }
     },
@@ -78,10 +85,9 @@
           "pnpm format:check",
           "pnpm lint",
           "pnpm typecheck",
-          "pnpm test (160 passed)",
-          "tests/collab.test.ts: send draft reservation transaction, committed evidence (conversation/user identity/prompt/attachment match), needs-decision on ambiguous outcome, proven non-submission commit, draft-step recover to safe composer with nextAction send, single archive attachment as one opaque upload",
-          "tests/browser.test.ts: cleanSendComposer, submission identity envelope",
-          "VER-003/VER-013 live Web and host forward tests not executable in this environment; deterministic journal and upload-item boundaries verified"
+          "pnpm test (179 passed)",
+          "代码未变，依赖链（IMP-009 Power 修订）后重跑全量；send 账本、needs-decision、draft 恢复与单归档附件检查保持通过",
+          "VER-003/VER-013 live Web 与宿主 forward 验证待协调员执行"
         ],
         "reviews": []
       }
@@ -99,10 +105,9 @@
           "pnpm format:check",
           "pnpm lint",
           "pnpm typecheck",
-          "pnpm test (163 passed)",
-          "tests/browser.test.ts: observation anchored on exact persisted user turn, missing/non-unique anchor rejects without falling back to latest user, pending on Stop",
-          "tests/collab.test.ts: wait passes the persisted user turn identity to observation, identity-less pending turn rejected as TRANSCRIPT_INCONSISTENT",
-          "VER-004/VER-014 live clipboard and host-forward tests not executable in this environment; deterministic anchor and single-wait boundaries verified"
+          "pnpm test (179 passed)",
+          "代码未变，依赖链后重跑全量；persisted user turn 锚定观察与单次 wait 检查保持通过",
+          "VER-004/VER-014 live 剪贴板与宿主 forward 验证待协调员执行"
         ],
         "reviews": []
       }
@@ -120,10 +125,9 @@
           "pnpm format:check",
           "pnpm lint",
           "pnpm typecheck",
-          "pnpm test (165 passed)",
-          "tests/collab.test.ts: empty artifact list on file-less replies, completion observed before observation deadline never returns successful pending even when capture crosses the deadline",
-          "tests/collab.test.ts + tests/browser.test.ts (baseline): same-name collision-free ordinal paths, unique sandbox targets downloaded once, byte-verified reuse and continuation, atomic capturing boundary, artifact set drift rejection",
-          "VER-015 live ChatGPT Web file UI capture not executable in this environment; deterministic capture and publication recovery verified"
+          "pnpm test (179 passed)",
+          "代码未变，依赖链后重跑全量；返回文件捕获与可恢复发布检查保持通过",
+          "VER-015 live ChatGPT Web 文件 UI 验证待协调员执行"
         ],
         "reviews": []
       }
@@ -141,9 +145,9 @@
           "pnpm format:check",
           "pnpm lint",
           "pnpm typecheck",
-          "pnpm test (167 passed)",
-          "tests/collab.test.ts: stable conversation identity across turns with independent turn files and identities, overlapping waits of two isolated tasks with per-task artifacts and session separation",
-          "VER-005/VER-006 live context-usage evidence not executable in this environment; deterministic conversation, session, and overlap boundaries verified"
+          "pnpm test (179 passed)",
+          "代码未变，依赖链后重跑全量；同会话多轮与跨任务并发检查保持通过",
+          "VER-005/VER-006 live 上下文证据待协调员执行"
         ],
         "reviews": []
       }
@@ -151,7 +155,7 @@
     {
       "id": "IMP-007",
       "title": "分离本地关闭与 Web conversation 归档",
-      "status": "pending",
+      "status": "implemented",
       "covers": ["BEH-008", "BEH-009"],
       "verifies": ["VER-008", "VER-009"],
       "dependsOn": ["IMP-001", "IMP-002", "IMP-010"],
@@ -161,9 +165,9 @@
           "pnpm format:check",
           "pnpm lint",
           "pnpm typecheck",
-          "pnpm test (172 passed)",
-          "tests/collab.test.ts: closing persisted before browser termination with nextAction close, repeated close completes cleanup, archive journal evidence (canonical identity/archived/bindingRestored), already-archived recovery without a second click, single retry when provably not archived, no click on unverifiable state",
-          "VER-008/VER-009 live Web archive UI verification not executable in this environment; deterministic journal and recovery boundaries verified"
+          "pnpm test (179 passed)",
+          "代码未变，依赖链后重跑全量；closing 状态与归档账本恢复检查保持通过",
+          "VER-008/VER-009 live Web 归档界面验证待协调员执行"
         ],
         "reviews": []
       }
@@ -178,12 +182,13 @@
       "scope": ["CLI", "Browser boundary", "State store", "Transcript/artifact store", "Test suite"],
       "evidence": {
         "checks": [
-          "pnpm format:check, pnpm lint, pnpm typecheck, pnpm test (178 passed) — VER-010 deterministic commands",
-          "VER-010: `pnpm collab -- help` exit 0 with stable taskId/two wait durations/status/recover/both resolve-submission forms; Skill CLI help runs from absolute path (tests/collab.test.ts host-without-manifest test)",
-          "VER-011: tests/state-concurrency.test.ts cross-process kill at capture freeze/publish/artifact checkpoints, orphan lease fencing, submit-crash worker preserving effect-unknown send submit",
-          "VER-012: Node v25.9.0 (>=22.19.0), node:sqlite DatabaseSync in-memory smoke, .ts entry help smoke, `npx -y @playwright/cli@0.1.17 --help` exit 0, `--raw list` exit 0 with '(no browsers)' — minimum-Node-version check not runnable here (no alternate Node installed)",
-          "VER-016: tests/collab.test.ts status read-only, auto-verify unique match to pending, needs-decision gate on zero/ambiguous evidence and missing browser, concurrent recover serialization, submitted/not-submitted adjudication verification and failure paths",
-          "VER-007: tests/audit.test.ts transcript reconstruction, automatic vs human resolution provenance"
+          "pnpm format:check",
+          "pnpm lint",
+          "pnpm typecheck",
+          "pnpm test (179 passed)",
+          "代码未变，依赖链后重跑全量；跨进程崩溃恢复、状态快照与恢复矩阵检查保持通过",
+          "VER-010/VER-012 可执行部分已重跑（两种 CLI 入口 help、Node v25.9.0、node:sqlite smoke、playwright-cli help/list 均 exit 0）",
+          "VER-007/VER-011/VER-016 中涉及 live 页面与外部资源的项目待协调员执行"
         ],
         "reviews": []
       }
