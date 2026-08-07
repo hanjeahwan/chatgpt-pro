@@ -8,6 +8,7 @@ export interface StartPageOptions {
   readonly composerCount?: number;
   readonly existingTurns?: boolean;
   readonly selectorControlCount?: number;
+  readonly plusMenuTrigger?: boolean;
   readonly modelOpenerCount?: number;
   readonly modeRadioPresent?: boolean;
   readonly modelRadioPresent?: boolean;
@@ -205,6 +206,7 @@ export function startPageFixture(options: StartPageOptions): StartPageFixture {
     navigateOnProjectClick: options.navigateOnProjectClick ?? true,
     otherRowCount: options.otherRowCount ?? 0,
     pathname: '/projects',
+    plusMenuTrigger: options.plusMenuTrigger ?? false,
     projectLoadsRows: options.projectLoadsRows ?? true,
     projectRowCount: options.projectRowCount ?? 1,
     selectorControlCount: options.selectorControlCount ?? 1,
@@ -310,7 +312,10 @@ export function startPageFixture(options: StartPageOptions): StartPageFixture {
 
   const composerForm = node('form', '', {});
   setChildren(composerForm, [
-    node('button', '', { 'data-testid': 'composer-plus-btn' }),
+    node('button', '', {
+      'data-testid': 'composer-plus-btn',
+      ...(state.plusMenuTrigger ? { 'aria-haspopup': 'menu' } : {}),
+    }),
     node('textarea', '', { id: 'prompt-textarea' }),
     node('button', 'Send prompt', { 'data-testid': 'send-button' }),
     ...(selectorControl === null ? [] : [selectorControl]),
@@ -595,51 +600,60 @@ function hasAncestor(element: StartDomNode, selector: string): boolean {
 }
 
 function matchesSingleSelector(element: StartDomNode, selector: string): boolean {
-  if (selector === '*') {
-    return true;
+  const notConditions: Array<{ readonly name: string; readonly value: string }> = [];
+  let base = selector;
+  while (true) {
+    const match = /^(.*?):not\(\[([a-z-]+)="([^"]*)"\]\)$/u.exec(base);
+    if (match === null) {
+      break;
+    }
+    const name = match[2];
+    const value = match[3];
+    if (name === undefined || value === undefined) {
+      throw new Error(`unsupported start fixture selector: ${selector}`);
+    }
+    notConditions.push({ name, value });
+    base = match[1] ?? '';
   }
-  if (selector === 'main') {
-    return element.tagName === 'main';
+  let matchesBase: boolean;
+  if (base === '*') {
+    matchesBase = true;
+  } else if (base === 'main') {
+    matchesBase = element.tagName === 'main';
+  } else if (base === 'form') {
+    matchesBase = element.tagName === 'form';
+  } else if (base === 'h1') {
+    matchesBase = element.tagName === 'h1';
+  } else if (base === 'button') {
+    matchesBase = element.tagName === 'button';
+  } else if (base === 'a') {
+    matchesBase = element.tagName === 'a';
+  } else if (base === '#prompt-textarea') {
+    matchesBase = element.attributes['id'] === 'prompt-textarea';
+  } else if (base === '[role="row"]') {
+    matchesBase = element.attributes['role'] === 'row';
+  } else if (base === '[role="menuitemradio"]') {
+    matchesBase = element.attributes['role'] === 'menuitemradio';
+  } else if (base === '[role="menuitem"][aria-haspopup]') {
+    matchesBase = element.attributes['role'] === 'menuitem' && 'aria-haspopup' in element.attributes;
+  } else if (base === '[aria-haspopup]') {
+    matchesBase = 'aria-haspopup' in element.attributes;
+  } else if (base === 'button[aria-haspopup]') {
+    matchesBase = element.tagName === 'button' && 'aria-haspopup' in element.attributes;
+  } else if (base === 'button[aria-haspopup="menu"]') {
+    matchesBase = element.tagName === 'button' && element.attributes['aria-haspopup'] === 'menu';
+  } else if (base === '[data-testid^="conversation-turn-"][data-turn]') {
+    matchesBase =
+      (element.attributes['data-testid'] ?? '').startsWith('conversation-turn-') && 'data-turn' in element.attributes;
+  } else {
+    throw new Error(`unsupported start fixture selector: ${selector}`);
   }
-  if (selector === 'form') {
-    return element.tagName === 'form';
+  if (!matchesBase) {
+    return false;
   }
-  if (selector === 'h1') {
-    return element.tagName === 'h1';
-  }
-  if (selector === 'button') {
-    return element.tagName === 'button';
-  }
-  if (selector === 'a') {
-    return element.tagName === 'a';
-  }
-  if (selector === '#prompt-textarea') {
-    return element.attributes['id'] === 'prompt-textarea';
-  }
-  if (selector === '[role="row"]') {
-    return element.attributes['role'] === 'row';
-  }
-  if (selector === '[role="menuitemradio"]') {
-    return element.attributes['role'] === 'menuitemradio';
-  }
-  if (selector === '[role="menuitem"][aria-haspopup]') {
-    return element.attributes['role'] === 'menuitem' && 'aria-haspopup' in element.attributes;
-  }
-  if (selector === '[aria-haspopup]') {
-    return 'aria-haspopup' in element.attributes;
-  }
-  if (selector === 'button[aria-haspopup]') {
-    return element.tagName === 'button' && 'aria-haspopup' in element.attributes;
-  }
-  if (selector === 'button[aria-haspopup="menu"]') {
-    return element.tagName === 'button' && element.attributes['aria-haspopup'] === 'menu';
-  }
-  if (selector === '[data-testid^="conversation-turn-"][data-turn]') {
-    return (
-      (element.attributes['data-testid'] ?? '').startsWith('conversation-turn-') && 'data-turn' in element.attributes
-    );
-  }
-  throw new Error(`unsupported start fixture selector: ${selector}`);
+  return notConditions.every((condition) => {
+    return element.attributes[condition.name] !== condition.value;
+  });
 }
 
 /**

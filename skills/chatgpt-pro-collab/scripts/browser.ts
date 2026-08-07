@@ -1895,7 +1895,9 @@ function startVerificationScript(contextMarker: string): string {
       }
       return { status: 'ok', expanded: candidates[0].getAttribute('aria-expanded') === 'true' };
     });
-    const selectorControl = page.locator('form button[aria-haspopup="menu"]');
+    const selectorControl = page.locator(
+      'form button[aria-haspopup="menu"]:not([data-testid="send-button"]):not([data-testid="composer-plus-btn"])',
+    );
     const menuHasRadios = () => evaluate(() => {
       const visible = (element) => {
         if (!(element instanceof HTMLElement)) return false;

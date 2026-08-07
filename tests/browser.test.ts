@@ -313,6 +313,30 @@ describe('BEH-002 fixed Project and GPT-5.6 Sol Pro start context', () => {
     expect(fixture.invocations.at(-1)?.arguments).toContain('close');
   });
 
+  it('still selects model and mode when the composer plus menu also declares aria-haspopup', async () => {
+    const fixture = await executableStartFixture({ plusMenuTrigger: true });
+    await writeFile(fixture.paths.seedState, '{}');
+
+    const result = await fixture.browser.startTask('task-a', 'session-a', fixture.paths.seedState);
+
+    expect(result.url).toBe('https://chatgpt.com/g/g-p-123/project');
+    expect(fixture.events).toEqual([
+      'project-row-click',
+      'selector-click',
+      'mode-click',
+      'selector-click',
+      'opener-click',
+      'model-click',
+      'selector-click',
+      'opener-click',
+      'selector-click',
+    ]);
+    const startSource = await lastScript(fixture.invocations);
+    expect(startSource).toContain(
+      'form button[aria-haspopup="menu"]:not([data-testid="send-button"]):not([data-testid="composer-plus-btn"])',
+    );
+  });
+
   it('rejects with PAGE_CONTRACT_DRIFT when the model submenu opener is missing', async () => {
     const fixture = await executableStartFixture({ modelOpenerCount: 0 });
     await writeFile(fixture.paths.seedState, '{}');
