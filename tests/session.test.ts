@@ -14,6 +14,7 @@ import {
   publishOrVerifyResponse,
   responsePath,
   savePromptCopy,
+  seedStateValid,
 } from '../skills/chatgpt-pro-collab/scripts/session.ts';
 
 describe('BEH-003 and BEH-007 artifact boundaries', () => {
@@ -90,5 +91,56 @@ describe('BEH-003 and BEH-007 artifact boundaries', () => {
       code: 'ARTIFACT_INCONSISTENT',
     });
     expect(await readFile(targetArtifactPath, 'utf8')).toBe('artifact');
+  });
+});
+
+describe('BEH-001 seed authentication validation', () => {
+  it('accepts a loadable ChatGPT storage state seed', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-seed-valid-'));
+    const paths = collabPaths(root);
+    await ensureCollabDirectories(paths);
+    await writeFile(
+      paths.seedState,
+      JSON.stringify({
+        cookies: [{ name: 'session', domain: '.chatgpt.com', path: '/', value: 'test' }],
+        origins: [{ origin: 'https://chatgpt.com', localStorage: [{ name: 'oai-did', value: 'test' }] }],
+      }),
+    );
+    await expect(seedStateValid(paths)).resolves.toBe(true);
+  });
+
+  it('rejects an empty object as an unauthenticated seed', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-seed-empty-'));
+    const paths = collabPaths(root);
+    await ensureCollabDirectories(paths);
+    await writeFile(paths.seedState, '{}');
+    await expect(seedStateValid(paths)).resolves.toBe(false);
+  });
+
+  it('rejects a readable regular file that is not JSON', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-seed-plain-'));
+    const paths = collabPaths(root);
+    await ensureCollabDirectories(paths);
+    await writeFile(paths.seedState, 'definitely not a storage state');
+    await expect(seedStateValid(paths)).resolves.toBe(false);
+  });
+
+  it('rejects a storage state without chatgpt.com evidence', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-seed-other-'));
+    const paths = collabPaths(root);
+    await ensureCollabDirectories(paths);
+    await writeFile(
+      paths.seedState,
+      JSON.stringify({
+        cookies: [{ name: 'session', domain: 'example.com', path: '/', value: 'test' }],
+        origins: [],
+      }),
+    );
+    await expect(seedStateValid(paths)).resolves.toBe(false);
+  });
+
+  it('returns false when the seed file is absent', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-seed-absent-'));
+    await expect(seedStateValid(collabPaths(root))).resolves.toBe(false);
   });
 });

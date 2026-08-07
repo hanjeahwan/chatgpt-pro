@@ -22,6 +22,7 @@ import { artifactPageFixture, type ArtifactPageOptions } from './support/artifac
 import { completionPageFixture, type CompletionPageOptions } from './support/completion-page-fixture.ts';
 import { projectSendPageFixture } from './support/project-send-page-fixture.ts';
 import { startPageFixture, type StartPageOptions } from './support/start-page-fixture.ts';
+import { submissionPageFixture } from './support/submission-page-fixture.ts';
 
 const protocol = 'chatgpt-pro-collab/v1';
 
@@ -1419,6 +1420,7 @@ describe('BEH-013 browser boundary support', () => {
       'session-a',
       'https://chatgpt.com/c/conversation-a',
       'conversation-a',
+      'g-p-123',
       'conversation-turn-1',
       'exact prompt',
       ['a.txt'],
@@ -1447,6 +1449,331 @@ describe('BEH-013 browser boundary support', () => {
     expectPageFunctionSyntax(source);
   });
 });
+
+describe('BEH-003 and BEH-013 submission verification against page evidence', () => {
+  it('matches a first user turn whose prompt and ordered attachment chips match', async () => {
+    const fixture = submissionPageFixture({
+      pathname: '/g/g-p-123-chatgpt-pro-collab/c/conversation-a',
+      turns: [
+        {
+          testId: 'conversation-turn-1',
+          turn: 'user',
+          promptText: 'analyze this',
+          chips: ['a.txt', 'b.txt'],
+        },
+        { testId: 'conversation-turn-2', turn: 'assistant' },
+      ],
+    });
+
+    const verified = await runSubmissionScript(fixture.page, {
+      conversationId: 'conversation-a',
+      previousUserTurnIdentity: null,
+      prompt: 'analyze this',
+      attachmentNames: ['a.txt', 'b.txt'],
+      expectKind: 'auto-verify-submission',
+    });
+
+    expect(verified).toMatchObject({ status: 'submitted', userTurnIdentity: 'conversation-turn-1' });
+  });
+
+  it('does not match when the prompt matches but attachment chips are out of order', async () => {
+    const fixture = submissionPageFixture({
+      pathname: '/g/g-p-123-chatgpt-pro-collab/c/conversation-a',
+      turns: [
+        {
+          testId: 'conversation-turn-1',
+          turn: 'user',
+          promptText: 'analyze this',
+          chips: ['b.txt', 'a.txt'],
+        },
+        { testId: 'conversation-turn-2', turn: 'assistant' },
+      ],
+    });
+
+    const verified = await runSubmissionScript(fixture.page, {
+      conversationId: 'conversation-a',
+      previousUserTurnIdentity: null,
+      prompt: 'analyze this',
+      attachmentNames: ['a.txt', 'b.txt'],
+      expectKind: 'auto-verify-submission',
+    });
+
+    expect(verified).toMatchObject({ status: 'unresolved' });
+  });
+
+  it('does not match when a duplicate basename chip is missing', async () => {
+    const fixture = submissionPageFixture({
+      pathname: '/g/g-p-123-chatgpt-pro-collab/c/conversation-a',
+      turns: [
+        {
+          testId: 'conversation-turn-1',
+          turn: 'user',
+          promptText: 'analyze this',
+          chips: ['a.txt', 'a.txt'],
+        },
+        { testId: 'conversation-turn-2', turn: 'assistant' },
+      ],
+    });
+
+    const verified = await runSubmissionScript(fixture.page, {
+      conversationId: 'conversation-a',
+      previousUserTurnIdentity: null,
+      prompt: 'analyze this',
+      attachmentNames: ['a.txt', 'a.txt', 'a.txt'],
+      expectKind: 'auto-verify-submission',
+    });
+
+    expect(verified).toMatchObject({ status: 'unresolved' });
+  });
+
+  it('requires a first-turn candidate to be the first user turn in the conversation', async () => {
+    const fixture = submissionPageFixture({
+      pathname: '/g/g-p-123-chatgpt-pro-collab/c/conversation-a',
+      turns: [
+        { testId: 'conversation-turn-1', turn: 'user', promptText: 'earlier unrelated' },
+        { testId: 'conversation-turn-2', turn: 'assistant' },
+        { testId: 'conversation-turn-3', turn: 'user', promptText: 'exact prompt' },
+        { testId: 'conversation-turn-4', turn: 'assistant' },
+      ],
+    });
+
+    const verified = await runSubmissionScript(fixture.page, {
+      conversationId: 'conversation-a',
+      previousUserTurnIdentity: null,
+      prompt: 'exact prompt',
+      attachmentNames: [],
+      expectKind: 'auto-verify-submission',
+    });
+
+    expect(verified).toMatchObject({ status: 'unresolved' });
+  });
+
+  it('matches a non-first turn only after the persisted previous user turn anchor', async () => {
+    const fixture = submissionPageFixture({
+      pathname: '/g/g-p-123-chatgpt-pro-collab/c/conversation-a',
+      turns: [
+        { testId: 'conversation-turn-1', turn: 'user', promptText: 'first' },
+        { testId: 'conversation-turn-2', turn: 'assistant' },
+        { testId: 'conversation-turn-3', turn: 'user', promptText: 'exact prompt' },
+        { testId: 'conversation-turn-4', turn: 'assistant' },
+      ],
+    });
+
+    const verified = await runSubmissionScript(fixture.page, {
+      conversationId: 'conversation-a',
+      previousUserTurnIdentity: 'conversation-turn-1',
+      prompt: 'exact prompt',
+      attachmentNames: [],
+      expectKind: 'auto-verify-submission',
+    });
+
+    expect(verified).toMatchObject({ status: 'submitted', userTurnIdentity: 'conversation-turn-3' });
+  });
+
+  it('rejects a submitted adjudication for a conversation outside the recorded Project', async () => {
+    const fixture = submissionPageFixture({
+      pathname: '/g/g-p-other/c/conversation-a',
+      turns: [
+        { testId: 'conversation-turn-1', turn: 'user', promptText: 'exact prompt' },
+        { testId: 'conversation-turn-2', turn: 'assistant' },
+      ],
+    });
+
+    await expect(
+      runSubmissionScript(fixture.page, {
+        canonicalUrl: 'https://chatgpt.com/c/conversation-a',
+        conversationId: 'conversation-a',
+        projectIdentity: 'g-p-123',
+        previousUserTurnIdentity: null,
+        prompt: 'exact prompt',
+        attachmentNames: [],
+        expectKind: 'resolve-submitted',
+      }),
+    ).rejects.toThrow(/not inside the fixed chatgpt-pro-collab Project/);
+  });
+
+  it('accepts a submitted adjudication for the recorded Project conversation', async () => {
+    const fixture = submissionPageFixture({
+      pathname: '/g/g-p-123-chatgpt-pro-collab/c/conversation-a',
+      mainTitle: 'chatgpt-pro-collab',
+      turns: [
+        { testId: 'conversation-turn-1', turn: 'user', promptText: 'exact prompt' },
+        { testId: 'conversation-turn-2', turn: 'assistant' },
+      ],
+    });
+
+    const verified = await runSubmissionScript(fixture.page, {
+      canonicalUrl: 'https://chatgpt.com/c/conversation-a',
+      conversationId: 'conversation-a',
+      projectIdentity: '123',
+      previousUserTurnIdentity: null,
+      prompt: 'exact prompt',
+      attachmentNames: [],
+      expectKind: 'resolve-submitted',
+    });
+
+    expect(verified).toMatchObject({ conversationId: 'conversation-a', userTurnIdentity: 'conversation-turn-1' });
+  });
+
+  it('rejects a not-submitted adjudication while the composer still holds the prompt text', async () => {
+    const fixture = submissionPageFixture({
+      pathname: '/g/g-p-123-chatgpt-pro-collab/c/conversation-a',
+      composerText: 'draft prompt',
+      turns: [],
+    });
+
+    await expect(
+      runSubmissionScript(fixture.page, {
+        conversationId: 'conversation-a',
+        previousUserTurnIdentity: null,
+        prompt: 'exact prompt',
+        attachmentNames: [],
+        expectKind: 'resolve-not-submitted',
+      }),
+    ).rejects.toThrow(/composer still contains draft text/);
+  });
+
+  it('rejects a not-submitted adjudication while a staged attachment chip is visible', async () => {
+    const fixture = submissionPageFixture({
+      pathname: '/g/g-p-123-chatgpt-pro-collab/c/conversation-a',
+      composerChips: ['a.txt'],
+      turns: [],
+    });
+
+    await expect(
+      runSubmissionScript(fixture.page, {
+        conversationId: 'conversation-a',
+        previousUserTurnIdentity: null,
+        prompt: 'exact prompt',
+        attachmentNames: ['a.txt'],
+        expectKind: 'resolve-not-submitted',
+      }),
+    ).rejects.toThrow(/staged attachment names/);
+  });
+
+  it('accepts a not-submitted adjudication with a residue-free bound composer', async () => {
+    const fixture = submissionPageFixture({
+      pathname: '/g/g-p-123-chatgpt-pro-collab/c/conversation-a',
+      turns: [
+        { testId: 'conversation-turn-1', turn: 'user', promptText: 'exact prompt' },
+        { testId: 'conversation-turn-2', turn: 'assistant' },
+      ],
+    });
+
+    const verified = await runSubmissionScript(fixture.page, {
+      conversationId: 'conversation-a',
+      previousUserTurnIdentity: null,
+      prompt: 'different prompt',
+      attachmentNames: [],
+      expectKind: 'resolve-not-submitted',
+    });
+
+    expect(verified).toMatchObject({ kind: 'resolve-not-submitted' });
+  });
+});
+
+/**
+ * Captures the generated submission script source and executes it against the fixture page.
+ *
+ * @param page Submission page fixture.
+ * @param options Script parameters and expected protocol kind.
+ * @returns The decoded protocol result.
+ * @throws {Error} If the generated script or fixture execution fails.
+ */
+async function runSubmissionScript(
+  page: object,
+  options: {
+    readonly canonicalUrl?: string;
+    readonly conversationId: string | null;
+    readonly projectIdentity?: string | null;
+    readonly previousUserTurnIdentity: string | null;
+    readonly prompt: string;
+    readonly attachmentNames: readonly string[];
+    readonly expectKind: 'auto-verify-submission' | 'resolve-submitted' | 'resolve-not-submitted';
+  },
+): Promise<Record<string, unknown>> {
+  const captured = await captureSubmissionScript(options.expectKind, options);
+  const runPageFunction = new Function(`return (${captured})`)() as (page: object) => Promise<string>;
+  const result = await runPageFunction(page);
+  if (typeof result !== 'string') {
+    throw new TypeError('submission script did not return a JSON string');
+  }
+  return JSON.parse(result) as Record<string, unknown>;
+}
+
+/**
+ * Captures the generated submission script source via a deterministic runner.
+ *
+ * @param kind Submission script kind.
+ * @param options Script parameters.
+ * @returns The generated page function source.
+ * @throws {Error} If no run-code script was produced.
+ */
+async function captureSubmissionScript(
+  kind: 'auto-verify-submission' | 'resolve-submitted' | 'resolve-not-submitted',
+  options: {
+    readonly canonicalUrl?: string;
+    readonly conversationId: string | null;
+    readonly projectIdentity?: string | null;
+    readonly previousUserTurnIdentity: string | null;
+    readonly prompt: string;
+    readonly attachmentNames: readonly string[];
+  },
+): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), 'collab-submission-capture-'));
+  const paths = collabPaths(root);
+  await ensureCollabDirectories(paths);
+  const invocations: BrowserCommandInvocation[] = [];
+  const browser = new PlaywrightBrowser(paths, root, async (invocation) => {
+    invocations.push(invocation);
+    let result: { readonly protocol: string; readonly kind: string; [key: string]: unknown };
+    if (kind === 'auto-verify-submission') {
+      result = { protocol, kind, status: 'unresolved', error: 'fixture capture' };
+    } else if (kind === 'resolve-submitted') {
+      result = {
+        protocol,
+        kind,
+        conversationId: 'conversation-a',
+        conversationUrl: 'https://chatgpt.com/c/conversation-a',
+        userTurnIdentity: 'conversation-turn-1',
+      };
+    } else {
+      result = { protocol, kind };
+    }
+    return output(`### Ran Playwright code\n${JSON.stringify(JSON.stringify(result))}\n`);
+  });
+  if (kind === 'auto-verify-submission') {
+    await browser.autoVerifySubmission(
+      'task-a',
+      'session-a',
+      options.conversationId,
+      options.previousUserTurnIdentity,
+      options.prompt,
+      options.attachmentNames,
+    );
+  } else if (kind === 'resolve-submitted') {
+    await browser.resolveSubmittedConversation(
+      'task-a',
+      'session-a',
+      options.canonicalUrl ?? 'https://chatgpt.com/c/conversation-a',
+      options.conversationId,
+      options.projectIdentity ?? null,
+      options.previousUserTurnIdentity,
+      options.prompt,
+      options.attachmentNames,
+    );
+  } else {
+    await browser.verifySafeComposer(
+      'task-a',
+      'session-a',
+      options.conversationId,
+      options.previousUserTurnIdentity,
+      options.prompt,
+      options.attachmentNames,
+    );
+  }
+  return lastScript(invocations);
+}
 
 /**
  * Creates a browser with a deterministic FIFO command runner.

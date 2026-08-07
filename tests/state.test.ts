@@ -1,6 +1,7 @@
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 
 import { describe, expect, it } from 'vitest';
 
@@ -295,5 +296,41 @@ describe('BEH-002, BEH-005, BEH-007, and BEH-008 state gates', () => {
     store.markTaskClosing('task-a');
     expect(store.getStatus('task-a', 'missing')).toMatchObject({ taskStatus: 'closing', nextAction: 'close' });
     store.close();
+  });
+});
+
+describe('fresh-start races', () => {
+  it('rejects an incompatible task table instead of migrating it', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-incompatible-task-'));
+    const databasePath = join(root, 'state.sqlite');
+    const raw = new DatabaseSync(databasePath);
+    raw.exec(`
+      CREATE TABLE task (
+        id TEXT PRIMARY KEY,
+        playwright_session TEXT NOT NULL UNIQUE,
+        status TEXT NOT NULL
+      );
+    `);
+    raw.close();
+
+    expect(() => {
+      return new StateStore(databasePath);
+    }).toThrowError(/does not match the current schema/);
+  });
+
+  it('keeps a unique-constraint loser from masking a raced start reservation', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-start-race-'));
+    const databasePath = join(root, 'state.sqlite');
+    const winner = new StateStore(databasePath);
+    winner.createStartingTask('task-a', 'chatgpt-pro-collab-task-a', 'winner-op');
+    winner.close();
+
+    const loser = new StateStore(databasePath);
+    expect(() => {
+      loser.createStartingTask('task-a', 'chatgpt-pro-collab-task-a', 'loser-op');
+    }).toThrowError(/TASK_CONFLICT|already exists/);
+    expect(loser.getTask('task-a')).toMatchObject({ status: 'starting' });
+    expect(loser.getUncommittedTaskOperation('task-a')).toMatchObject({ id: 'winner-op' });
+    loser.close();
   });
 });

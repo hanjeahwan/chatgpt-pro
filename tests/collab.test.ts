@@ -88,7 +88,7 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     expect(repeatedCloseStore.requireTask(firstTask.taskId)).toEqual(closedBeforeRepeat);
     repeatedCloseStore.close();
     expect(fixture.browser.closed).toEqual([firstTask.taskId]);
-    expect(fixture.browser.observedOperations).toBe(11);
+    expect(fixture.browser.observedOperations).toBe(13);
     await expect(fixture.service.wait(firstTask.taskId, firstTurn.turnId, 20_000, 20_000)).resolves.toEqual(repeated);
     await expect(fixture.service.archive(firstTask.taskId)).rejects.toMatchObject({ code: 'TASK_NOT_ACTIVE' });
   });
@@ -511,7 +511,7 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     expect(closedStore.requireTask(task.taskId).status).toBe('closed');
     expect(closedStore.requireTurn(task.taskId, turn.turnId).status).toBe('completed');
     closedStore.close();
-    expect(await readFile(fixture.paths.seedState, 'utf8')).toBe('{}');
+    expect(await readFile(fixture.paths.seedState, 'utf8')).toBe(validSeedText());
     expect(fixture.browser.conversations.get(task.taskId)).toBe(`conversation-${task.taskId}`);
     await expect(fixture.service.archive(task.taskId)).rejects.toMatchObject({ code: 'TASK_NOT_ACTIVE' });
   });
@@ -767,7 +767,7 @@ describe('BEH-001 setup journal and interruption recovery', () => {
 
   it('skips repeated login and only finishes cleanup when the seed is already valid', async () => {
     const fixture = await serviceFixture();
-    await writeFile(fixture.paths.seedState, '{}');
+    await writeFile(fixture.paths.seedState, validSeedText());
     const store = new StateStore(fixture.paths.database);
     store.createOperation({
       id: 'setup-login-effect-unknown',
@@ -793,7 +793,7 @@ describe('BEH-001 setup journal and interruption recovery', () => {
 
   it('finishes an interrupted cleanup step without repeating login or state save', async () => {
     const fixture = await serviceFixture();
-    await writeFile(fixture.paths.seedState, '{}');
+    await writeFile(fixture.paths.seedState, validSeedText());
     const store = new StateStore(fixture.paths.database);
     store.createOperation({
       id: 'setup-cleanup-prepared',
@@ -930,7 +930,7 @@ describe('BEH-003 send journal and archive attachments', () => {
 describe('BEH-002 caller-provided task start', () => {
   it('rejects a non-canonical taskId before any database or browser side effect', async () => {
     const fixture = await serviceFixture();
-    await writeFile(fixture.paths.seedState, '{}');
+    await writeFile(fixture.paths.seedState, validSeedText());
     for (const invalid of ['task-1', '123e4567-e89b-12d3-a456-426614174000', 'ABC', '']) {
       await expect(fixture.service.start(invalid)).rejects.toMatchObject({ code: 'USAGE' });
     }
@@ -979,6 +979,86 @@ describe('BEH-002 caller-provided task start', () => {
     expect(store.listOperations(taskId)).toHaveLength(1);
     expect(store.requireTask(taskId).playwrightSession).toBe(`chatgpt-pro-collab-${taskId}`);
     store.close();
+  });
+
+  it('resumes a start whose journal already reached the configuration step', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const taskId = randomUUID();
+    const store = new StateStore(fixture.paths.database);
+    store.createStartingTask(taskId, `chatgpt-pro-collab-${taskId}`, 'start-op');
+    store.markOperationEffectUnknown('start-op', {
+      observedAt: new Date().toISOString(),
+      sessionName: `chatgpt-pro-collab-${taskId}`,
+      postcondition: 'start browser commands released',
+    });
+    store.advanceOperationStep('start-op', 'project', {
+      observedAt: new Date().toISOString(),
+      sessionName: `chatgpt-pro-collab-${taskId}`,
+      pageUrl: 'https://chatgpt.com/g/g-p-123/project',
+      postcondition: 'fixed Project and blank composer verified',
+    });
+    store.close();
+
+    const resumed = await fixture.service.start(taskId);
+    expect(resumed.taskId).toBe(taskId);
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireTask(taskId)).toMatchObject({ status: 'active' });
+    expect(reopened.requireOperation('start-op')).toMatchObject({ step: 'configuration', phase: 'committed' });
+    reopened.close();
+  });
+
+  it('activates a starting task whose start operation was already committed', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const taskId = randomUUID();
+    const store = new StateStore(fixture.paths.database);
+    store.createStartingTask(taskId, `chatgpt-pro-collab-${taskId}`, 'start-op');
+    store.markOperationEffectUnknown('start-op', {
+      observedAt: new Date().toISOString(),
+      sessionName: `chatgpt-pro-collab-${taskId}`,
+      postcondition: 'start browser commands released',
+    });
+    store.advanceOperationStep('start-op', 'project', {
+      observedAt: new Date().toISOString(),
+      sessionName: `chatgpt-pro-collab-${taskId}`,
+      postcondition: 'fixed Project and blank composer verified',
+    });
+    store.advanceOperationStep('start-op', 'configuration', {
+      observedAt: new Date().toISOString(),
+      sessionName: `chatgpt-pro-collab-${taskId}`,
+      postcondition: 'current model GPT-5.6 Sol read back and Power slider at the maximum level',
+      projectIdentity: 'g-p-123',
+      modelConfirmed: true,
+      powerConfirmed: true,
+      powerNow: 4,
+      powerMin: 0,
+      powerMax: 4,
+    });
+    store.commitOperation('start-op', 'automatic');
+    store.close();
+
+    const resumed = await fixture.service.start(taskId);
+    expect(resumed.taskId).toBe(taskId);
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireTask(taskId)).toMatchObject({ status: 'active' });
+    reopened.close();
+  });
+
+  it('joins a concurrently reserved starting task instead of returning a conflict', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const taskId = randomUUID();
+    const store = new StateStore(fixture.paths.database);
+    store.createStartingTask(taskId, `chatgpt-pro-collab-${taskId}`, 'winner-op');
+    store.close();
+
+    const joined = await fixture.service.start(taskId);
+    expect(joined.taskId).toBe(taskId);
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireTask(taskId)).toMatchObject({ status: 'active' });
+    expect(reopened.listOperations(taskId)).toHaveLength(1);
+    reopened.close();
   });
 
   it('returns the same active task before a conversation is bound and conflicts afterwards', async () => {
@@ -1064,11 +1144,17 @@ describe('BEH-013 recovery matrix completion', () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
     const taskId = randomUUID();
+    const firstPromptPath = join(fixture.root, 'bound.md');
+    await writeFile(firstPromptPath, 'bound prompt');
+    const seedStore = new StateStore(fixture.paths.database);
+    seedStore.createTask(taskId, `chatgpt-pro-collab-${taskId}`);
+    seedStore.close();
+    const firstTurn = await fixture.service.send(taskId, firstPromptPath, []);
+    await fixture.service.wait(taskId, firstTurn.turnId, 20_000, 20_000);
     const turnId = 'crashed-turn';
     const promptPath = join(fixture.root, 'crashed.md');
     await writeFile(promptPath, 'crashed prompt');
     const store = new StateStore(fixture.paths.database);
-    store.createTask(taskId, `chatgpt-pro-collab-${taskId}`);
     store.beginSendTurn(taskId, turnId, promptPath, [], 'send-op');
     store.advanceSendToSubmitEffectUnknown('send-op', {
       observedAt: new Date().toISOString(),
@@ -1116,7 +1202,7 @@ describe('BEH-013 recovery matrix completion', () => {
     reopened.close();
   });
 
-  it('opens the decision gate without guessing when the browser session is gone', async () => {
+  it('rebuilds the Project context and opens the decision gate without guessing for an unbound submission', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
     const taskId = randomUUID();
@@ -1134,10 +1220,11 @@ describe('BEH-013 recovery matrix completion', () => {
     const status = await fixture.service.recover(taskId);
     expect(status).toMatchObject({
       turnStatus: 'unknown-submission',
-      browserStatus: 'missing',
+      browserStatus: 'available',
       nextAction: 'resolve-submission',
     });
     expect(fixture.browser.autoVerifications).toEqual([]);
+    expect(fixture.browser.startCount).toBe(1);
     const reopened = new StateStore(fixture.paths.database);
     expect(reopened.requireOperation('send-op')).toMatchObject({ phase: 'needs-decision' });
     reopened.close();
@@ -1161,6 +1248,76 @@ describe('BEH-013 recovery matrix completion', () => {
     expect(second.browserStatus).toBe('available');
     expect(fixture.browser.startCount).toBe(2);
     expect(fixture.browser.recoveredConversations).toEqual([task.taskId]);
+  });
+
+  it('rebuilds the session and auto-verifies a bound effect-unknown submission', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const taskId = randomUUID();
+    const firstPromptPath = join(fixture.root, 'bound-recover.md');
+    await writeFile(firstPromptPath, 'bound recover');
+    const seedStore = new StateStore(fixture.paths.database);
+    seedStore.createTask(taskId, `chatgpt-pro-collab-${taskId}`);
+    seedStore.close();
+    const firstTurn = await fixture.service.send(taskId, firstPromptPath, []);
+    await fixture.service.wait(taskId, firstTurn.turnId, 20_000, 20_000);
+    const turnId = 'crashed-bound-turn';
+    const promptPath = join(fixture.root, 'crashed-bound.md');
+    await writeFile(promptPath, 'crashed bound prompt');
+    const store = new StateStore(fixture.paths.database);
+    store.beginSendTurn(taskId, turnId, promptPath, [], 'send-op');
+    store.advanceSendToSubmitEffectUnknown('send-op');
+    store.close();
+    await savePromptCopy(fixture.paths, taskId, turnId, Buffer.from('crashed bound prompt'));
+    fixture.browser.sessionAvailabilityResult = 'missing';
+
+    const status = await fixture.service.recover(taskId);
+    expect(status).toMatchObject({ turnStatus: 'pending', browserStatus: 'available', nextAction: 'wait' });
+    expect(fixture.browser.startCount).toBe(1);
+    expect(fixture.browser.recoveredConversations).toEqual([taskId]);
+    expect(fixture.browser.autoVerifications).toEqual([taskId]);
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireTurn(taskId, turnId)).toMatchObject({ status: 'pending' });
+    reopened.close();
+  });
+
+  it('rebuilds the session before resolving a submitted adjudication', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const taskId = randomUUID();
+    const turnId = 'resolved-turn';
+    const promptPath = join(fixture.root, 'resolve-rebuild.md');
+    await writeFile(promptPath, 'resolved prompt');
+    const store = new StateStore(fixture.paths.database);
+    store.createTask(taskId, `chatgpt-pro-collab-${taskId}`);
+    store.beginTurn(taskId, turnId, promptPath, []);
+    store.markSubmissionAttempting(taskId, turnId);
+    store.createOperation({
+      id: 'send-op',
+      kind: 'send',
+      step: 'submit',
+      taskId,
+      turnId,
+      sessionName: `chatgpt-pro-collab-${taskId}`,
+    });
+    store.markOperationEffectUnknown('send-op');
+    store.markOperationNeedsDecision('send-op');
+    store.close();
+    await savePromptCopy(fixture.paths, taskId, turnId, Buffer.from('resolved prompt'));
+    fixture.browser.sessionAvailabilityResult = 'missing';
+
+    const status = await fixture.service.resolveSubmission(
+      taskId,
+      turnId,
+      'submitted',
+      `https://chatgpt.com/c/conversation-${taskId}`,
+    );
+    expect(status).toMatchObject({ turnStatus: 'pending', browserStatus: 'available', nextAction: 'wait' });
+    expect(fixture.browser.startCount).toBe(1);
+    expect(fixture.browser.resolvedSubmissions).toEqual([taskId]);
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireTurn(taskId, turnId)).toMatchObject({ status: 'pending' });
+    reopened.close();
   });
 
   it('rejects a submitted adjudication whose page verification fails', async () => {
@@ -1527,7 +1684,7 @@ describe('BEH-013 status, recover, and resolve-submission', () => {
     expect(fixture.browser.closed).toEqual([]);
   });
 
-  it('returns nextAction wait for a pending turn without a recovery side effect', async () => {
+  it('rebuilds a missing session and keeps nextAction wait for a pending turn', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
     const task = await fixture.start();
@@ -1537,8 +1694,9 @@ describe('BEH-013 status, recover, and resolve-submission', () => {
     fixture.browser.sessionAvailabilityResult = 'missing';
 
     const status = await fixture.service.recover(task.taskId);
-    expect(status).toMatchObject({ turnStatus: 'pending', nextAction: 'wait' });
-    expect(fixture.browser.startCount).toBe(1);
+    expect(status).toMatchObject({ turnStatus: 'pending', browserStatus: 'available', nextAction: 'wait' });
+    expect(fixture.browser.startCount).toBe(2);
+    expect(fixture.browser.recoveredConversations).toEqual([task.taskId]);
   });
 
   it('rebuilds a missing bound browser session and restores the canonical conversation', async () => {
@@ -1571,7 +1729,7 @@ describe('BEH-013 status, recover, and resolve-submission', () => {
       sessionName: `chatgpt-pro-collab-${taskId}`,
     });
     store.close();
-    await writeFile(fixture.paths.seedState, '{}');
+    await writeFile(fixture.paths.seedState, validSeedText());
 
     const status = await fixture.service.recover(taskId);
     expect(status).toMatchObject({ taskStatus: 'active', operationPhase: null, nextAction: 'none' });
@@ -1806,7 +1964,7 @@ class FakeBrowser implements CollabBrowser {
    * @throws {Error} If the test file cannot be written.
    */
   async setup(): Promise<string> {
-    await writeFile(this.paths.seedState, '{}');
+    await writeFile(this.paths.seedState, validSeedText());
     return this.paths.seedState;
   }
 
@@ -1830,7 +1988,7 @@ class FakeBrowser implements CollabBrowser {
    * @throws {Error} If the test file cannot be written.
    */
   async setupSaveSeed(sessionName: string, seedStatePath: string): Promise<{ readonly seedValidated: boolean }> {
-    await writeFile(seedStatePath, '{}');
+    await writeFile(seedStatePath, validSeedText());
     return { seedValidated: true };
   }
 
@@ -1852,10 +2010,19 @@ class FakeBrowser implements CollabBrowser {
    * @param taskId Task identifier.
    * @param _sessionName Unused named session.
    * @param _seedStatePath Unused shared seed.
+   * @param _rebuild Unused rebuild flag.
+   * @param observer Task-lease child-process observer.
    * @returns Fake process and context identity.
    * @throws {Error} This fake start does not throw.
    */
-  startTask(taskId: string, _sessionName: string, _seedStatePath: string) {
+  startTask(
+    taskId: string,
+    _sessionName: string,
+    _seedStatePath: string,
+    _rebuild?: boolean,
+    observer?: BrowserOperationObserver,
+  ) {
+    this.observe(observer);
     this.startCount += 1;
     this.sessionAvailabilityResult = 'available';
     if (this.nextStartFailureCode !== null) {
@@ -2056,6 +2223,7 @@ class FakeBrowser implements CollabBrowser {
    * @param _sessionName Unused named session.
    * @param _canonicalUrl Supplied canonical URL.
    * @param expectedConversationId Database-bound identity.
+   * @param _expectedProjectIdentity Unused recorded project identity.
    * @param _previousUserTurnIdentity Unused anchor.
    * @param _prompt Unused saved prompt.
    * @param _attachmentNames Unused ordered attachment names.
@@ -2068,6 +2236,7 @@ class FakeBrowser implements CollabBrowser {
     _sessionName: string,
     _canonicalUrl: string,
     expectedConversationId: string | null,
+    _expectedProjectIdentity: string | null,
     _previousUserTurnIdentity: string | null,
     _prompt: string,
     _attachmentNames: readonly string[],
@@ -2418,6 +2587,19 @@ function delayedFailureWait(milliseconds: number, signal: AbortSignal, onAbort: 
  * @returns Test root, paths, browser, and service.
  * @throws {Error} If the temporary directory or state setup fails.
  */
+/**
+ * Returns a minimal loadable ChatGPT storage state accepted by `seedStateValid`.
+ *
+ * @returns A Playwright storage state JSON with a chatgpt.com cookie and origin.
+ * @throws {Error} This pure helper does not throw.
+ */
+function validSeedText(): string {
+  return JSON.stringify({
+    cookies: [{ name: 'session', domain: '.chatgpt.com', path: '/', value: 'test' }],
+    origins: [{ origin: 'https://chatgpt.com', localStorage: [{ name: 'oai-did', value: 'test' }] }],
+  });
+}
+
 async function serviceFixture() {
   const root = await mkdtemp(join(tmpdir(), 'collab-service-'));
   const paths = collabPaths(root);

@@ -161,6 +161,42 @@ describe('VER-011 SQLite cross-process concurrency', () => {
     reopened.close();
   });
 
+  it('keeps a start lease fenced while its browser child and command are still alive', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-start-fence-'));
+    const databasePath = join(root, 'state.sqlite');
+    const readyPath = join(root, 'ready');
+    const store = new StateStore(databasePath);
+    store.createTask('task-a', 'session-a');
+    store.close();
+    const workerPath = join(import.meta.dirname, 'support', 'orphan-start-worker.ts');
+    const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 3000)'], { stdio: 'ignore' });
+    const command = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 3000)'], { stdio: 'ignore' });
+    const childPid = child.pid;
+    const commandPid = command.pid;
+    if (childPid === undefined || commandPid === undefined) {
+      throw new Error('fixture child or command did not spawn');
+    }
+
+    await execFileAsync(process.execPath, [
+      workerPath,
+      databasePath,
+      readyPath,
+      childPid.toString(),
+      commandPid.toString(),
+    ]);
+    const contender = new StateStore(databasePath);
+    expect(() => {
+      contender.acquireTaskOperation('task-a', 'start', 'contender');
+    }).toThrowError(/busy with start/);
+    child.kill('SIGKILL');
+    command.kill('SIGKILL');
+    await waitForPidExit(childPid);
+    await waitForPidExit(commandPid);
+    contender.acquireTaskOperation('task-a', 'start', 'contender');
+    contender.releaseTaskOperation('task-a', 'contender');
+    contender.close();
+  });
+
   it('rejects a second process while one task browser lease is live', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collab-operation-concurrency-'));
     const databasePath = join(root, 'state.sqlite');
