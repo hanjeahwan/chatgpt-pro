@@ -8,9 +8,13 @@
 
 ```sh
 node "<skill-directory>/scripts/collab.ts" setup
-node "<skill-directory>/scripts/collab.ts" start
+node "<skill-directory>/scripts/collab.ts" start <taskId>
 node "<skill-directory>/scripts/collab.ts" send <taskId> <promptPath> [attachmentPath ...]
 node "<skill-directory>/scripts/collab.ts" wait <taskId> <turnId> <observationWindowMs> <captureTimeoutMs>
+node "<skill-directory>/scripts/collab.ts" status <taskId>
+node "<skill-directory>/scripts/collab.ts" recover <taskId>
+node "<skill-directory>/scripts/collab.ts" resolve-submission <taskId> <turnId> submitted <conversationUrl>
+node "<skill-directory>/scripts/collab.ts" resolve-submission <taskId> <turnId> not-submitted
 node "<skill-directory>/scripts/collab.ts" archive <taskId>
 node "<skill-directory>/scripts/collab.ts" close <taskId>
 ```
@@ -20,14 +24,18 @@ node "<skill-directory>/scripts/collab.ts" close <taskId>
 ```sh
 pnpm install
 pnpm collab -- setup
-pnpm collab -- start
+pnpm collab -- start <taskId>
 pnpm collab -- send <taskId> <promptPath> [attachmentPath ...]
 pnpm collab -- wait <taskId> <turnId> <observationWindowMs> <captureTimeoutMs>
+pnpm collab -- status <taskId>
+pnpm collab -- recover <taskId>
+pnpm collab -- resolve-submission <taskId> <turnId> submitted <conversationUrl>
+pnpm collab -- resolve-submission <taskId> <turnId> not-submitted
 pnpm collab -- archive <taskId>
 pnpm collab -- close <taskId>
 ```
 
-`setup` 保存本机共享认证源。每次 `start` 返回独立 `taskId`；`send` 提交一轮并立即返回 `turnId`。`wait` 使用有限观察窗口：到期时返回 `pending` 且不停止远端生成；完成时返回原始 `response.md` 与按回复顺序保存的 `artifactPaths`。捕获超时后可用新的 `captureTimeoutMs` 继续同一 turn。同一任务完成一轮后可以继续 send/wait，多个任务可以同时等待。
+`setup` 保存本机共享认证源。每次 `start` 需要调用方提供的稳定 canonical UUID v4 `taskId` 并返回同一个 `taskId`；`send` 提交一轮并立即返回 `turnId`。`wait` 使用有限观察窗口：到期时返回 `pending` 且不停止远端生成；完成时返回原始 `response.md` 与按回复顺序保存的 `artifactPaths`。捕获超时后可用新的 `captureTimeoutMs` 继续同一 turn。`status` 只读返回持久状态与唯一安全的 `nextAction`；`recover` 按持久阶段恢复中断操作；`resolve-submission` 对无法自动判定的提交歧义接受人工裁决。同一任务完成一轮后可以继续 send/wait，多个任务可以同时等待。
 
 ## 数据
 

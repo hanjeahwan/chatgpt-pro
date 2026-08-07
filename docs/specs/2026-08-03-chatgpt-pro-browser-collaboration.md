@@ -116,12 +116,12 @@
 
 以下 checkout 事实共同约束技术设计和验证方式：
 
-- 当前 checkout 已有 `skills/chatgpt-pro-collab/` 实现、`tests/` 自动化测试以及可从任意宿主目录执行的绝对路径 CLI 入口。现有代码已承载 setup、start、send、有限 wait、capture、artifact、archive、close、browser-operation lease 和逐 turn transcript 的实现基线；BEH-013、调用方提供稳定 `taskId`、通用 operation journal、浏览器进程重建和公开的提交裁决命令尚未实现。全部行为仍须按当前 VER 重新验证，不能把已有测试结果视为当前规格已通过。
+- 当前 checkout 已有 `skills/chatgpt-pro-collab/` 实现、`tests/` 自动化测试以及可从任意宿主目录执行的绝对路径 CLI 入口。现有代码已承载 setup、start、send、wait、capture、artifact、archive、close、status、recover、resolve-submission、browser-operation lease、通用 operation journal、浏览器进程重建和逐 turn transcript 的实现基线；BEH-013、调用方提供稳定 `taskId` 和公开的提交裁决命令均已实现。全部行为仍须按当前 VER 重新验证，不能把已有测试结果视为当前规格已通过。
 - 运行约束为 Node.js `>=22.19.0`、ESM、TypeScript `^6.0.3` 和 Vitest `4.0.18`；格式化和 lint 分别使用 oxfmt 与 oxlint。当前 `tsconfig.json` 已采用 Node 原生 TypeScript type stripping 所需的 `erasableSyntaxOnly`、`verbatimModuleSyntax`、`rewriteRelativeImportExtensions` 与 `noEmit` 约束（REF-003）。
 - 当前 manifest 没有浏览器自动化或数据库 npm dependency；`browser.ts` 固定调用 `@playwright/cli@0.1.17`，并已实现 named session、storage state 保存与加载、显式附件上传、有界页面检查、页面内文字捕获和归档后恢复绑定 conversation。固定 CLI 的命令能力由版本化官方资料承载（REF-001）。
-- 当前 `state.ts` 使用 Node.js 标准库同步 `DatabaseSync` 保存 task、turn、artifact 和 browser-operation lease，并以 `pending → capturing → completed` 及无覆盖文件发布支持捕获恢复；schema 尚无覆盖 setup、start、send 准备与 archive 的 operation journal，也没有稳定的 browser 重建状态（REF-002）。
-- 当前 `send` 已记录提交释放边界并在结果不明时保留 `unknown-submission`，但公开接口只能阻塞后续发送，尚未持久化精确 user turn identity，也不能自动重建页面、核对已有 user turn 或接受页面验证的人工裁决；附件已进入 Web draft、但提交命令尚未释放时的进程中断也没有持久恢复阶段。
-- 当前 `wait` 已支持有限观察、原子冻结 response 与 artifact 集、复用已完成文件及继续未完成下载；`close` 可重复调用，但尚无 `closing` 持久状态。当前 `start` 由 Collab 内部生成 `taskId`，中断后调用方可能拿不到该身份；`archive` 没有覆盖点击前后进程退出的持久后置条件核对；task browser 退出后不会从 seed 与 canonical identity 重建。
+- 当前 `state.ts` 使用 Node.js 标准库同步 `DatabaseSync` 保存 task、turn、artifact、operation journal 和 browser-operation lease，并以 `pending → capturing → completed` 及无覆盖文件发布支持捕获恢复；schema 已承载覆盖 setup、start、send 准备与 archive 的 operation journal 和稳定的 browser 重建状态（REF-002）。
+- 当前 `send` 已记录提交释放边界并在结果不明时保留 `unknown-submission`；提交证明或 BEH-013 的 `submitted` 裁决后持久化精确 user turn identity 与 canonical conversation identity，`not-submitted` 裁决在验证安全 composer 后把原 turn 置为 `failed`；附件已进入 Web draft、但提交命令尚未释放时的进程中断已有持久恢复阶段。
+- 当前 `wait` 已支持有限观察、原子冻结 response 与 artifact 集、复用已完成文件及继续未完成下载；`close` 可重复调用且先持久化 `closing` 状态再终止浏览器。当前 `start` 接受调用方提供的稳定 `taskId`，中断后可用同一身份继续恢复；`archive` 已覆盖点击前后进程退出的持久后置条件核对；task browser 退出后从 seed 与 canonical identity 重建。
 
 ## 技术设计
 
@@ -440,6 +440,8 @@ operation journal 只承载可能因进程退出而丢失确认的浏览器副�
 - **必需性**：必需。
 
 VER-001–VER-016 均为完成本规格的必需验证。涉及真实 ChatGPT Web 的 VER-001–VER-009、VER-013、VER-015 和 VER-016 未经 live 执行，不得以 mock、单元测试或代码审查声称通过；VER-014 必须实际运行 Skill 与 CLI，并取得调用次数、页面检查和进程输出证据，不能只检查 Skill 文案或页面循环的单元测试。
+
+Live 验证证据不提交仓库。涉及真实环境、人工执行或独立复审的验证记录（verification/review 报告与 live 脚本）保存在 `~/.local/chatgpt-pro-collab/verification/<日期-轮次>/`；该目录是仓库内 `VER-*` 判据之外的证据位置，只读引用，不作为本仓库内容。
 
 **相关修改**是指改变任一 `VER-*` 的覆盖行为、组件映射、状态、接口、前置条件、执行步骤或证据判据的变更。全部必需 `VER-*` 必须在最后一次相关修改后重新通过；局部修复至少重跑失败的 `VER-*`、所有受影响的 `VER-*`、VER-010 和 VER-012；涉及 SQLite 状态时还必须重跑 VER-011。
 
