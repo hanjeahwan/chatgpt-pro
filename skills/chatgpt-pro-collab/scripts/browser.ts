@@ -63,11 +63,14 @@ export interface BrowserSessionInfo {
   readonly persistent: false;
 }
 
+export type BrowserAvailability = 'available' | 'missing' | 'unknown';
+
 export type BrowserSendResult =
   | {
       readonly status: 'submitted';
       readonly conversationId: string;
       readonly conversationUrl: string;
+      readonly userTurnIdentity: string;
     }
   | {
       readonly status: 'not-submitted';
@@ -144,6 +147,7 @@ interface SendProtocolResult extends ProtocolResult {
   readonly status: BrowserSendResult['status'];
   readonly conversationId?: string;
   readonly conversationUrl?: string;
+  readonly userTurnIdentity?: string;
   readonly error?: string;
 }
 
@@ -174,6 +178,29 @@ interface ArtifactDownloadProtocolResult extends ProtocolResult {
 interface ArchiveProtocolResult extends ProtocolResult {
   readonly kind: 'archive';
   readonly conversationId: string;
+}
+
+interface RecoverConversationProtocolResult extends ProtocolResult {
+  readonly kind: 'recover-conversation';
+  readonly conversationId: string;
+  readonly conversationUrl: string;
+}
+
+interface ResolveSubmittedProtocolResult extends ProtocolResult {
+  readonly kind: 'resolve-submitted';
+  readonly conversationId: string;
+  readonly conversationUrl: string;
+  readonly userTurnIdentity: string;
+}
+
+interface ResolveNotSubmittedProtocolResult extends ProtocolResult {
+  readonly kind: 'resolve-not-submitted';
+}
+
+export interface BrowserResolveSubmittedResult {
+  readonly conversationId: string;
+  readonly conversationUrl: string;
+  readonly userTurnIdentity: string;
 }
 
 export class BrowserError extends Error {
@@ -278,24 +305,33 @@ export class PlaywrightBrowser {
    * @param taskId Unique task identifier and local session directory name.
    * @param sessionName Unique Playwright named session.
    * @param seedStatePath Readable setup state loaded but never saved by the task.
+   * @param rebuild When true, only create the session when the named session is absent.
    * @returns PID reported by Playwright plus observed page and context identity.
    * @throws {BrowserError} If the fixed Project, model, or mode context cannot be confirmed.
    * @throws {Error} If a local Playwright artifact cannot be written.
    */
-  async startTask(taskId: string, sessionName: string, seedStatePath: string): Promise<BrowserSessionInfo> {
+  async startTask(
+    taskId: string,
+    sessionName: string,
+    seedStatePath: string,
+    rebuild: boolean = false,
+  ): Promise<BrowserSessionInfo> {
     await ensureTaskDirectories(this.#paths, taskId);
     const contextMarker = randomUUID();
     let opened = false;
     try {
-      const openOutput = await this.#invoke(
-        sessionName,
-        taskId,
-        ['open', 'about:blank', '--browser=chrome', '--headed'],
-        'open task browser',
-      );
-      opened = true;
-      const pid = parseOpenPid(openOutput.stdout, sessionName);
-      await this.#invoke(sessionName, taskId, ['state-load', seedStatePath], 'load authentication state');
+      let pid = -1;
+      if (!rebuild || (await this.sessionAvailability(sessionName)) === 'missing') {
+        const openOutput = await this.#invoke(
+          sessionName,
+          taskId,
+          ['open', 'about:blank', '--browser=chrome', '--headed'],
+          'open task browser',
+        );
+        opened = true;
+        pid = parseOpenPid(openOutput.stdout, sessionName);
+        await this.#invoke(sessionName, taskId, ['state-load', seedStatePath], 'load authentication state');
+      }
       await this.#invoke(sessionName, taskId, ['goto', PROJECTS_URL], 'open ChatGPT projects');
       const scriptPath = await savePlaywrightScript(
         this.#paths,
@@ -313,6 +349,20 @@ export class PlaywrightBrowser {
       if (result.kind === 'start-failed') {
         throw new BrowserError(result.errorCode, 'start task', result.message);
       }
+      if (pid < 0) {
+        pid = await this.#runner({
+          executable: 'npx',
+          arguments: ['-y', PLAYWRIGHT_CLI_PACKAGE, '--raw', 'list'],
+          cwd: this.#cwd,
+          environment: {
+            ...process.env,
+            PLAYWRIGHT_MCP_ALLOW_UNRESTRICTED_FILE_ACCESS: 'true',
+            PLAYWRIGHT_MCP_OUTPUT_DIR: join(taskDirectory(this.#paths, taskId), 'playwright'),
+          },
+        }).then((listed) => {
+          return parseSessionPid(listed.stdout, sessionName);
+        });
+      }
       return { pid, url: result.url, contextMarker: result.contextMarker, persistent: false };
     } catch (error) {
       if (opened) {
@@ -328,6 +378,64 @@ export class PlaywrightBrowser {
       }
       throw error;
     }
+  }
+
+  /**
+   * Probes whether the recorded named session currently exists without opening a page.
+   *
+   * @param sessionName Playwright named session recorded in the task row.
+   * @returns `available` for an open session, `missing` for deterministic absence,
+   *   and `unknown` when the CLI itself failed or its output cannot be parsed.
+   * @throws {Error} This probe converts CLI failures into the unknown classification.
+   */
+  async sessionAvailability(sessionName: string): Promise<BrowserAvailability> {
+    let output: BrowserCommandOutput;
+    try {
+      output = await this.#runner({
+        executable: 'npx',
+        arguments: ['-y', PLAYWRIGHT_CLI_PACKAGE, '--raw', 'list'],
+        cwd: this.#cwd,
+        environment: {
+          ...process.env,
+          PLAYWRIGHT_MCP_ALLOW_UNRESTRICTED_FILE_ACCESS: 'true',
+          PLAYWRIGHT_MCP_OUTPUT_DIR: join(taskDirectory(this.#paths, 'playwright-probe'), 'playwright'),
+        },
+      });
+    } catch {
+      return 'unknown';
+    }
+    return parseSessionAvailability(output.stdout, sessionName);
+  }
+
+  /**
+   * Navigates a rebuilt session to the recorded canonical conversation and verifies its identity.
+   *
+   * @param taskId Owning task identifier.
+   * @param sessionName Owning Playwright named session.
+   * @param conversationUrl Recorded canonical conversation URL.
+   * @param expectedConversationId Database-bound canonical identity.
+   * @param observer Task-lease child-process observer.
+   * @returns The re-verified conversation identity and URL.
+   * @throws {BrowserError} If the conversation cannot be reached or its identity differs.
+   * @throws {Error} If a local Playwright artifact cannot be written.
+   */
+  async recoverConversation(
+    taskId: string,
+    sessionName: string,
+    conversationUrl: string,
+    expectedConversationId: string,
+    observer?: BrowserOperationObserver,
+  ): Promise<{ readonly conversationId: string; readonly conversationUrl: string }> {
+    const result = await this.#runCode<RecoverConversationProtocolResult>(
+      sessionName,
+      taskId,
+      'recover-conversation',
+      recoverConversationScript(conversationUrl, expectedConversationId),
+      'recover bound conversation',
+      'recover-conversation',
+      observer,
+    );
+    return { conversationId: result.conversationId, conversationUrl: result.conversationUrl };
   }
 
   /**
@@ -471,10 +579,14 @@ export class PlaywrightBrowser {
       if (result.conversationId === undefined || result.conversationUrl === undefined) {
         return { status: 'unknown-submission', error: 'submitted result omitted conversation identity' };
       }
+      if (result.userTurnIdentity === undefined) {
+        return { status: 'unknown-submission', error: 'submitted result omitted user turn identity' };
+      }
       return {
         status: 'submitted',
         conversationId: result.conversationId,
         conversationUrl: result.conversationUrl,
+        userTurnIdentity: result.userTurnIdentity,
       };
     } catch (error) {
       const definitelyNotSubmitted = commandNotSpawned || (!commandReleased && !commandStarted);
@@ -720,6 +832,81 @@ export class PlaywrightBrowser {
       observer,
     );
     return { conversationId: result.conversationId };
+  }
+
+  /**
+   * Verifies a human `submitted` adjudication against the live canonical conversation.
+   *
+   * @param taskId Owning task identifier.
+   * @param sessionName Owning Playwright named session.
+   * @param canonicalUrl Canonical conversation URL supplied by the user.
+   * @param expectedConversationId Database-bound canonical identity, or null before binding.
+   * @param previousUserTurnIdentity Anchor of the previous completed turn, or null for a first turn.
+   * @param prompt Saved prompt text the unique user turn must match verbatim.
+   * @param attachmentNames Ordered saved attachment basenames the turn must match.
+   * @param observer Task-lease child-process observer.
+   * @returns The verified conversation identity and the unique matching user turn identity.
+   * @throws {BrowserError} If the conversation, Project, anchor, or unique matching turn cannot be verified.
+   * @throws {Error} If a local Playwright artifact cannot be written.
+   */
+  async resolveSubmittedConversation(
+    taskId: string,
+    sessionName: string,
+    canonicalUrl: string,
+    expectedConversationId: string | null,
+    previousUserTurnIdentity: string | null,
+    prompt: string,
+    attachmentNames: readonly string[],
+    observer?: BrowserOperationObserver,
+  ): Promise<BrowserResolveSubmittedResult> {
+    const result = await this.#runCode<ResolveSubmittedProtocolResult>(
+      sessionName,
+      taskId,
+      'resolve-submitted',
+      resolveSubmittedScript(canonicalUrl, expectedConversationId, previousUserTurnIdentity, prompt, attachmentNames),
+      'verify submitted conversation',
+      'resolve-submitted',
+      observer,
+    );
+    return {
+      conversationId: result.conversationId,
+      conversationUrl: result.conversationUrl,
+      userTurnIdentity: result.userTurnIdentity,
+    };
+  }
+
+  /**
+   * Verifies a human `not-submitted` adjudication restored a safe composer.
+   *
+   * @param taskId Owning task identifier.
+   * @param sessionName Owning Playwright named session.
+   * @param expectedConversationId Bound conversation, or null before binding.
+   * @param previousUserTurnIdentity Anchor of the previous completed turn, or null for a first turn.
+   * @param prompt Saved prompt text that must not match any post-anchor user turn.
+   * @param attachmentNames Ordered saved attachment basenames.
+   * @param observer Task-lease child-process observer.
+   * @returns Nothing after the safe composer is verified.
+   * @throws {BrowserError} If the page is not the safe bound composer or blank Project composer.
+   * @throws {Error} If a local Playwright artifact cannot be written.
+   */
+  async verifySafeComposer(
+    taskId: string,
+    sessionName: string,
+    expectedConversationId: string | null,
+    previousUserTurnIdentity: string | null,
+    prompt: string,
+    attachmentNames: readonly string[],
+    observer?: BrowserOperationObserver,
+  ): Promise<void> {
+    await this.#runCode<ResolveNotSubmittedProtocolResult>(
+      sessionName,
+      taskId,
+      'resolve-not-submitted',
+      resolveNotSubmittedScript(expectedConversationId, previousUserTurnIdentity, prompt, attachmentNames),
+      'verify safe composer',
+      'resolve-not-submitted',
+      observer,
+    );
   }
 
   /**
@@ -1111,6 +1298,60 @@ function parseOpenPid(stdout: string, sessionName: string): number {
   const pid = match === null ? Number.NaN : Number(match[1]);
   if (!Number.isSafeInteger(pid) || pid <= 0) {
     throw new BrowserError('PLAYWRIGHT_CONTRACT_DRIFT', 'parse opened browser', 'PID was not present');
+  }
+  return pid;
+}
+
+/**
+ * Parses the fixed CLI global `list` output into a deterministic availability classification.
+ *
+ * @param stdout Complete `list` stdout.
+ * @param sessionName Recorded named session to match exactly.
+ * @returns `available` for an open session, `missing` for deterministic absence.
+ * @throws {BrowserError} If the output cannot be parsed as a session listing.
+ */
+function parseSessionAvailability(stdout: string, sessionName: string): BrowserAvailability {
+  if (stdout.includes('(no browsers)')) {
+    return 'missing';
+  }
+  const lines = stdout.trim().split(/\r?\n/u);
+  const matchIndex = lines.findIndex((line) => {
+    return line.includes(sessionName);
+  });
+  if (matchIndex < 0) {
+    return 'missing';
+  }
+  const block = lines.slice(Math.max(0, matchIndex - 1), matchIndex + 3).join('\n');
+  if (/\bopen\b/iu.test(block) && !/\bclosed\b|\bnot open\b/iu.test(block)) {
+    return 'available';
+  }
+  return 'missing';
+}
+
+/**
+ * Extracts the daemon PID from the fixed CLI `list` output when it is reported.
+ *
+ * @param stdout Complete `list` stdout.
+ * @param sessionName Recorded named session to match exactly.
+ * @returns The reported PID, or -1 when the output does not expose one.
+ * @throws {BrowserError} If a PID-like value is present but invalid.
+ */
+function parseSessionPid(stdout: string, sessionName: string): number {
+  const lines = stdout.trim().split(/\r?\n/u);
+  const matchIndex = lines.findIndex((line) => {
+    return line.includes(sessionName);
+  });
+  if (matchIndex < 0) {
+    return -1;
+  }
+  const block = lines.slice(Math.max(0, matchIndex - 1), matchIndex + 3).join('\n');
+  const match = /pid\s*[:=]\s*(\d+)/iu.exec(block);
+  if (match === null) {
+    return -1;
+  }
+  const pid = Number(match[1]);
+  if (!Number.isSafeInteger(pid) || pid <= 0) {
+    throw new BrowserError('PLAYWRIGHT_CONTRACT_DRIFT', 'parse session list', 'session PID is invalid');
   }
   return pid;
 }
@@ -1871,6 +2112,14 @@ function sendScript(expectedConversationId: string | null, prompt: string): stri
         const elements = [...document.querySelectorAll('[data-testid^="conversation-turn-"][data-turn]')];
         return elements.filter((element) => element.getAttribute('data-turn') === 'user').length > previousCount;
       }, userCount, { timeout: 60000, polling: 100 });
+      const userTurnIdentity = await page.evaluate(() => {
+        const elements = [...document.querySelectorAll('[data-testid^="conversation-turn-"][data-turn="user"]')];
+        const last = elements.at(-1);
+        return last === undefined ? null : last.getAttribute('data-testid');
+      });
+      if (userTurnIdentity === null) {
+        throw new Error('page contract drift: submitted user turn identity was not observed');
+      }
       await page.waitForFunction(() => {
         const match = /\\/c\\/([^/?#]+)\\/?$/.exec(location.pathname);
         return match !== null && !match[1].startsWith('WEB:');
@@ -1891,6 +2140,7 @@ function sendScript(expectedConversationId: string | null, prompt: string): stri
         status: 'submitted',
         conversationId,
         conversationUrl: url.origin + url.pathname,
+        userTurnIdentity,
       });
     } catch (error) {
       return JSON.stringify({
@@ -2384,6 +2634,243 @@ function downloadArtifactScript(
       suggestedFilename: download.suggestedFilename(),
       downloadUrl: download.url(),
     });
+  }`;
+}
+
+/**
+ * Builds the canonical conversation recovery verification for a rebuilt task session.
+ *
+ * @param canonicalUrl Recorded canonical conversation URL.
+ * @param expectedConversationId Database-bound canonical identity.
+ * @returns A Playwright page function source.
+ * @throws {Error} This pure source builder does not throw.
+ */
+function recoverConversationScript(canonicalUrl: string, expectedConversationId: string): string {
+  return `async (page) => {
+    const conversationId = ${JSON.stringify(expectedConversationId)};
+    const canonicalUrl = ${JSON.stringify(canonicalUrl)};
+    const conversationIdOf = (pathname) => {
+      const match = /\\/c\\/([^/?#]+)\\/?$/.exec(pathname);
+      return match === null || match[1].startsWith('WEB:') ? null : match[1];
+    };
+    await page.goto(canonicalUrl, { waitUntil: 'domcontentloaded' });
+    await page.waitForFunction((id) => {
+      const match = /\\/c\\/([^/?#]+)\\/?$/.exec(location.pathname);
+      return (
+        location.hostname === 'chatgpt.com' &&
+        match !== null && !match[1].startsWith('WEB:') && match[1] === id &&
+        document.querySelector('[data-testid^="conversation-turn-"][data-turn]') !== null
+      );
+    }, conversationId, { timeout: 60000, polling: 100 });
+    const url = await page.evaluate(() => {
+      return { hostname: location.hostname, pathname: location.pathname, origin: location.origin };
+    });
+    if (url.hostname !== 'chatgpt.com' || conversationIdOf(url.pathname) !== conversationId) {
+      throw new Error('conversation identity does not match the recorded canonical URL');
+    }
+    return JSON.stringify({
+      protocol: '${PROTOCOL}',
+      kind: 'recover-conversation',
+      conversationId,
+      conversationUrl: url.origin + url.pathname,
+    });
+  }`;
+}
+
+/**
+ * Builds the human `submitted` adjudication verification against the live conversation.
+ *
+ * @param canonicalUrl Canonical conversation URL supplied by the user.
+ * @param expectedConversationId Database-bound identity, or null before binding.
+ * @param previousUserTurnIdentity Anchor identity, or null for a first turn.
+ * @param prompt Saved prompt text for verbatim user-turn matching.
+ * @param attachmentNames Ordered saved attachment basenames.
+ * @returns A Playwright page function source.
+ * @throws {Error} This pure source builder does not throw.
+ */
+function resolveSubmittedScript(
+  canonicalUrl: string,
+  expectedConversationId: string | null,
+  previousUserTurnIdentity: string | null,
+  prompt: string,
+  attachmentNames: readonly string[],
+): string {
+  return `async (page) => {
+    const canonicalUrl = ${JSON.stringify(canonicalUrl)};
+    const expectedConversationId = ${JSON.stringify(expectedConversationId)};
+    const previousUserTurnIdentity = ${JSON.stringify(previousUserTurnIdentity)};
+    const prompt = ${JSON.stringify(prompt)};
+    const attachmentNames = ${JSON.stringify(attachmentNames)};
+    const conversationIdOf = (pathname) => {
+      const match = /\\/c\\/([^/?#]+)\\/?$/.exec(pathname);
+      return match === null || match[1].startsWith('WEB:') ? null : match[1];
+    };
+    await page.goto(canonicalUrl, { waitUntil: 'domcontentloaded' });
+    await page.waitForFunction((id) => {
+      const match = /\\/c\\/([^/?#]+)\\/?$/.exec(location.pathname);
+      return location.hostname === 'chatgpt.com' &&
+        match !== null && !match[1].startsWith('WEB:') && (id === null || match[1] === id);
+    }, expectedConversationId, { timeout: 60000, polling: 100 });
+    const url = await page.evaluate(() => {
+      return { hostname: location.hostname, pathname: location.pathname, origin: location.origin };
+    });
+    if (url.hostname !== 'chatgpt.com') {
+      throw new Error('submitted adjudication URL is not on chatgpt.com');
+    }
+    const conversationId = conversationIdOf(url.pathname);
+    if (conversationId === null) {
+      throw new Error('submitted adjudication URL does not identify a canonical conversation');
+    }
+    if (expectedConversationId !== null && conversationId !== expectedConversationId) {
+      throw new Error('submitted adjudication conversation differs from the bound task');
+    }
+    await page.waitForFunction((target) => {
+      const visible = (element) => {
+        if (!(element instanceof HTMLElement)) return false;
+        const style = getComputedStyle(element);
+        return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
+      };
+      return [...document.querySelectorAll('main h1, nav h1, header h1, [role="banner"] h1, main h2')]
+        .filter(visible).some((element) => element.textContent.trim() === target);
+    }, 'chatgpt-pro-collab', { timeout: 60000, polling: 250 });
+    const turnState = await page.evaluate(({ previous, expectedPrompt, names }) => {
+      const visible = (element) => {
+        if (!(element instanceof HTMLElement)) return false;
+        const style = getComputedStyle(element);
+        return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
+      };
+      const elements = [...document.querySelectorAll('[data-testid^="conversation-turn-"][data-turn]')].filter(visible);
+      let anchorIndex = -1;
+      if (previous !== null) {
+        const matches = elements.flatMap((element, index) => {
+          return element.getAttribute('data-testid') === previous ? [index] : [];
+        });
+        if (matches.length !== 1) {
+          return { status: 'drift', reason: 'previous user turn anchor is absent or not unique' };
+        }
+        anchorIndex = matches[0];
+      }
+      const candidates = [];
+      for (let index = anchorIndex + 1; index < elements.length; index += 1) {
+        if (elements[index].getAttribute('data-turn') !== 'user') continue;
+        const text = (elements[index].textContent || '').trim();
+        if (text !== expectedPrompt) continue;
+        const position = text.indexOf(names[0] || '');
+        if (position < 0) continue;
+        const ordered = names.every((name) => text.includes(name));
+        if (!ordered) continue;
+        candidates.push({ index, identity: elements[index].getAttribute('data-testid') });
+      }
+      if (candidates.length !== 1) {
+        return { status: candidates.length === 0 ? 'none' : 'multiple', count: candidates.length };
+      }
+      return { status: 'unique', identity: candidates[0].identity };
+    }, { previous: previousUserTurnIdentity, expectedPrompt: prompt, names: attachmentNames });
+    if (turnState.status === 'drift') throw new Error(turnState.reason);
+    if (turnState.status !== 'unique' || turnState.identity === null) {
+      throw new Error(
+        'submitted adjudication requires exactly one matching user turn after the recorded anchor',
+      );
+    }
+    const finalUrl = await page.evaluate(() => {
+      return { hostname: location.hostname, pathname: location.pathname, origin: location.origin };
+    });
+    if (finalUrl.hostname !== 'chatgpt.com' || conversationIdOf(finalUrl.pathname) !== conversationId) {
+      throw new Error('conversation identity changed while resolving the submission');
+    }
+    return JSON.stringify({
+      protocol: '${PROTOCOL}',
+      kind: 'resolve-submitted',
+      conversationId,
+      conversationUrl: finalUrl.origin + finalUrl.pathname,
+      userTurnIdentity: turnState.identity,
+    });
+  }`;
+}
+
+/**
+ * Builds the human `not-submitted` adjudication verification of a safe composer.
+ *
+ * @param expectedConversationId Bound conversation, or null before binding.
+ * @param previousUserTurnIdentity Anchor identity, or null for a first turn.
+ * @param prompt Saved prompt text that must not match any post-anchor user turn.
+ * @param attachmentNames Ordered saved attachment basenames.
+ * @returns A Playwright page function source.
+ * @throws {Error} This pure source builder does not throw.
+ */
+function resolveNotSubmittedScript(
+  expectedConversationId: string | null,
+  previousUserTurnIdentity: string | null,
+  prompt: string,
+  attachmentNames: readonly string[],
+): string {
+  return `async (page) => {
+    const expectedConversationId = ${JSON.stringify(expectedConversationId)};
+    const previousUserTurnIdentity = ${JSON.stringify(previousUserTurnIdentity)};
+    const prompt = ${JSON.stringify(prompt)};
+    const attachmentNames = ${JSON.stringify(attachmentNames)};
+    const visible = (element) => {
+      if (!(element instanceof HTMLElement)) return false;
+      const style = getComputedStyle(element);
+      return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
+    };
+    if (expectedConversationId === null) {
+      await page.waitForFunction(() => {
+        const urlOk = /^\\/g\\/g-p-[^/]+\\/project$/.test(location.pathname);
+        const main = document.querySelector('main') ?? document.querySelector('[role="main"]');
+        const titleOk = main !== null && [...main.querySelectorAll('h1')].some((element) => {
+          return element instanceof HTMLElement && element.getClientRects().length > 0 &&
+            element.textContent.trim() === 'chatgpt-pro-collab';
+        });
+        const composers = [...document.querySelectorAll('#prompt-textarea')].filter(visible);
+        const composerOk = composers.length === 1 && (composers[0].textContent || '').trim() === '';
+        const turnsOk = [...document.querySelectorAll('[data-testid^="conversation-turn-"][data-turn]')]
+          .filter(visible).length === 0;
+        return urlOk && titleOk && composerOk && turnsOk;
+      }, undefined, { timeout: 60000, polling: 250 });
+    } else {
+      const conversationIdOf = (pathname) => {
+        const match = /\\/c\\/([^/?#]+)\\/?$/.exec(pathname);
+        return match === null || match[1].startsWith('WEB:') ? null : match[1];
+      };
+      await page.waitForFunction((id) => {
+        const match = /\\/c\\/([^/?#]+)\\/?$/.exec(location.pathname);
+        return location.hostname === 'chatgpt.com' &&
+          match !== null && !match[1].startsWith('WEB:') && match[1] === id &&
+          [...document.querySelectorAll('#prompt-textarea')].filter(visible).length === 1;
+      }, expectedConversationId, { timeout: 60000, polling: 250 });
+      const state = await page.evaluate(({ previous, expectedPrompt, names }) => {
+        const elements = [...document.querySelectorAll('[data-testid^="conversation-turn-"][data-turn]')]
+          .filter(visible);
+        let anchorIndex = -1;
+        if (previous !== null) {
+          const matches = elements.flatMap((element, index) => {
+            return element.getAttribute('data-testid') === previous ? [index] : [];
+          });
+          if (matches.length !== 1) {
+            return { status: 'drift', reason: 'previous user turn anchor is absent or not unique' };
+          }
+          anchorIndex = matches[0];
+        }
+        for (let index = anchorIndex + 1; index < elements.length; index += 1) {
+          if (elements[index].getAttribute('data-turn') !== 'user') continue;
+          const text = (elements[index].textContent || '').trim();
+          if (text === expectedPrompt && names.every((name) => text.includes(name))) {
+            return { status: 'matching' };
+          }
+        }
+        return { status: 'safe' };
+      }, { previous: previousUserTurnIdentity, expectedPrompt: prompt, names: attachmentNames });
+      if (state.status === 'drift') throw new Error(state.reason);
+      if (state.status === 'matching') {
+        throw new Error('not-submitted adjudication found a matching submitted user turn after the anchor');
+      }
+      const stop = page.getByRole('button', { name: 'Stop answering', exact: true });
+      if (await stop.count() > 0 && await stop.first().isVisible()) {
+        throw new Error('not-submitted adjudication found an in-flight submission state');
+      }
+    }
+    return JSON.stringify({ protocol: '${PROTOCOL}', kind: 'resolve-not-submitted' });
   }`;
 }
 

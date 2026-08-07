@@ -1,9 +1,37 @@
 import { existsSync, statSync } from 'node:fs';
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 
-export type TaskStatus = 'active' | 'closed' | 'failed';
+export type TaskStatus = 'starting' | 'active' | 'closing' | 'closed' | 'failed';
 export type TurnStatus = 'sending' | 'pending' | 'capturing' | 'completed' | 'failed' | 'unknown-submission';
 export type ArtifactStatus = 'pending' | 'completed';
+export type OperationKind = 'setup' | 'start' | 'send' | 'archive';
+export type OperationPhase = 'prepared' | 'effect-unknown' | 'needs-decision' | 'committed';
+export type ResolutionSource = 'automatic' | 'human';
+export type BrowserStatus = 'available' | 'missing' | 'unknown';
+export type NextAction = 'setup' | 'start' | 'send' | 'wait' | 'recover' | 'resolve-submission' | 'close' | 'none';
+export type OperationStep =
+  | 'login'
+  | 'seed'
+  | 'cleanup'
+  | 'session'
+  | 'project'
+  | 'configuration'
+  | 'draft'
+  | 'submit'
+  | 'archive'
+  | 'restore';
+
+/**
+ * Defines the ordered verified steps each operation kind advances through.
+ *
+ * `progress` is the zero-based index of the current step inside this list.
+ */
+export const OPERATION_STEPS: Readonly<Record<OperationKind, readonly OperationStep[]>> = {
+  setup: ['login', 'seed', 'cleanup'],
+  start: ['session', 'project', 'configuration'],
+  send: ['draft', 'submit'],
+  archive: ['archive', 'restore'],
+};
 
 export interface ArtifactDescription {
   readonly sourceUrl: string;
@@ -27,11 +55,75 @@ export interface TurnRecord {
   readonly status: TurnStatus;
   readonly promptPath: string;
   readonly attachmentPaths: readonly string[];
+  readonly userTurnIdentity: string | null;
   readonly responsePath: string | null;
   readonly artifactSetRecorded: boolean;
   readonly error: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
+}
+
+export interface OperationEvidence {
+  readonly observedAt: string;
+  readonly sessionName: string;
+  readonly pageUrl?: string | null;
+  readonly postcondition?: string | null;
+  readonly seedValidated?: boolean;
+  readonly sessionClosed?: boolean;
+  readonly projectIdentity?: string | null;
+  readonly modelConfirmed?: boolean;
+  readonly modeConfirmed?: boolean;
+  readonly conversationId?: string | null;
+  readonly userTurnIdentity?: string | null;
+  readonly promptVerbatimMatch?: boolean;
+  readonly attachmentNamesMatch?: boolean;
+  readonly archived?: boolean;
+  readonly bindingRestored?: boolean;
+  readonly decision?: 'submitted' | 'not-submitted';
+  readonly canonicalUrl?: string | null;
+  readonly pageVerification?: string | null;
+}
+
+export interface OperationRecord {
+  readonly id: string;
+  readonly kind: OperationKind;
+  readonly step: OperationStep;
+  readonly phase: OperationPhase;
+  readonly progress: number;
+  readonly taskId: string | null;
+  readonly turnId: string | null;
+  readonly sessionName: string;
+  readonly evidence: OperationEvidence;
+  readonly resolutionSource: ResolutionSource | null;
+  readonly error: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly committedAt: string | null;
+}
+
+export interface StatusRecord {
+  readonly taskId: string;
+  readonly taskStatus: TaskStatus;
+  readonly turnId: string | null;
+  readonly turnStatus: TurnStatus | null;
+  readonly browserStatus: BrowserStatus;
+  readonly operationKind: OperationKind | null;
+  readonly operationStep: OperationStep | null;
+  readonly operationPhase: OperationPhase | null;
+  readonly operationProgress: number | null;
+  readonly evidence: OperationEvidence | null;
+  readonly error: string | null;
+  readonly nextAction: NextAction;
+}
+
+export interface OperationInsert {
+  readonly id: string;
+  readonly kind: OperationKind;
+  readonly step: OperationStep;
+  readonly taskId: string | null;
+  readonly turnId: string | null;
+  readonly sessionName: string;
+  readonly evidence?: OperationEvidence;
 }
 
 export interface ArtifactRecord {
@@ -85,7 +177,7 @@ export class StateStore {
         playwright_session TEXT NOT NULL UNIQUE,
         conversation_id TEXT,
         conversation_url TEXT,
-        status TEXT NOT NULL CHECK (status IN ('active', 'closed', 'failed')),
+        status TEXT NOT NULL CHECK (status IN ('starting', 'active', 'closing', 'closed', 'failed')),
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         closed_at TEXT,
@@ -95,7 +187,10 @@ export class StateStore {
         browser_operation_child_pid INTEGER,
         browser_operation_command_pid INTEGER
       ) STRICT;
+    `);
+    migrateTaskStatuses(this.#database);
 
+    this.#database.exec(`
       CREATE TABLE IF NOT EXISTS turn (
         task_id TEXT NOT NULL,
         id TEXT NOT NULL,
@@ -112,7 +207,10 @@ export class StateStore {
         PRIMARY KEY (task_id, id),
         FOREIGN KEY (task_id) REFERENCES task(id)
       ) STRICT;
+    `);
+    migrateTurnIdentity(this.#database);
 
+    this.#database.exec(`
       CREATE TABLE IF NOT EXISTS artifact (
         task_id TEXT NOT NULL,
         turn_id TEXT NOT NULL,
@@ -129,6 +227,32 @@ export class StateStore {
         UNIQUE (task_id, turn_id, source_url),
         FOREIGN KEY (task_id, turn_id) REFERENCES turn(task_id, id)
       ) STRICT;
+
+      CREATE TABLE IF NOT EXISTS operation (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL CHECK (kind IN ('setup', 'start', 'send', 'archive')),
+        step TEXT NOT NULL,
+        phase TEXT NOT NULL CHECK (phase IN ('prepared', 'effect-unknown', 'needs-decision', 'committed')),
+        progress INTEGER NOT NULL DEFAULT 0 CHECK (progress >= 0),
+        task_id TEXT,
+        turn_id TEXT,
+        session_name TEXT NOT NULL,
+        evidence_json TEXT NOT NULL,
+        resolution_source TEXT CHECK (
+          resolution_source IS NULL OR resolution_source IN ('automatic', 'human')
+        ),
+        error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        committed_at TEXT,
+        FOREIGN KEY (task_id) REFERENCES task(id),
+        FOREIGN KEY (task_id, turn_id) REFERENCES turn(task_id, id)
+      ) STRICT;
+
+      CREATE UNIQUE INDEX IF NOT EXISTS operation_task_uncommitted
+        ON operation (task_id) WHERE phase != 'committed' AND task_id IS NOT NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS operation_setup_uncommitted
+        ON operation (kind) WHERE kind = 'setup' AND phase != 'committed';
     `);
   }
 
@@ -143,15 +267,16 @@ export class StateStore {
   }
 
   /**
-   * Records an active task before its browser is started.
+   * Records a task reservation before its browser is started.
    *
-   * @param taskId Collision-resistant task identifier.
+   * @param taskId Caller-provided canonical task identifier.
    * @param playwrightSession Unique Playwright CLI session name.
+   * @param status Initial lifecycle status; `starting` for a caller-provided start reservation.
    * @returns The inserted task record.
    * @throws {StateError} If either identifier already exists.
    * @throws {Error} If SQLite rejects the write.
    */
-  createTask(taskId: string, playwrightSession: string): TaskRecord {
+  createTask(taskId: string, playwrightSession: string, status: TaskStatus = 'active'): TaskRecord {
     const now = new Date().toISOString();
     try {
       this.#database
@@ -159,9 +284,9 @@ export class StateStore {
           `INSERT INTO task (
             id, playwright_session, conversation_id, conversation_url,
             status, created_at, updated_at, closed_at
-          ) VALUES (?, ?, NULL, NULL, 'active', ?, ?, NULL)`,
+          ) VALUES (?, ?, NULL, NULL, ?, ?, ?, NULL)`,
         )
-        .run(taskId, playwrightSession, now, now);
+        .run(taskId, playwrightSession, status, now, now);
     } catch (error) {
       if (!isSqliteConstraint(error)) {
         throw error;
@@ -468,22 +593,32 @@ export class StateStore {
   }
 
   /**
-   * Commits a confirmed browser submission and binds the task's first conversation.
+   * Commits a confirmed browser submission and binds the task's conversation and user turn identity.
    *
    * @param taskId Owning task identifier.
    * @param turnId Submission-attempt turn identifier.
    * @param conversationId Canonical ChatGPT conversation identifier.
    * @param conversationUrl Canonical `/c/<id>` URL observed after submission.
+   * @param userTurnIdentity Exact DOM identity of the submitted user turn.
    * @returns The updated pending turn.
    * @throws {StateError} If the lifecycle transition or conversation identity is inconsistent.
    * @throws {Error} If SQLite cannot commit both updates atomically.
    */
-  markTurnPending(taskId: string, turnId: string, conversationId: string, conversationUrl: string): TurnRecord {
+  markTurnPending(
+    taskId: string,
+    turnId: string,
+    conversationId: string,
+    conversationUrl: string,
+    userTurnIdentity: string,
+  ): TurnRecord {
     return this.#transaction(() => {
       const task = this.requireActiveTask(taskId);
       const turn = this.requireTurn(taskId, turnId);
-      if (turn.status !== 'unknown-submission') {
-        throw new StateError('TURN_STATE_CONFLICT', `turn is ${turn.status}, expected unknown-submission: ${turnId}`);
+      if (turn.status !== 'unknown-submission' && turn.status !== 'sending') {
+        throw new StateError(
+          'TURN_STATE_CONFLICT',
+          `turn is ${turn.status}, expected sending or unknown-submission: ${turnId}`,
+        );
       }
       if (
         task.conversationId !== null &&
@@ -500,9 +635,23 @@ export class StateStore {
            WHERE id = ?`,
         )
         .run(conversationId, conversationUrl, now, taskId);
-      this.#database
-        .prepare("UPDATE turn SET status = 'pending', error = NULL, updated_at = ? WHERE task_id = ? AND id = ?")
-        .run(now, taskId, turnId);
+      try {
+        this.#database
+          .prepare(
+            `UPDATE turn
+             SET status = 'pending', user_turn_identity = ?, error = NULL, updated_at = ?
+             WHERE task_id = ? AND id = ?`,
+          )
+          .run(userTurnIdentity, now, taskId, turnId);
+      } catch (error) {
+        if (!isSqliteConstraint(error)) {
+          throw error;
+        }
+        throw new StateError(
+          'USER_TURN_IDENTITY_CONFLICT',
+          `user turn identity already belongs to another turn: ${userTurnIdentity}`,
+        );
+      }
       return this.requireTurn(taskId, turnId);
     });
   }
@@ -911,6 +1060,327 @@ export class StateStore {
   }
 
   /**
+   * Persists the close intent before any browser termination side effect.
+   *
+   * @param taskId Task whose browser will be terminated.
+   * @returns The closing task record.
+   * @throws {StateError} If the task is unknown or already closed.
+   * @throws {Error} If SQLite cannot commit the transition.
+   */
+  markTaskClosing(taskId: string): TaskRecord {
+    return this.#transaction(() => {
+      const task = this.requireTask(taskId);
+      if (task.status === 'closed') {
+        throw new StateError('TASK_NOT_ACTIVE', `task is closed: ${taskId}`);
+      }
+      const now = new Date().toISOString();
+      this.#database.prepare("UPDATE task SET status = 'closing', updated_at = ? WHERE id = ?").run(now, taskId);
+      return this.requireTask(taskId);
+    });
+  }
+
+  /**
+   * Marks a successfully resumed starting task active.
+   *
+   * @param taskId Task identifier.
+   * @returns The active task record.
+   * @throws {StateError} If the task is not currently starting.
+   * @throws {Error} If SQLite cannot commit the transition.
+   */
+  activateTask(taskId: string): TaskRecord {
+    return this.#transaction(() => {
+      const task = this.requireTask(taskId);
+      if (task.status !== 'starting') {
+        throw new StateError('TASK_STATE_CONFLICT', `task is ${task.status}, expected starting: ${taskId}`);
+      }
+      const now = new Date().toISOString();
+      this.#database.prepare("UPDATE task SET status = 'active', updated_at = ? WHERE id = ?").run(now, taskId);
+      return this.requireTask(taskId);
+    });
+  }
+
+  /**
+   * Inserts one operation journal row and enforces the uncommitted constraints.
+   *
+   * @param insert Kind, step, optional task and turn, session, and initial evidence.
+   * @returns The prepared operation.
+   * @throws {StateError} If the step is invalid for the kind, a task already has an
+   *   uncommitted operation, or an uncommitted setup operation already exists.
+   * @throws {Error} If SQLite rejects the insert or referenced rows are absent.
+   */
+  createOperation(insert: OperationInsert): OperationRecord {
+    const steps = OPERATION_STEPS[insert.kind];
+    if (!steps.includes(insert.step)) {
+      throw new StateError('OPERATION_STEP_INVALID', `step ${insert.step} is invalid for ${insert.kind}`);
+    }
+    const now = new Date().toISOString();
+    const progress = steps.indexOf(insert.step);
+    try {
+      this.#database
+        .prepare(
+          `INSERT INTO operation (
+            id, kind, step, phase, progress, task_id, turn_id, session_name,
+            evidence_json, resolution_source, error, created_at, updated_at, committed_at
+          ) VALUES (?, ?, ?, 'prepared', ?, ?, ?, ?, ?, NULL, NULL, ?, ?, NULL)`,
+        )
+        .run(
+          insert.id,
+          insert.kind,
+          insert.step,
+          progress,
+          insert.taskId,
+          insert.turnId,
+          insert.sessionName,
+          JSON.stringify(insert.evidence ?? null),
+          now,
+          now,
+        );
+    } catch (error) {
+      if (!isSqliteConstraint(error)) {
+        throw error;
+      }
+      if (insert.kind === 'setup') {
+        throw new StateError('SETUP_OPERATION_IN_PROGRESS', 'an uncommitted setup operation already exists');
+      }
+      throw new StateError('OPERATION_IN_PROGRESS', `task already has an uncommitted operation`);
+    }
+    return this.requireOperation(insert.id);
+  }
+
+  /**
+   * Advances a prepared or effect-unknown operation to the next verified step.
+   *
+   * @param operationId Journal row identifier.
+   * @param nextStep Step whose postcondition has just been verified.
+   * @param evidence Observed page evidence for the advanced step.
+   * @returns The advanced prepared operation.
+   * @throws {StateError} If the operation is committed or the step order is invalid.
+   * @throws {Error} If SQLite cannot commit the transition.
+   */
+  advanceOperationStep(operationId: string, nextStep: OperationStep, evidence?: OperationEvidence): OperationRecord {
+    return this.#transaction(() => {
+      const operation = this.requireOperation(operationId);
+      if (operation.phase === 'committed') {
+        throw new StateError('OPERATION_COMMITTED', `operation is already committed: ${operationId}`);
+      }
+      const steps = OPERATION_STEPS[operation.kind];
+      const currentIndex = steps.indexOf(operation.step);
+      const nextIndex = steps.indexOf(nextStep);
+      if (nextIndex !== currentIndex + 1) {
+        throw new StateError('OPERATION_STEP_INVALID', `cannot advance to ${nextStep} after ${operation.step}`);
+      }
+      const now = new Date().toISOString();
+      this.#database
+        .prepare(
+          `UPDATE operation
+           SET step = ?, phase = 'prepared', progress = ?, evidence_json = ?, error = NULL, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(nextStep, nextIndex, JSON.stringify(evidence ?? null), now, operationId);
+      return this.requireOperation(operationId);
+    });
+  }
+
+  /**
+   * Persists the effect-unknown boundary immediately before a browser command is released.
+   *
+   * @param operationId Journal row identifier.
+   * @param evidence Evidence observed before release, when available.
+   * @param error Optional concrete ambiguity diagnostic.
+   * @returns The effect-unknown operation.
+   * @throws {StateError} If the operation is not prepared or already committed.
+   * @throws {Error} If SQLite cannot commit the transition.
+   */
+  markOperationEffectUnknown(operationId: string, evidence?: OperationEvidence, error?: string): OperationRecord {
+    return this.#transaction(() => {
+      const operation = this.requireOperation(operationId);
+      if (operation.phase !== 'prepared') {
+        throw new StateError('OPERATION_PHASE_CONFLICT', `operation is ${operation.phase}, expected prepared`);
+      }
+      const now = new Date().toISOString();
+      this.#database
+        .prepare(
+          `UPDATE operation
+           SET phase = 'effect-unknown', evidence_json = ?, error = ?, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(JSON.stringify(evidence ?? null), error ?? null, now, operationId);
+      return this.requireOperation(operationId);
+    });
+  }
+
+  /**
+   * Marks the only human-decisionable submission state after automatic proof is impossible.
+   *
+   * @param operationId Journal row identifier.
+   * @param evidence Observed page evidence that was insufficient.
+   * @param error Concrete ambiguity reason.
+   * @returns The needs-decision operation.
+   * @throws {StateError} If the operation is not `send: submit` in effect-unknown.
+   * @throws {Error} If SQLite cannot commit the transition.
+   */
+  markOperationNeedsDecision(operationId: string, evidence?: OperationEvidence, error?: string): OperationRecord {
+    return this.#transaction(() => {
+      const operation = this.requireOperation(operationId);
+      if (operation.kind !== 'send' || operation.step !== 'submit' || operation.phase !== 'effect-unknown') {
+        throw new StateError(
+          'OPERATION_PHASE_CONFLICT',
+          `only send: submit effect-unknown can enter needs-decision: ${operationId}`,
+        );
+      }
+      const now = new Date().toISOString();
+      this.#database
+        .prepare(
+          `UPDATE operation
+           SET phase = 'needs-decision', evidence_json = ?, error = ?, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(JSON.stringify(evidence ?? null), error ?? null, now, operationId);
+      return this.requireOperation(operationId);
+    });
+  }
+
+  /**
+   * Commits an operation after its task or turn state transition was persisted.
+   *
+   * @param operationId Journal row identifier.
+   * @param resolutionSource Provenance of the resolution evidence.
+   * @param evidence Final observed postcondition evidence.
+   * @param error Optional terminal failure recorded with the commit.
+   * @returns The committed operation.
+   * @throws {StateError} If the operation is already committed.
+   * @throws {Error} If SQLite cannot commit the transition.
+   */
+  commitOperation(
+    operationId: string,
+    resolutionSource: ResolutionSource,
+    evidence?: OperationEvidence,
+    error?: string,
+  ): OperationRecord {
+    return this.#transaction(() => {
+      const operation = this.requireOperation(operationId);
+      if (operation.phase === 'committed') {
+        throw new StateError('OPERATION_COMMITTED', `operation is already committed: ${operationId}`);
+      }
+      const now = new Date().toISOString();
+      this.#database
+        .prepare(
+          `UPDATE operation
+           SET phase = 'committed', evidence_json = ?, resolution_source = ?, error = ?,
+               committed_at = ?, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(JSON.stringify(evidence ?? null), resolutionSource, error ?? null, now, now, operationId);
+      return this.requireOperation(operationId);
+    });
+  }
+
+  /**
+   * Loads one operation regardless of phase.
+   *
+   * @param operationId Journal row identifier.
+   * @returns The operation record, or `null` when it does not exist.
+   * @throws {Error} If SQLite cannot execute or decode the query.
+   */
+  getOperation(operationId: string): OperationRecord | null {
+    const row = this.#database.prepare('SELECT * FROM operation WHERE id = ?').get(operationId);
+    return row === undefined ? null : decodeOperation(row);
+  }
+
+  /**
+   * Loads one operation and rejects unknown identifiers.
+   *
+   * @param operationId Journal row identifier.
+   * @returns The operation record.
+   * @throws {StateError} If the operation does not exist.
+   * @throws {Error} If SQLite cannot execute or decode the query.
+   */
+  requireOperation(operationId: string): OperationRecord {
+    const operation = this.getOperation(operationId);
+    if (operation === null) {
+      throw new StateError('OPERATION_NOT_FOUND', `operation does not exist: ${operationId}`);
+    }
+    return operation;
+  }
+
+  /**
+   * Returns the single uncommitted operation of a task, or null.
+   *
+   * @param taskId Task whose journal is queried.
+   * @returns The uncommitted operation, or `null` when none exists.
+   * @throws {Error} If SQLite cannot execute or decode the query.
+   */
+  getUncommittedTaskOperation(taskId: string): OperationRecord | null {
+    const row = this.#database
+      .prepare("SELECT * FROM operation WHERE task_id = ? AND phase != 'committed' ORDER BY created_at LIMIT 1")
+      .get(taskId);
+    return row === undefined ? null : decodeOperation(row);
+  }
+
+  /**
+   * Returns the global uncommitted setup operation, or null.
+   *
+   * @returns The uncommitted setup operation, or `null` when none exists.
+   * @throws {Error} If SQLite cannot execute or decode the query.
+   */
+  getUncommittedSetupOperation(): OperationRecord | null {
+    const row = this.#database
+      .prepare("SELECT * FROM operation WHERE kind = 'setup' AND phase != 'committed' ORDER BY created_at LIMIT 1")
+      .get();
+    return row === undefined ? null : decodeOperation(row);
+  }
+
+  /**
+   * Lists one task's journal rows in creation order for audit.
+   *
+   * @param taskId Task whose journal is queried.
+   * @returns All operation rows, or all rows when the task does not exist.
+   * @throws {Error} If SQLite cannot execute or decode the query.
+   */
+  listOperations(taskId: string): readonly OperationRecord[] {
+    return this.#database
+      .prepare('SELECT * FROM operation WHERE task_id = ? ORDER BY created_at, rowid')
+      .all(taskId)
+      .map(decodeOperation);
+  }
+
+  /**
+   * Returns the read-only status snapshot with the caller's browser availability probe.
+   *
+   * @param taskId Task identifier.
+   * @param browserStatus Availability probe result for the recorded session name.
+   * @returns Task, turn, operation, evidence, error, and the single safe next action.
+   * @throws {StateError} If the task does not exist.
+   * @throws {Error} If SQLite cannot execute or decode the query.
+   */
+  getStatus(taskId: string, browserStatus: BrowserStatus): StatusRecord {
+    const task = this.requireTask(taskId);
+    const turns = this.listTurns(taskId);
+    const unfinished = turns.filter((turn) => {
+      return turn.status === 'sending' || turn.status === 'pending' || turn.status === 'capturing';
+    });
+    const unresolved = turns.find((turn) => {
+      return turn.status === 'unknown-submission';
+    });
+    const turn = unresolved ?? unfinished.at(-1) ?? null;
+    const operation = this.getUncommittedTaskOperation(taskId);
+    return {
+      taskId,
+      taskStatus: task.status,
+      turnId: turn?.id ?? null,
+      turnStatus: turn?.status ?? null,
+      browserStatus,
+      operationKind: operation?.kind ?? null,
+      operationStep: operation?.step ?? null,
+      operationPhase: operation?.phase ?? null,
+      operationProgress: operation?.progress ?? null,
+      evidence: operation?.evidence ?? null,
+      error: turn?.error ?? operation?.error ?? null,
+      nextAction: computeNextAction(task, turn, operation, browserStatus),
+    };
+  }
+
+  /**
    * Acquires a browser-operation lease inside the caller's immediate transaction.
    *
    * @param taskId Existing task whose browser will be operated.
@@ -947,16 +1417,6 @@ export class StateStore {
       );
     }
     const now = new Date().toISOString();
-    const orphanedSending = this.#database
-      .prepare(
-        `UPDATE turn
-         SET status = 'failed', error = ?, updated_at = ?
-         WHERE task_id = ? AND status = 'sending'`,
-      )
-      .run('send owner exited before recording a browser submission attempt', now, taskId);
-    if (orphanedSending.changes > 0) {
-      this.#database.prepare("UPDATE task SET status = 'failed', updated_at = ? WHERE id = ?").run(now, taskId);
-    }
     this.#database
       .prepare(
         `UPDATE task
@@ -1096,6 +1556,7 @@ function decodeTurn(value: unknown): TurnRecord {
     status: turnStatus(row.status),
     promptPath: text(row.prompt_path, 'turn.prompt_path'),
     attachmentPaths: attachments,
+    userTurnIdentity: nullableText(row.user_turn_identity, 'turn.user_turn_identity'),
     responsePath: nullableText(row.response_path, 'turn.response_path'),
     artifactSetRecorded: booleanInteger(row.artifact_set_recorded, 'turn.artifact_set_recorded'),
     error: nullableText(row.error, 'turn.error'),
@@ -1143,6 +1604,52 @@ function record(value: unknown): Record<string, SQLInputValue> {
 }
 
 /**
+ * Decodes one operation journal row with its stable evidence schema.
+ *
+ * @param value Raw row returned by `node:sqlite`.
+ * @returns A typed operation record.
+ * @throws {TypeError} If required fields or evidence JSON violate the schema contract.
+ */
+function decodeOperation(value: unknown): OperationRecord {
+  const row = record(value);
+  const evidenceValue = text(row.evidence_json, 'operation.evidence_json');
+  return {
+    id: text(row.id, 'operation.id'),
+    kind: operationKind(row.kind),
+    step: operationStep(row.step),
+    phase: operationPhase(row.phase),
+    progress: nonNegativeInteger(row.progress, 'operation.progress'),
+    taskId: nullableText(row.task_id, 'operation.task_id'),
+    turnId: nullableText(row.turn_id, 'operation.turn_id'),
+    sessionName: text(row.session_name, 'operation.session_name'),
+    evidence: decodeOperationEvidence(evidenceValue),
+    resolutionSource: nullableResolutionSource(row.resolution_source),
+    error: nullableText(row.error, 'operation.error'),
+    createdAt: text(row.created_at, 'operation.created_at'),
+    updatedAt: text(row.updated_at, 'operation.updated_at'),
+    committedAt: nullableText(row.committed_at, 'operation.committed_at'),
+  };
+}
+
+/**
+ * Decodes the stable operation evidence object without copying prompt or attachment bytes.
+ *
+ * @param value Serialized evidence JSON.
+ * @returns The evidence object, or an empty evidence object for a null payload.
+ * @throws {TypeError} If the evidence is not an object.
+ */
+function decodeOperationEvidence(value: string): OperationEvidence {
+  if (value === 'null') {
+    return { observedAt: '', sessionName: '' };
+  }
+  const parsed: unknown = JSON.parse(value);
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new TypeError('operation.evidence_json must be an object');
+  }
+  return parsed as OperationEvidence;
+}
+
+/**
  * Narrows a required SQLite column to text.
  *
  * @param value Raw column value.
@@ -1186,6 +1693,21 @@ function nullableInteger(value: SQLInputValue | undefined, field: string): numbe
   }
   if (typeof value !== 'number' || !Number.isSafeInteger(value)) {
     throw new TypeError(`${field} must be an integer or null`);
+  }
+  return value;
+}
+
+/**
+ * Narrows a required non-negative SQLite integer.
+ *
+ * @param value Raw column value.
+ * @param field Diagnostic field name.
+ * @returns The non-negative integer.
+ * @throws {TypeError} If the column is not a non-negative integer.
+ */
+function nonNegativeInteger(value: SQLInputValue | undefined, field: string): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw new TypeError(`${field} must be a non-negative integer`);
   }
   return value;
 }
@@ -1258,7 +1780,7 @@ function isProcessAlive(pid: number): boolean {
  * @throws {TypeError} If the database contains an unsupported status.
  */
 function taskStatus(value: SQLInputValue | undefined): TaskStatus {
-  if (value === 'active' || value === 'closed' || value === 'failed') {
+  if (value === 'starting' || value === 'active' || value === 'closing' || value === 'closed' || value === 'failed') {
     return value;
   }
   throw new TypeError(`invalid task status: ${String(value)}`);
@@ -1297,6 +1819,193 @@ function artifactStatus(value: SQLInputValue | undefined): ArtifactStatus {
     return value;
   }
   throw new TypeError(`invalid artifact status: ${String(value)}`);
+}
+
+/**
+ * Validates the operation-kind vocabulary.
+ *
+ * @param value Raw kind column.
+ * @returns A valid operation kind.
+ * @throws {TypeError} If the database contains an unsupported kind.
+ */
+function operationKind(value: SQLInputValue | undefined): OperationKind {
+  if (value === 'setup' || value === 'start' || value === 'send' || value === 'archive') {
+    return value;
+  }
+  throw new TypeError(`invalid operation kind: ${String(value)}`);
+}
+
+/**
+ * Validates the operation-step vocabulary.
+ *
+ * @param value Raw step column.
+ * @returns A valid operation step.
+ * @throws {TypeError} If the database contains an unsupported step.
+ */
+function operationStep(value: SQLInputValue | undefined): OperationStep {
+  if (
+    value === 'login' ||
+    value === 'seed' ||
+    value === 'cleanup' ||
+    value === 'session' ||
+    value === 'project' ||
+    value === 'configuration' ||
+    value === 'draft' ||
+    value === 'submit' ||
+    value === 'archive' ||
+    value === 'restore'
+  ) {
+    return value;
+  }
+  throw new TypeError(`invalid operation step: ${String(value)}`);
+}
+
+/**
+ * Validates the operation-phase vocabulary.
+ *
+ * @param value Raw phase column.
+ * @returns A valid operation phase.
+ * @throws {TypeError} If the database contains an unsupported phase.
+ */
+function operationPhase(value: SQLInputValue | undefined): OperationPhase {
+  if (value === 'prepared' || value === 'effect-unknown' || value === 'needs-decision' || value === 'committed') {
+    return value;
+  }
+  throw new TypeError(`invalid operation phase: ${String(value)}`);
+}
+
+/**
+ * Narrows the nullable resolution-source column.
+ *
+ * @param value Raw resolution source column.
+ * @returns The source, or null when unresolved.
+ * @throws {TypeError} If the column is neither null nor a valid source.
+ */
+function nullableResolutionSource(value: SQLInputValue | undefined): ResolutionSource | null {
+  if (value === null) {
+    return null;
+  }
+  if (value === 'automatic' || value === 'human') {
+    return value;
+  }
+  throw new TypeError(`invalid resolution source: ${String(value)}`);
+}
+
+/**
+ * Computes the single safe next action that continues or unblocks the persistent workflow.
+ *
+ * @param task Current task row.
+ * @param turn Latest unfinished turn, or null.
+ * @param operation Uncommitted operation of the task, or null.
+ * @param browserStatus Observed named-session availability.
+ * @returns One of the contract `nextAction` values.
+ * @throws {Error} This pure classifier does not throw for typed inputs.
+ */
+function computeNextAction(
+  task: TaskRecord,
+  turn: TurnRecord | null,
+  operation: OperationRecord | null,
+  browserStatus: BrowserStatus,
+): NextAction {
+  if (task.status === 'closing') {
+    return 'close';
+  }
+  if (task.status === 'starting') {
+    return 'recover';
+  }
+  if (task.status === 'closed' || task.status === 'failed') {
+    return 'none';
+  }
+  if (operation !== null) {
+    if (operation.kind === 'start') {
+      return 'recover';
+    }
+    if (operation.kind === 'send') {
+      if (operation.step === 'draft') {
+        return 'recover';
+      }
+      if (operation.phase === 'needs-decision') {
+        return 'resolve-submission';
+      }
+      if (operation.phase === 'effect-unknown') {
+        return 'recover';
+      }
+    }
+    if (operation.kind === 'archive') {
+      return 'recover';
+    }
+  }
+  if (turn !== null && turn.status === 'unknown-submission') {
+    return 'resolve-submission';
+  }
+  if (turn !== null && (turn.status === 'pending' || turn.status === 'capturing')) {
+    return 'wait';
+  }
+  if (browserStatus === 'missing') {
+    return 'recover';
+  }
+  return 'none';
+}
+
+/**
+ * Adds the caller-provided user turn identity column and its unique index to an older database.
+ *
+ * @param database Process-local SQLite connection.
+ * @returns Nothing after the column and index exist.
+ * @throws {Error} If SQLite cannot alter or index the table.
+ */
+function migrateTurnIdentity(database: DatabaseSync): void {
+  const columns = database
+    .prepare('PRAGMA table_info(turn)')
+    .all()
+    .map((value) => {
+      return text(record(value).name, 'turn column name');
+    });
+  if (!columns.includes('user_turn_identity')) {
+    database.exec('ALTER TABLE turn ADD COLUMN user_turn_identity TEXT');
+  }
+  database.exec('CREATE UNIQUE INDEX IF NOT EXISTS turn_task_user_identity ON turn (task_id, user_turn_identity)');
+}
+
+/**
+ * Rebuilds an older task table whose status check lacks the starting and closing statuses.
+ *
+ * @param database Process-local SQLite connection.
+ * @returns Nothing after the table carries the current check.
+ * @throws {Error} If SQLite cannot rebuild or copy the table.
+ */
+function migrateTaskStatuses(database: DatabaseSync): void {
+  const row = database.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'task'").get();
+  const definition = record(row);
+  const sql = text(definition.sql, 'task table sql');
+  if (sql.includes("'starting'")) {
+    return;
+  }
+  database.exec('PRAGMA foreign_keys = OFF');
+  try {
+    database.exec(`
+      CREATE TABLE task_migrated (
+        id TEXT PRIMARY KEY,
+        playwright_session TEXT NOT NULL UNIQUE,
+        conversation_id TEXT,
+        conversation_url TEXT,
+        status TEXT NOT NULL CHECK (status IN ('starting', 'active', 'closing', 'closed', 'failed')),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        closed_at TEXT,
+        browser_operation_token TEXT,
+        browser_operation_pid INTEGER,
+        browser_operation_name TEXT,
+        browser_operation_child_pid INTEGER,
+        browser_operation_command_pid INTEGER
+      ) STRICT;
+      INSERT INTO task_migrated SELECT * FROM task;
+      DROP TABLE task;
+      ALTER TABLE task_migrated RENAME TO task;
+    `);
+  } finally {
+    database.exec('PRAGMA foreign_keys = ON');
+  }
 }
 
 /**

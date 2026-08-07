@@ -1,13 +1,16 @@
 import { randomUUID } from 'node:crypto';
-import { resolve } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
   PlaywrightBrowser,
   type BrowserArtifactDownload,
+  type BrowserAvailability,
   type BrowserCaptureResult,
   type BrowserObservationResult,
   type BrowserOperationObserver,
+  type BrowserResolveSubmittedResult,
   type BrowserSendResult,
   type BrowserSessionInfo,
 } from './browser.ts';
@@ -28,13 +31,21 @@ import {
   savePromptCopy,
   type CollabPaths,
 } from './session.ts';
-import { StateError, StateStore } from './state.ts';
+import { StateError, StateStore, type StatusRecord } from './state.ts';
 
 const CAPTURE_ABORT_SETTLE_MS = 250;
 
 export interface CollabBrowser {
   setup(): Promise<string>;
-  startTask(taskId: string, sessionName: string, seedStatePath: string): Promise<BrowserSessionInfo>;
+  startTask(taskId: string, sessionName: string, seedStatePath: string, rebuild?: boolean): Promise<BrowserSessionInfo>;
+  sessionAvailability(sessionName: string): Promise<BrowserAvailability>;
+  recoverConversation(
+    taskId: string,
+    sessionName: string,
+    conversationUrl: string,
+    conversationId: string,
+    observer?: BrowserOperationObserver,
+  ): Promise<{ readonly conversationId: string; readonly conversationUrl: string }>;
   send(
     taskId: string,
     sessionName: string,
@@ -83,6 +94,25 @@ export interface CollabBrowser {
     conversationUrl: string,
     observer?: BrowserOperationObserver,
   ): Promise<{ readonly conversationId: string }>;
+  resolveSubmittedConversation(
+    taskId: string,
+    sessionName: string,
+    canonicalUrl: string,
+    expectedConversationId: string | null,
+    previousUserTurnIdentity: string | null,
+    prompt: string,
+    attachmentNames: readonly string[],
+    observer?: BrowserOperationObserver,
+  ): Promise<BrowserResolveSubmittedResult>;
+  verifySafeComposer(
+    taskId: string,
+    sessionName: string,
+    expectedConversationId: string | null,
+    previousUserTurnIdentity: string | null,
+    prompt: string,
+    attachmentNames: readonly string[],
+    observer?: BrowserOperationObserver,
+  ): Promise<void>;
 }
 
 export interface StartResult {
@@ -248,7 +278,13 @@ export class CollabService {
         }
 
         try {
-          store.markTurnPending(taskId, turnId, browserResult.conversationId, browserResult.conversationUrl);
+          store.markTurnPending(
+            taskId,
+            turnId,
+            browserResult.conversationId,
+            browserResult.conversationUrl,
+            browserResult.userTurnIdentity,
+          );
         } catch (error) {
           try {
             store.markUnknownSubmission(taskId, turnId, `bind conversation: ${errorMessage(error)}`);
@@ -552,6 +588,216 @@ export class CollabService {
   }
 
   /**
+   * Returns the read-only task status with the named-session availability probe.
+   *
+   * @param taskId Task identifier.
+   * @returns The status snapshot and the single safe next action.
+   * @throws {CollabError} If the task does not exist.
+   * @throws {Error} If the state store or availability probe fails.
+   */
+  async status(taskId: string): Promise<StatusRecord> {
+    return this.#withStore(async (store) => {
+      const task = store.requireTask(taskId);
+      const browserStatus = await this.#browser.sessionAvailability(task.playwrightSession);
+      return store.getStatus(taskId, browserStatus);
+    });
+  }
+
+  /**
+   * Acquires the task lease and continues the persistent workflow along one recovery path.
+   *
+   * @param taskId Task identifier.
+   * @returns The recovered status snapshot and the next safe action.
+   * @throws {CollabError} If a page postcondition cannot be obtained or an adjudication is required.
+   * @throws {Error} If state, browser, or seed operations fail.
+   */
+  async recover(taskId: string): Promise<StatusRecord> {
+    return this.#withStore(async (store) => {
+      return this.#withTaskOperation(store, taskId, 'recover', async (observer) => {
+        return this.#recoverSnapshot(store, taskId, observer);
+      });
+    });
+  }
+
+  /**
+   * Applies the unique recovery path implied by the current persistent state.
+   *
+   * @param store Current process-local state connection.
+   * @param taskId Task whose workflow is recovered.
+   * @param observer Task-lease child-process observer.
+   * @returns A fresh status snapshot after the single recovery action.
+   * @throws {CollabError} If the page postcondition cannot be obtained.
+   * @throws {Error} If state, browser, or seed operations fail.
+   */
+  async #recoverSnapshot(store: StateStore, taskId: string, observer: BrowserOperationObserver): Promise<StatusRecord> {
+    const task = store.requireTask(taskId);
+    const browserStatus = await this.#browser.sessionAvailability(task.playwrightSession);
+    const before = store.getStatus(taskId, browserStatus);
+    if (before.nextAction === 'none') {
+      return before;
+    }
+    const operation = store.getUncommittedTaskOperation(taskId);
+    const pendingTurn = store
+      .listTurns(taskId)
+      .filter((turn) => {
+        return (
+          turn.status === 'sending' ||
+          turn.status === 'pending' ||
+          turn.status === 'capturing' ||
+          turn.status === 'unknown-submission'
+        );
+      })
+      .at(-1);
+
+    if (task.status === 'closing') {
+      return before;
+    }
+    if (pendingTurn !== undefined && (pendingTurn.status === 'pending' || pendingTurn.status === 'capturing')) {
+      return before;
+    }
+    if (pendingTurn !== undefined && pendingTurn.status === 'unknown-submission') {
+      return before;
+    }
+    if (operation !== null && operation.kind === 'send' && operation.phase === 'needs-decision') {
+      return before;
+    }
+    if (operation !== null && operation.kind === 'send' && operation.step === 'draft') {
+      return before;
+    }
+    if (operation !== null && operation.kind === 'archive') {
+      return before;
+    }
+    if (task.status === 'starting' || operation?.kind === 'start') {
+      const seedStatePath = await requireSeedState(this.#paths);
+      const browser = await this.#browser.startTask(taskId, task.playwrightSession, seedStatePath, true);
+      if (task.status === 'starting') {
+        store.activateTask(taskId);
+      }
+      if (operation !== null) {
+        store.commitOperation(operation.id, 'automatic', {
+          observedAt: new Date().toISOString(),
+          sessionName: task.playwrightSession,
+          pageUrl: browser.url,
+          postcondition: 'start session resumed from seed',
+        });
+      }
+      const after = await this.#browser.sessionAvailability(task.playwrightSession);
+      return store.getStatus(taskId, after);
+    }
+    if (browserStatus === 'missing') {
+      const seedStatePath = await requireSeedState(this.#paths);
+      await this.#browser.startTask(taskId, task.playwrightSession, seedStatePath, true);
+      const rebuilt = store.requireTask(taskId);
+      if (rebuilt.conversationId !== null && rebuilt.conversationUrl !== null) {
+        await this.#browser.recoverConversation(
+          taskId,
+          rebuilt.playwrightSession,
+          rebuilt.conversationUrl,
+          rebuilt.conversationId,
+          observer,
+        );
+      }
+      const after = await this.#browser.sessionAvailability(task.playwrightSession);
+      return store.getStatus(taskId, after);
+    }
+    return before;
+  }
+
+  /**
+   * Verifies and applies a human submission adjudication on an unknown-submission turn.
+   *
+   * @param taskId Task identifier.
+   * @param turnId Unknown-submission turn identifier.
+   * @param verdict Human-provided submission fact.
+   * @param conversationUrl Canonical conversation URL required by the submitted verdict.
+   * @returns The resolved status snapshot.
+   * @throws {CollabError} If the turn, operation, URL, page, or unique turn cannot be verified.
+   * @throws {Error} If state or browser operations fail.
+   */
+  async resolveSubmission(
+    taskId: string,
+    turnId: string,
+    verdict: 'submitted' | 'not-submitted',
+    conversationUrl?: string,
+  ): Promise<StatusRecord> {
+    const canonicalUrl = verdict === 'submitted' ? requireCanonicalConversationUrl(conversationUrl) : null;
+    return this.#withStore(async (store) => {
+      return this.#withTaskOperation(store, taskId, 'resolve-submission', async (observer) => {
+        const task = store.requireTask(taskId);
+        const turn = store.requireTurn(taskId, turnId);
+        if (turn.status !== 'unknown-submission') {
+          throw new CollabError('TURN_NOT_RESOLVABLE', `turn is ${turn.status}: ${turnId}`);
+        }
+        const operation = store.getUncommittedTaskOperation(taskId);
+        if (operation === null || operation.kind !== 'send' || operation.phase !== 'needs-decision') {
+          throw new CollabError('OPERATION_NOT_RESOLVABLE', `task has no send operation awaiting decision: ${taskId}`);
+        }
+        const prompt = await readSavedPrompt(this.#paths, taskId, turnId);
+        const attachmentNames = turn.attachmentPaths.map((path) => {
+          return basename(path);
+        });
+        const previousUserTurnIdentity = await previousCompletedTurnIdentity(store, taskId, turnId);
+        const sessionName = task.playwrightSession;
+        const resolvedAt = new Date().toISOString();
+        if (verdict === 'submitted' && canonicalUrl !== null) {
+          const verified = await this.#browser.resolveSubmittedConversation(
+            taskId,
+            sessionName,
+            canonicalUrl,
+            task.conversationId,
+            previousUserTurnIdentity,
+            prompt,
+            attachmentNames,
+            observer,
+          );
+          store.markTurnPending(
+            taskId,
+            turnId,
+            verified.conversationId,
+            verified.conversationUrl,
+            verified.userTurnIdentity,
+          );
+          store.commitOperation(operation.id, 'human', {
+            observedAt: resolvedAt,
+            sessionName,
+            pageUrl: verified.conversationUrl,
+            postcondition: 'submitted adjudication verified the unique user turn',
+            conversationId: verified.conversationId,
+            userTurnIdentity: verified.userTurnIdentity,
+            promptVerbatimMatch: true,
+            attachmentNamesMatch: true,
+            decision: 'submitted',
+            canonicalUrl,
+            pageVerification: 'canonical conversation and unique matching user turn verified in the fixed Project',
+          });
+        } else {
+          await this.#browser.verifySafeComposer(
+            taskId,
+            sessionName,
+            task.conversationId,
+            previousUserTurnIdentity,
+            prompt,
+            attachmentNames,
+            observer,
+          );
+          store.failSubmissionAttempt(taskId, turnId, 'human adjudication: message was not submitted');
+          store.commitOperation(operation.id, 'human', {
+            observedAt: resolvedAt,
+            sessionName,
+            pageUrl: task.conversationUrl ?? null,
+            postcondition: 'safe composer verified after not-submitted adjudication',
+            decision: 'not-submitted',
+            canonicalUrl: null,
+            pageVerification: 'safe bound composer or blank target Project composer verified',
+          });
+        }
+        const browserStatus = await this.#browser.sessionAvailability(sessionName);
+        return store.getStatus(taskId, browserStatus);
+      });
+    });
+  }
+
+  /**
    * Serializes browser side effects for one task across independent CLI processes.
    *
    * @param store Current process-local state connection.
@@ -833,6 +1079,88 @@ async function yieldTaskOperation(): Promise<void> {
   });
 }
 
+/**
+ * Reads the immutable prompt copy published before the send side effect.
+ *
+ * @param paths Resolved Collab paths.
+ * @param taskId Owning task identifier.
+ * @param turnId Turn whose prompt copy is read.
+ * @returns The exact saved prompt text.
+ * @throws {CollabError} If the prompt copy is missing or unreadable.
+ * @throws {Error} If the file cannot be decoded as UTF-8.
+ */
+async function readSavedPrompt(paths: CollabPaths, taskId: string, turnId: string): Promise<string> {
+  const target = resolve(paths.sessionsDirectory, taskId, 'turns', turnId, 'prompt.md');
+  try {
+    const bytes = await readFile(target);
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch (error) {
+    throw new CollabError('PROMPT_COPY_MISSING', `saved prompt copy is unreadable: ${target}: ${errorMessage(error)}`);
+  }
+}
+
+/**
+ * Resolves the identity anchor of the previous completed turn, or null for a first turn.
+ *
+ * @param store Current process-local state connection.
+ * @param taskId Owning task identifier.
+ * @param turnId Current turn whose predecessor anchor is needed.
+ * @returns The previous completed turn's user identity, or null.
+ * @throws {CollabError} If a prior completed turn lacks its recorded identity.
+ * @throws {Error} If the state store cannot be read.
+ */
+async function previousCompletedTurnIdentity(
+  store: StateStore,
+  taskId: string,
+  turnId: string,
+): Promise<string | null> {
+  const turns = store.listTurns(taskId);
+  const index = turns.findIndex((turn) => {
+    return turn.id === turnId;
+  });
+  if (index <= 0) {
+    return null;
+  }
+  const previous = turns[index - 1];
+  if (previous === undefined || previous.status !== 'completed') {
+    return null;
+  }
+  if (previous.userTurnIdentity === null) {
+    throw new CollabError('TRANSCRIPT_INCONSISTENT', `previous completed turn has no user identity: ${previous.id}`);
+  }
+  return previous.userTurnIdentity;
+}
+
+/**
+ * Validates the strict canonical conversation URL contract before any browser action.
+ *
+ * @param value Conversation URL supplied by the adjudication caller.
+ * @returns The normalized `https://chatgpt.com/c/<conversationId>` URL.
+ * @throws {CollabError} If the URL is absent or violates the canonical grammar.
+ */
+function requireCanonicalConversationUrl(value: string | undefined): string {
+  if (value === undefined) {
+    throw usageError('resolve-submission submitted requires <conversationUrl>');
+  }
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new CollabError('USAGE', 'conversationUrl must be a canonical https://chatgpt.com/c/<conversationId> URL');
+  }
+  if (url.protocol !== 'https:' || url.hostname !== 'chatgpt.com') {
+    throw new CollabError('USAGE', 'conversationUrl must be on https://chatgpt.com');
+  }
+  if (url.username !== '' || url.password !== '' || url.search !== '' || url.hash !== '') {
+    throw new CollabError('USAGE', 'conversationUrl must not contain credentials, query, or fragment');
+  }
+  const match = /^\/c\/([^/?#]+)\/?$/u.exec(url.pathname);
+  if (match === null || match[1] === undefined || match[1].startsWith('WEB:')) {
+    throw new CollabError('USAGE', 'conversationUrl must be a canonical /c/<conversationId> path');
+  }
+  return `${url.origin}/c/${match[1]}`;
+}
+
 export interface CliIo {
   writeOutput(value: string): void;
   writeError(value: string): void;
@@ -917,6 +1245,51 @@ export async function runCli(
         requireParameterCount(command, parameters, 1);
         io.writeOutput(jsonLine({ ok: true, command, ...(await service.archive(required(parameters[0]))) }));
         return 0;
+      }
+      case 'status': {
+        requireParameterCount(command, parameters, 1);
+        io.writeOutput(jsonLine({ ok: true, command, ...(await service.status(required(parameters[0]))) }));
+        return 0;
+      }
+      case 'recover': {
+        requireParameterCount(command, parameters, 1);
+        io.writeOutput(jsonLine({ ok: true, command, ...(await service.recover(required(parameters[0]))) }));
+        return 0;
+      }
+      case 'resolve-submission': {
+        if (parameters.length < 3) {
+          throw usageError(
+            'resolve-submission requires <taskId> <turnId> submitted <conversationUrl> or <taskId> <turnId> not-submitted',
+          );
+        }
+        const [taskId, turnId, verdict, ...rest] = parameters;
+        if (verdict === 'submitted') {
+          if (rest.length !== 1) {
+            throw usageError('resolve-submission submitted requires exactly <conversationUrl>');
+          }
+          io.writeOutput(
+            jsonLine({
+              ok: true,
+              command,
+              ...(await service.resolveSubmission(required(taskId), required(turnId), 'submitted', required(rest[0]))),
+            }),
+          );
+          return 0;
+        }
+        if (verdict === 'not-submitted') {
+          if (rest.length !== 0) {
+            throw usageError('resolve-submission not-submitted takes no extra parameters');
+          }
+          io.writeOutput(
+            jsonLine({
+              ok: true,
+              command,
+              ...(await service.resolveSubmission(required(taskId), required(turnId), 'not-submitted')),
+            }),
+          );
+          return 0;
+        }
+        throw usageError('resolve-submission verdict must be submitted or not-submitted');
       }
       default:
         throw usageError(`unknown command: ${command}`);
@@ -1025,9 +1398,13 @@ function helpText(): string {
 
 Usage:
   node "<skill-directory>/scripts/collab.ts" setup
-  node "<skill-directory>/scripts/collab.ts" start
+  node "<skill-directory>/scripts/collab.ts" start <taskId>
   node "<skill-directory>/scripts/collab.ts" send <taskId> <promptPath> [attachmentPath ...]
   node "<skill-directory>/scripts/collab.ts" wait <taskId> <turnId> <observationWindowMs> <captureTimeoutMs>
+  node "<skill-directory>/scripts/collab.ts" status <taskId>
+  node "<skill-directory>/scripts/collab.ts" recover <taskId>
+  node "<skill-directory>/scripts/collab.ts" resolve-submission <taskId> <turnId> submitted <conversationUrl>
+  node "<skill-directory>/scripts/collab.ts" resolve-submission <taskId> <turnId> not-submitted
   node "<skill-directory>/scripts/collab.ts" close <taskId>
   node "<skill-directory>/scripts/collab.ts" archive <taskId>
 `;

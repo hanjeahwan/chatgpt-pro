@@ -18,7 +18,7 @@ describe('BEH-002, BEH-005, BEH-007, and BEH-008 state gates', () => {
     }).toThrowError(StateError);
 
     store.markSubmissionAttempting('task-a', 'turn-a');
-    store.markTurnPending('task-a', 'turn-a', 'conversation-a', 'https://chatgpt.com/c/conversation-a');
+    store.markTurnPending('task-a', 'turn-a', 'conversation-a', 'https://chatgpt.com/c/conversation-a', 'user-turn-a');
     expect(store.requireTurn('task-a', 'turn-a')).toMatchObject({ status: 'pending', error: null });
     const responsePath = join(root, 'response.md');
     store.freezeCapture('task-a', 'turn-a', responsePath, []);
@@ -28,8 +28,23 @@ describe('BEH-002, BEH-005, BEH-007, and BEH-008 state gates', () => {
     store.markSubmissionAttempting('task-a', 'turn-b');
 
     expect(() => {
-      return store.markTurnPending('task-a', 'turn-b', 'conversation-b', 'https://chatgpt.com/c/conversation-b');
+      return store.markTurnPending(
+        'task-a',
+        'turn-b',
+        'conversation-b',
+        'https://chatgpt.com/c/conversation-b',
+        'user-turn-b',
+      );
     }).toThrowError(/different conversation/);
+    expect(() => {
+      return store.markTurnPending(
+        'task-a',
+        'turn-b',
+        'conversation-a',
+        'https://chatgpt.com/c/conversation-a',
+        'user-turn-a',
+      );
+    }).toThrowError(/user turn identity/);
     store.close();
   });
 
@@ -39,7 +54,7 @@ describe('BEH-002, BEH-005, BEH-007, and BEH-008 state gates', () => {
     store.createTask('task-a', 'session-a');
     store.beginTurn('task-a', 'turn-a', '/prompt.md', []);
     store.markSubmissionAttempting('task-a', 'turn-a');
-    store.markTurnPending('task-a', 'turn-a', 'conversation-a', 'https://chatgpt.com/c/conversation-a');
+    store.markTurnPending('task-a', 'turn-a', 'conversation-a', 'https://chatgpt.com/c/conversation-a', 'user-turn-a');
     const responsePath = join(root, 'response.md');
     store.freezeCapture('task-a', 'turn-a', responsePath, [
       { sourceUrl: 'sandbox:/mnt/data/first.txt', label: 'first.txt' },
@@ -150,7 +165,7 @@ describe('BEH-002, BEH-005, BEH-007, and BEH-008 state gates', () => {
     second.close();
   });
 
-  it('atomically fails an orphaned pre-attempt sending turn when reclaiming its lease', () => {
+  it('keeps an orphaned sending turn recoverable instead of auto-failing it when reclaiming its lease', () => {
     const databasePath = join(tmpdir(), `collab-orphan-sending-${crypto.randomUUID()}.sqlite`);
     const first = new StateStore(databasePath);
     first.createTask('task-a', 'session-a');
@@ -160,12 +175,125 @@ describe('BEH-002, BEH-005, BEH-007, and BEH-008 state gates', () => {
 
     const contender = new StateStore(databasePath);
     contender.acquireTaskOperation('task-a', 'send', 'contender');
-    expect(contender.requireTurn('task-a', 'turn-a')).toMatchObject({
-      status: 'failed',
-      error: 'send owner exited before recording a browser submission attempt',
-    });
-    expect(contender.requireTask('task-a').status).toBe('failed');
+    expect(contender.requireTurn('task-a', 'turn-a')).toMatchObject({ status: 'sending' });
+    expect(contender.requireTask('task-a').status).toBe('active');
     contender.releaseTaskOperation('task-a', 'contender');
     contender.close();
+  });
+
+  it('keeps the operation journal and status snapshot after a process restart', () => {
+    const databasePath = join(tmpdir(), `collab-journal-${crypto.randomUUID()}.sqlite`);
+    const first = new StateStore(databasePath);
+    first.createTask('task-a', 'session-a');
+    const operationId = 'send-operation-a';
+    first.beginTurn('task-a', 'turn-a', '/prompt.md', []);
+    const operation = first.createOperation({
+      id: operationId,
+      kind: 'send',
+      step: 'draft',
+      taskId: 'task-a',
+      turnId: 'turn-a',
+      sessionName: 'session-a',
+    });
+    expect(operation).toMatchObject({ kind: 'send', step: 'draft', phase: 'prepared', progress: 0 });
+    first.advanceOperationStep(operationId, 'submit');
+    first.markOperationEffectUnknown(operationId, {
+      observedAt: new Date().toISOString(),
+      sessionName: 'session-a',
+      postcondition: 'submit command released',
+    });
+    first.markOperationNeedsDecision(operationId);
+    expect(first.requireOperation(operationId).phase).toBe('needs-decision');
+    first.markSubmissionAttempting('task-a', 'turn-a');
+    first.close();
+
+    const reopened = new StateStore(databasePath);
+    expect(reopened.getUncommittedTaskOperation('task-a')).toMatchObject({ phase: 'needs-decision' });
+    const status = reopened.getStatus('task-a', 'missing');
+    expect(status).toMatchObject({
+      taskId: 'task-a',
+      taskStatus: 'active',
+      turnStatus: 'unknown-submission',
+      operationKind: 'send',
+      operationStep: 'submit',
+      operationPhase: 'needs-decision',
+      nextAction: 'resolve-submission',
+    });
+    reopened.close();
+  });
+
+  it('enforces one uncommitted operation per task and one global uncommitted setup', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-operation-constraints-'));
+    const store = new StateStore(join(root, 'state.sqlite'));
+    store.createTask('task-a', 'session-a');
+    store.createTask('task-b', 'session-b');
+    store.createOperation({
+      id: 'setup-1',
+      kind: 'setup',
+      step: 'login',
+      taskId: null,
+      turnId: null,
+      sessionName: 'setup-session',
+    });
+    expect(() => {
+      return store.createOperation({
+        id: 'setup-2',
+        kind: 'setup',
+        step: 'login',
+        taskId: null,
+        turnId: null,
+        sessionName: 'setup-session',
+      });
+    }).toThrowError(/uncommitted setup/);
+    store.createOperation({
+      id: 'start-1',
+      kind: 'start',
+      step: 'session',
+      taskId: 'task-a',
+      turnId: null,
+      sessionName: 'session-a',
+    });
+    expect(() => {
+      return store.createOperation({
+        id: 'archive-1',
+        kind: 'archive',
+        step: 'archive',
+        taskId: 'task-a',
+        turnId: null,
+        sessionName: 'session-a',
+      });
+    }).toThrowError(/uncommitted operation/);
+    expect(() => {
+      return store.createOperation({
+        id: 'invalid-step',
+        kind: 'send',
+        step: 'login',
+        taskId: 'task-b',
+        turnId: null,
+        sessionName: 'session-b',
+      });
+    }).toThrowError(/step login is invalid/);
+    store.commitOperation('start-1', 'automatic');
+    store.createOperation({
+      id: 'archive-2',
+      kind: 'archive',
+      step: 'archive',
+      taskId: 'task-a',
+      turnId: null,
+      sessionName: 'session-a',
+    });
+    store.close();
+  });
+
+  it('computes closing and pending next actions from the status snapshot', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-next-action-'));
+    const store = new StateStore(join(root, 'state.sqlite'));
+    store.createTask('task-a', 'session-a');
+    expect(store.getStatus('task-a', 'available').nextAction).toBe('none');
+    expect(store.getStatus('task-a', 'missing').nextAction).toBe('recover');
+
+    store.markTaskClosing('task-a');
+    expect(store.getStatus('task-a', 'missing')).toMatchObject({ taskStatus: 'closing', nextAction: 'close' });
+    store.close();
   });
 });

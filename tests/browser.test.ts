@@ -337,6 +337,7 @@ describe('BEH-003 first send stays inside the fixed Project composer', () => {
       status: 'submitted',
       conversationId: 'new-conversation',
       conversationUrl: 'https://chatgpt.com/g/g-p-123-chatgpt-pro-collab/c/new-conversation',
+      userTurnIdentity: 'conversation-turn-1',
     });
     expect(fixture.events).toEqual(['send-click']);
   });
@@ -454,6 +455,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
         status: 'submitted',
         conversationId: 'conversation-a',
         conversationUrl: 'https://chatgpt.com/c/conversation-a',
+        userTurnIdentity: 'conversation-turn-1',
       }),
     ]);
 
@@ -463,6 +465,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
       status: 'submitted',
       conversationId: 'conversation-a',
       conversationUrl: 'https://chatgpt.com/c/conversation-a',
+      userTurnIdentity: 'conversation-turn-1',
     });
     const uploads = fixture.invocations
       .filter((invocation) => {
@@ -1005,7 +1008,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     store.createTask('task-a', 'session-a');
     store.beginTurn('task-a', 'turn-a', '/prompt.md', []);
     store.markSubmissionAttempting('task-a', 'turn-a');
-    store.markTurnPending('task-a', 'turn-a', 'conversation-a', 'https://chatgpt.com/c/conversation-a');
+    store.markTurnPending('task-a', 'turn-a', 'conversation-a', 'https://chatgpt.com/c/conversation-a', 'user-turn-a');
     store.freezeCapture('task-a', 'turn-a', targetResponsePath, [{ sourceUrl, label: 'result' }]);
     store.close();
     const service = new CollabService(fixture.paths, fixture.browser);
@@ -1040,7 +1043,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     store.createTask('task-a', 'session-a');
     store.beginTurn('task-a', 'turn-a', '/prompt.md', []);
     store.markSubmissionAttempting('task-a', 'turn-a');
-    store.markTurnPending('task-a', 'turn-a', 'conversation-a', 'https://chatgpt.com/c/conversation-a');
+    store.markTurnPending('task-a', 'turn-a', 'conversation-a', 'https://chatgpt.com/c/conversation-a', 'user-turn-a');
     store.freezeCapture('task-a', 'turn-a', targetResponsePath, [
       { sourceUrl: first, label: 'first' },
       { sourceUrl: second, label: 'second' },
@@ -1159,6 +1162,126 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     ]);
 
     await expect(runArchive(page)).resolves.toContain('conversation-a');
+  });
+});
+
+describe('BEH-013 browser boundary support', () => {
+  it('classifies the global session listing deterministically', async () => {
+    const fixture = await browserFixture([output('  (no browsers)\n')]);
+    await expect(fixture.browser.sessionAvailability('session-a')).resolves.toBe('missing');
+    expect(fixture.invocations[0]?.arguments).toEqual(['-y', '@playwright/cli@0.1.17', '--raw', 'list']);
+
+    const openFixture = await browserFixture([
+      output(`Sessions:\n  - name: session-a\n    state: open\n    pid: 4123\n`),
+    ]);
+    await expect(openFixture.browser.sessionAvailability('session-a')).resolves.toBe('available');
+
+    const absentFixture = await browserFixture([output('Sessions:\n  - name: other\n    state: open\n')]);
+    await expect(absentFixture.browser.sessionAvailability('session-a')).resolves.toBe('missing');
+
+    const failingFixture = await browserFixture([new Error('cli unavailable')]);
+    await expect(failingFixture.browser.sessionAvailability('session-a')).resolves.toBe('unknown');
+  });
+
+  it('rebuilds a session without opening when the named session already exists', async () => {
+    await writeFile(join((await browserFixture([])).paths.seedState), '{}');
+    const fixture = await browserFixture([
+      output('Sessions:\n  - name: session-a\n    state: open\n    pid: 4123\n'),
+      output('navigated to projects'),
+      pageResult({ protocol, kind: 'start', url: 'https://chatgpt.com/g/g-p-123/project', contextMarker: 'ctx' }),
+      output('Sessions:\n  - name: session-a\n    state: open\n    pid: 4123\n'),
+    ]);
+    await writeFile(fixture.paths.seedState, '{}');
+
+    const result = await fixture.browser.startTask('task-a', 'session-a', fixture.paths.seedState, true);
+
+    expect(result).toEqual({
+      pid: 4123,
+      url: 'https://chatgpt.com/g/g-p-123/project',
+      contextMarker: 'ctx',
+      persistent: false,
+    });
+    expect(
+      fixture.invocations.flatMap((invocation) => {
+        return invocation.arguments;
+      }),
+    ).not.toContain('open');
+    expect(
+      fixture.invocations.flatMap((invocation) => {
+        return invocation.arguments;
+      }),
+    ).not.toContain('state-load');
+  });
+
+  it('verifies a rebuilt session against the recorded canonical conversation', async () => {
+    const fixture = await browserFixture([
+      pageResult({
+        protocol,
+        kind: 'recover-conversation',
+        conversationId: 'conversation-a',
+        conversationUrl: 'https://chatgpt.com/c/conversation-a',
+      }),
+    ]);
+
+    const result = await fixture.browser.recoverConversation(
+      'task-a',
+      'session-a',
+      'https://chatgpt.com/c/conversation-a',
+      'conversation-a',
+    );
+
+    expect(result).toEqual({
+      conversationId: 'conversation-a',
+      conversationUrl: 'https://chatgpt.com/c/conversation-a',
+    });
+    const source = await lastScript(fixture.invocations);
+    expect(source).toContain('recover-conversation');
+    expect(source).toContain('conversation-a');
+    expectPageFunctionSyntax(source);
+  });
+
+  it('generates the submitted adjudication verification with prompt and attachment matching', async () => {
+    const fixture = await browserFixture([
+      pageResult({
+        protocol,
+        kind: 'resolve-submitted',
+        conversationId: 'conversation-a',
+        conversationUrl: 'https://chatgpt.com/c/conversation-a',
+        userTurnIdentity: 'conversation-turn-2',
+      }),
+    ]);
+
+    const result = await fixture.browser.resolveSubmittedConversation(
+      'task-a',
+      'session-a',
+      'https://chatgpt.com/c/conversation-a',
+      'conversation-a',
+      'conversation-turn-1',
+      'exact prompt',
+      ['a.txt'],
+    );
+
+    expect(result).toEqual({
+      conversationId: 'conversation-a',
+      conversationUrl: 'https://chatgpt.com/c/conversation-a',
+      userTurnIdentity: 'conversation-turn-2',
+    });
+    const source = await lastScript(fixture.invocations);
+    expect(source).toContain('chatgpt-pro-collab');
+    expect(source).toContain('exact prompt');
+    expect(source).toContain('a.txt');
+    expect(source).toContain('previousUserTurnIdentity');
+    expectPageFunctionSyntax(source);
+  });
+
+  it('generates the not-submitted safe-composer verification for bound and unbound tasks', async () => {
+    const fixture = await browserFixture([pageResult({ protocol, kind: 'resolve-not-submitted' })]);
+
+    await fixture.browser.verifySafeComposer('task-a', 'session-a', null, null, 'not sent', []);
+    const source = await lastScript(fixture.invocations);
+    expect(source).toContain('chatgpt-pro-collab');
+    expect(source).toContain('resolve-not-submitted');
+    expectPageFunctionSyntax(source);
   });
 });
 

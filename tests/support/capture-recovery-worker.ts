@@ -26,7 +26,7 @@ if (mode === 'interrupt-freeze') {
   store.createTask(taskId, 'session-a');
   store.beginTurn(taskId, turnId, '/prompt.md', []);
   store.markSubmissionAttempting(taskId, turnId);
-  store.markTurnPending(taskId, turnId, 'conversation-a', 'https://chatgpt.com/c/conversation-a');
+  store.markTurnPending(taskId, turnId, 'conversation-a', 'https://chatgpt.com/c/conversation-a', 'user-turn-a');
   const artifacts = sourceUrls.map((sourceUrl) => {
     return { sourceUrl, label: sourceUrl.slice(sourceUrl.lastIndexOf('/') + 1) };
   });
@@ -55,7 +55,7 @@ if (mode === 'interrupt-freeze') {
   store.createTask(taskId, 'session-a');
   store.beginTurn(taskId, turnId, '/prompt.md', []);
   store.markSubmissionAttempting(taskId, turnId);
-  store.markTurnPending(taskId, turnId, 'conversation-a', 'https://chatgpt.com/c/conversation-a');
+  store.markTurnPending(taskId, turnId, 'conversation-a', 'https://chatgpt.com/c/conversation-a', 'user-turn-a');
   store.freezeCapture(
     taskId,
     turnId,

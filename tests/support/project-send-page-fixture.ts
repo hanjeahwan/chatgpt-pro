@@ -110,6 +110,9 @@ export function projectSendPageFixture(initialPathname: string): ProjectSendPage
       if (selector === '[data-testid^="conversation-turn-"][data-turn]') {
         return turnElements();
       }
+      if (selector === '[data-testid^="conversation-turn-"][data-turn="user"]') {
+        return turnElements();
+      }
       if (selector === 'div') {
         return state.archived ? [archivedMessage] : [];
       }

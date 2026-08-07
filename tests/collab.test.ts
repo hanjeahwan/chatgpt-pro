@@ -8,7 +8,12 @@ import { describe, expect, it } from 'vitest';
 
 import { BrowserError, type BrowserOperationObserver } from '../skills/chatgpt-pro-collab/scripts/browser.ts';
 import { CollabService, runCli, type CliIo, type CollabBrowser } from '../skills/chatgpt-pro-collab/scripts/collab.ts';
-import { artifactPath, collabPaths, ensureCollabDirectories } from '../skills/chatgpt-pro-collab/scripts/session.ts';
+import {
+  artifactPath,
+  collabPaths,
+  ensureCollabDirectories,
+  savePromptCopy,
+} from '../skills/chatgpt-pro-collab/scripts/session.ts';
 import { StateStore } from '../skills/chatgpt-pro-collab/scripts/state.ts';
 
 describe('BEH-001 through BEH-009 CLI orchestration', () => {
@@ -719,6 +724,237 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
   });
 });
 
+describe('BEH-013 status, recover, and resolve-submission', () => {
+  it('returns a read-only status with browser availability and the safe next action', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.service.start();
+    const promptPath = join(fixture.root, 'pending-prompt.md');
+    await writeFile(promptPath, 'pending');
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+    fixture.browser.sessionAvailabilityResult = 'missing';
+
+    const status = await fixture.service.status(task.taskId);
+    expect(status).toMatchObject({
+      taskId: task.taskId,
+      taskStatus: 'active',
+      turnId: turn.turnId,
+      turnStatus: 'pending',
+      browserStatus: 'missing',
+      nextAction: 'wait',
+    });
+    const store = new StateStore(fixture.paths.database);
+    expect(store.requireTurn(task.taskId, turn.turnId).status).toBe('pending');
+    store.close();
+    expect(fixture.browser.startCount).toBe(1);
+  });
+
+  it('returns nextAction close for a closing task without touching the browser', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.service.start();
+    const store = new StateStore(fixture.paths.database);
+    store.markTaskClosing(task.taskId);
+    store.close();
+
+    const status = await fixture.service.recover(task.taskId);
+    expect(status).toMatchObject({ taskStatus: 'closing', nextAction: 'close' });
+    expect(fixture.browser.closed).toEqual([]);
+  });
+
+  it('returns nextAction wait for a pending turn without a recovery side effect', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.service.start();
+    const promptPath = join(fixture.root, 'wait-prompt.md');
+    await writeFile(promptPath, 'pending');
+    await fixture.service.send(task.taskId, promptPath, []);
+    fixture.browser.sessionAvailabilityResult = 'missing';
+
+    const status = await fixture.service.recover(task.taskId);
+    expect(status).toMatchObject({ turnStatus: 'pending', nextAction: 'wait' });
+    expect(fixture.browser.startCount).toBe(1);
+  });
+
+  it('rebuilds a missing bound browser session and restores the canonical conversation', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.service.start();
+    const promptPath = join(fixture.root, 'bound-prompt.md');
+    await writeFile(promptPath, 'bound');
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+    await fixture.service.wait(task.taskId, turn.turnId, 20_000, 20_000);
+    fixture.browser.sessionAvailabilityResult = 'missing';
+
+    const status = await fixture.service.recover(task.taskId);
+    expect(status).toMatchObject({ taskStatus: 'active', browserStatus: 'available', nextAction: 'none' });
+    expect(fixture.browser.startCount).toBe(2);
+    expect(fixture.browser.recoveredConversations).toEqual([task.taskId]);
+  });
+
+  it('resumes a starting task with its recorded session identity', async () => {
+    const fixture = await serviceFixture();
+    const taskId = 'task-starting';
+    const store = new StateStore(fixture.paths.database);
+    store.createTask(taskId, `chatgpt-pro-collab-${taskId}`, 'starting');
+    store.createOperation({
+      id: 'start-op',
+      kind: 'start',
+      step: 'session',
+      taskId,
+      turnId: null,
+      sessionName: `chatgpt-pro-collab-${taskId}`,
+    });
+    store.close();
+    await writeFile(fixture.paths.seedState, '{}');
+
+    const status = await fixture.service.recover(taskId);
+    expect(status).toMatchObject({ taskStatus: 'active', operationPhase: null, nextAction: 'none' });
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireOperation('start-op')).toMatchObject({ phase: 'committed' });
+    reopened.close();
+  });
+
+  it('binds a submitted adjudication to the unique user turn with human evidence', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const taskId = 'adjudicated-task';
+    const turnId = 'adjudicated-turn';
+    const promptPath = join(fixture.root, 'resolve-prompt.md');
+    await writeFile(promptPath, 'resolved prompt');
+    const store = new StateStore(fixture.paths.database);
+    store.createTask(taskId, `chatgpt-pro-collab-${taskId}`);
+    store.beginTurn(taskId, turnId, promptPath, []);
+    store.markSubmissionAttempting(taskId, turnId);
+    store.createOperation({
+      id: 'send-op',
+      kind: 'send',
+      step: 'submit',
+      taskId,
+      turnId,
+      sessionName: `chatgpt-pro-collab-${taskId}`,
+    });
+    store.markOperationEffectUnknown('send-op');
+    store.markOperationNeedsDecision('send-op');
+    store.close();
+    await savePromptCopy(fixture.paths, taskId, turnId, Buffer.from('resolved prompt'));
+
+    const status = await fixture.service.resolveSubmission(
+      taskId,
+      turnId,
+      'submitted',
+      'https://chatgpt.com/c/conversation-adjudicated-task',
+    );
+    expect(status).toMatchObject({ turnStatus: 'pending', nextAction: 'wait' });
+    const reopened = new StateStore(fixture.paths.database);
+    const resolved = reopened.requireTurn(taskId, turnId);
+    expect(resolved).toMatchObject({ status: 'pending', userTurnIdentity: `user-turn-${taskId}` });
+    expect(reopened.requireOperation('send-op')).toMatchObject({
+      phase: 'committed',
+      resolutionSource: 'human',
+      evidence: { decision: 'submitted', promptVerbatimMatch: true, attachmentNamesMatch: true },
+    });
+    reopened.close();
+    expect(fixture.browser.resolvedSubmissions).toEqual([taskId]);
+  });
+
+  it('fails a not-submitted adjudication after verifying the safe composer', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const taskId = 'not-sent-task';
+    const turnId = 'not-sent-turn';
+    const promptPath = join(fixture.root, 'not-sent-prompt.md');
+    await writeFile(promptPath, 'not sent');
+    const store = new StateStore(fixture.paths.database);
+    store.createTask(taskId, `chatgpt-pro-collab-${taskId}`);
+    store.beginTurn(taskId, turnId, promptPath, []);
+    store.markSubmissionAttempting(taskId, turnId);
+    store.createOperation({
+      id: 'send-op',
+      kind: 'send',
+      step: 'submit',
+      taskId,
+      turnId,
+      sessionName: `chatgpt-pro-collab-${taskId}`,
+    });
+    store.markOperationEffectUnknown('send-op');
+    store.markOperationNeedsDecision('send-op');
+    store.close();
+    await savePromptCopy(fixture.paths, taskId, turnId, Buffer.from('not sent'));
+
+    const status = await fixture.service.resolveSubmission(taskId, turnId, 'not-submitted');
+    expect(status).toMatchObject({ turnStatus: null, nextAction: 'none' });
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireTurn(taskId, turnId)).toMatchObject({
+      status: 'failed',
+      error: expect.stringContaining('was not submitted'),
+    });
+    expect(reopened.requireOperation('send-op')).toMatchObject({ phase: 'committed', resolutionSource: 'human' });
+    reopened.close();
+    expect(fixture.browser.safeComposersVerified).toEqual([taskId]);
+  });
+
+  it('rejects a non-canonical adjudication URL before any browser action', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.service.start();
+    const promptPath = join(fixture.root, 'url-prompt.md');
+    await writeFile(promptPath, 'url');
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+
+    await expect(
+      fixture.service.resolveSubmission(task.taskId, turn.turnId, 'submitted', 'https://evil.example.com/c/x'),
+    ).rejects.toMatchObject({ code: 'USAGE' });
+    await expect(
+      fixture.service.resolveSubmission(
+        task.taskId,
+        turn.turnId,
+        'submitted',
+        'https://chatgpt.com/c/conversation-a?query=1',
+      ),
+    ).rejects.toMatchObject({ code: 'USAGE' });
+    expect(fixture.browser.resolvedSubmissions).toEqual([]);
+  });
+
+  it('rejects an adjudication on a non-unknown-submission turn', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.service.start();
+    const promptPath = join(fixture.root, 'wrong-state-prompt.md');
+    await writeFile(promptPath, 'wrong state');
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+
+    await expect(
+      fixture.service.resolveSubmission(task.taskId, turn.turnId, 'submitted', 'https://chatgpt.com/c/x'),
+    ).rejects.toMatchObject({ code: 'TURN_NOT_RESOLVABLE' });
+  });
+
+  it('prints status, recover, and both resolve-submission forms in stable help', async () => {
+    const fixture = await serviceFixture();
+    const output: string[] = [];
+    const errors: string[] = [];
+    const io: CliIo = {
+      writeOutput(value) {
+        output.push(value);
+      },
+      writeError(value) {
+        errors.push(value);
+      },
+    };
+
+    await expect(runCli(['--', 'help'], fixture.service, io)).resolves.toBe(0);
+    expect(output.join('')).toContain('node "<skill-directory>/scripts/collab.ts" status <taskId>');
+    expect(output.join('')).toContain('node "<skill-directory>/scripts/collab.ts" recover <taskId>');
+    expect(output.join('')).toContain('resolve-submission <taskId> <turnId> submitted <conversationUrl>');
+    expect(output.join('')).toContain('resolve-submission <taskId> <turnId> not-submitted');
+    await expect(runCli(['resolve-submission', 'task-a', 'turn-a', 'maybe'], fixture.service, io)).resolves.toBe(1);
+    expect(JSON.parse(errors.at(-1) ?? '{}')).toMatchObject({
+      ok: false,
+      error: { code: 'USAGE', message: expect.stringContaining('submitted or not-submitted') },
+    });
+  });
+});
+
 class FailTaskAfterArchiveLeaseStore extends StateStore {
   /**
    * Simulates a lifecycle transition committed at the lease-acquisition boundary.
@@ -748,11 +984,16 @@ class FakeBrowser implements CollabBrowser {
   readonly conversations = new Map<string, string>();
   readonly closed: string[] = [];
   readonly archived: string[] = [];
+  readonly recoveredConversations: string[] = [];
+  readonly resolvedSubmissions: string[] = [];
+  readonly safeComposersVerified: string[] = [];
   readonly expectedConversationIds: Array<string | null> = [];
   readonly expectedAssistantTurnIds: Array<string | null> = [];
   readonly responseArtifacts: Array<{ readonly sourceUrl: string; readonly label: string }> = [];
   readonly downloadedArtifacts: string[] = [];
   nextDownloadFailureSourceUrl: string | null = null;
+  sessionAvailabilityResult: 'available' | 'missing' | 'unknown' = 'available';
+  nextNotSubmittedFailureTaskId: string | null = null;
   observedOperations = 0;
   nextSendStatus: 'submitted' | 'not-submitted' | 'unknown-submission' | 'unsafe-not-submitted' = 'submitted';
   pendingWaitPolls = 0;
@@ -771,6 +1012,7 @@ class FakeBrowser implements CollabBrowser {
   nextCaptureFailureTaskId: string | null = null;
   startCount = 0;
   nextChildPid = 20_000;
+  nextUserTurnOrdinal = 0;
 
   /**
    * Creates a deterministic browser boundary rooted in the test data directory.
@@ -804,6 +1046,7 @@ class FakeBrowser implements CollabBrowser {
    */
   startTask(taskId: string, _sessionName: string, _seedStatePath: string) {
     this.startCount += 1;
+    this.sessionAvailabilityResult = 'available';
     return Promise.resolve({
       pid: 10_000 + this.startCount,
       url: 'https://chatgpt.com/',
@@ -852,11 +1095,111 @@ class FakeBrowser implements CollabBrowser {
     const conversationId = this.conversations.get(taskId) ?? `conversation-${taskId}`;
     this.conversations.set(taskId, conversationId);
     beforeSubmissionRelease?.();
+    this.nextUserTurnOrdinal += 1;
     return Promise.resolve({
       status: 'submitted' as const,
       conversationId,
       conversationUrl: `https://chatgpt.com/c/${conversationId}`,
+      userTurnIdentity: `user-turn-${taskId}-${this.nextUserTurnOrdinal}`,
     });
+  }
+
+  /**
+   * Returns the fake session availability probe result.
+   *
+   * @param _sessionName Unused named session.
+   * @returns The configured availability classification.
+   * @throws {Error} This fake probe does not throw.
+   */
+  async sessionAvailability(_sessionName: string) {
+    return this.sessionAvailabilityResult;
+  }
+
+  /**
+   * Records one fake conversation recovery navigation.
+   *
+   * @param taskId Task identifier.
+   * @param _sessionName Unused named session.
+   * @param conversationUrl Recorded canonical URL.
+   * @param conversationId Database-bound identity.
+   * @param observer Task-lease child-process observer.
+   * @returns The recovered conversation identity.
+   * @throws {Error} This fake recovery does not throw.
+   */
+  async recoverConversation(
+    taskId: string,
+    _sessionName: string,
+    conversationUrl: string,
+    conversationId: string,
+    observer?: BrowserOperationObserver,
+  ) {
+    this.observe(observer);
+    this.recoveredConversations.push(taskId);
+    return Promise.resolve({ conversationId, conversationUrl });
+  }
+
+  /**
+   * Returns a fake unique matching user turn for a submitted adjudication.
+   *
+   * @param taskId Task identifier.
+   * @param _sessionName Unused named session.
+   * @param _canonicalUrl Supplied canonical URL.
+   * @param expectedConversationId Database-bound identity.
+   * @param _previousUserTurnIdentity Unused anchor.
+   * @param _prompt Unused saved prompt.
+   * @param _attachmentNames Unused ordered attachment names.
+   * @param observer Task-lease child-process observer.
+   * @returns The adjudicated conversation and user turn identity.
+   * @throws {Error} This fake resolution does not throw.
+   */
+  async resolveSubmittedConversation(
+    taskId: string,
+    _sessionName: string,
+    _canonicalUrl: string,
+    expectedConversationId: string | null,
+    _previousUserTurnIdentity: string | null,
+    _prompt: string,
+    _attachmentNames: readonly string[],
+    observer?: BrowserOperationObserver,
+  ) {
+    this.observe(observer);
+    this.resolvedSubmissions.push(taskId);
+    const conversationId = expectedConversationId ?? `conversation-${taskId}`;
+    return Promise.resolve({
+      conversationId,
+      conversationUrl: `https://chatgpt.com/c/${conversationId}`,
+      userTurnIdentity: `user-turn-${taskId}`,
+    });
+  }
+
+  /**
+   * Records one fake safe-composer verification.
+   *
+   * @param taskId Task identifier.
+   * @param _sessionName Unused named session.
+   * @param _expectedConversationId Unused bound identity.
+   * @param _previousUserTurnIdentity Unused anchor.
+   * @param _prompt Unused saved prompt.
+   * @param _attachmentNames Unused ordered attachment names.
+   * @param observer Task-lease child-process observer.
+   * @returns Nothing after the fake verification.
+   * @throws {Error} If the injected not-submitted failure is armed.
+   */
+  async verifySafeComposer(
+    taskId: string,
+    _sessionName: string,
+    _expectedConversationId: string | null,
+    _previousUserTurnIdentity: string | null,
+    _prompt: string,
+    _attachmentNames: readonly string[],
+    observer?: BrowserOperationObserver,
+  ) {
+    this.observe(observer);
+    if (this.nextNotSubmittedFailureTaskId === taskId) {
+      this.nextNotSubmittedFailureTaskId = null;
+      throw new Error('injected safe composer verification failure');
+    }
+    this.safeComposersVerified.push(taskId);
   }
 
   /**
