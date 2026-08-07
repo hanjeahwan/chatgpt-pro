@@ -14,7 +14,7 @@ description: 用于用户明确要求按 `docs/specs/*.md` 实现并提交、在
 记录能够从仓库和 Orca 当前状态证明的以下运行上下文：
 
 - 目标分支；
-- task worktree、task branch、implementation terminal 和 integration candidate；
+- task worktree、task branch 和 implementation terminal；
 - 当前可执行或待收口的 `IMP-*`；
 - 根 Review Task、原 reviewer terminal 和未关闭 finding；
 - 未完成验证及其外部资源。
@@ -29,7 +29,7 @@ description: 用于用户明确要求按 `docs/specs/*.md` 实现并提交、在
 | ---------------------------------------------------------------------- | ------------------------------------ |
 | task branch/worktree 尚未建立、账本与 Spec 不一致，或 Child 尚未放行   | `references/prepare-and-dispatch.md` |
 | Child 已放行，存在可执行 IMP、实施者验证或 implementation finding 修复 | `references/implement-and-verify.md` |
-| 实施者已完成 task branch，等待最终候选、双重验证、Review 或集成        | `references/review-and-integrate.md` |
+| 实施者已完成 task branch，等待目标分支同步、双重验证、Review 或集成    | `references/review-and-integrate.md` |
 
 Spec 在执行中需要更新时，复用同一 task branch/worktree 返回准备阶段，并按 `prepare-and-dispatch.md` 的更新路径重新通过 Ready Gate 与 Child Gate。Review finding 需要修复时，先由实施者执行实现与验证阶段，再由同一审查者复审。Implementation 阶段遇到产品决策、需协调员执行的外部验证或未知项时，实施者报告当前影响；是否继续、更新 Spec 或进入 Spike 由协调员决定。
 
@@ -47,4 +47,4 @@ Spec 在执行中需要更新时，复用同一 task branch/worktree 返回准�
 
 任一 Gate 未通过时停在当前阶段，按对应 reference 的失败处理报告缺口。禁止跨过 Gate、伪造证据或把未运行验证报告为通过。
 
-只有 `WORKFLOW.md` 的交付前检查全部通过、被审 integration candidate 已集成且未验证项与剩余风险已报告时，才能声明整个工作流完成。
+只有 `WORKFLOW.md` 的交付前检查全部通过、被审 task branch 已集成且未验证项与剩余风险已报告时，才能声明整个工作流完成。

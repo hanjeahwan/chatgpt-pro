@@ -36,11 +36,11 @@
 
 - 新提交使用 Unicode Gitmoji，格式为 `<gitmoji> (<scope>): <summary>`；没有有意义的 scope 时省略 `(<scope>):`。
 - 每个提交只使用一个表示主要意图的 Gitmoji，不再叠加 `feat:`、`fix:`、`docs:` 等类型前缀。
-- 默认保持线性历史：任务分支保持隔离；任务完成后，由协调员通过 integration candidate 同步目标分支并执行 fast-forward 集成。
+- 默认保持线性历史：任务分支在实施期间保持隔离；任务完成后，由协调员在同一任务分支上同步目标分支并执行 fast-forward 集成。
 - 只有用户明确要求保留分支拓扑，或上游同步必须保留 merge 关系时，才能创建 merge commit。
 - 创建 merge commit 时，在最终报告中说明原因。
 
-按 Spec 实施时，task branch 的隔离、integration candidate、Review 冻结和集成步骤以 `execute-spec-workflow` Skill 为准。
+按 Spec 实施时，task branch 的隔离、目标分支同步、Review 冻结和集成步骤以 `execute-spec-workflow` Skill 为准。
 
 ## Markdown 文档格式
 

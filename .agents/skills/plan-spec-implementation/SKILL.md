@@ -109,7 +109,7 @@ node <skill-directory>/scripts/spec-tasks.ts diff --spec docs/specs/<spec>.md --
 - 不创建、修订或补写 Spec；产品变化返回上游规格流程。
 - 不根据任务账本推断产品行为；发生冲突时始终以当前 Spec 为准。
 - 不把章节序号、数组位置、commit 顺序或运行时计划 ID 当作稳定身份。
-- 不为任务状态维护 Git revision 字段；task branch 是隔离实施成果的持久身份，integration candidate 由 `execute-spec-workflow` 在运行时通过 Git 生成和校验。
+- 不为任务状态维护 Git revision 字段；task branch 是实施、验证、Review 和集成的持久 Git 身份，所需 revision 由 `execute-spec-workflow` 在运行时校验。
 - 不删除历史任务来伪造完成，不为旧账本格式增加迁移或兼容分支。
 - 本 Skill 不代替 `WORKFLOW.md` 的实现、验证、提交和 Review 流程。
 
