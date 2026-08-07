@@ -36,7 +36,7 @@
     {
       "id": "IMP-001",
       "title": "固化共享认证源",
-      "status": "implemented",
+      "status": "done",
       "covers": ["BEH-001"],
       "verifies": ["VER-001"],
       "dependsOn": ["IMP-010"],
@@ -56,13 +56,15 @@
           "二次 Verification 阻塞修复（代码提交 7cd5a15）：verifyAuthenticatedSeed 的验证 session close 失败不再被吞掉——close 失败抛 BROWSER_CLEANUP_FAILED 使本次验证/setup 失败，且保留并合并原始失败；未认证裁决仍为正常结果但同样要求清理成功。新增确定性测试：页面检查成功但 close 失败必须失败、打开失败且 close 失败需同时报告两者、未认证裁决加 close 失败必须失败、验证 session 绝不误关交互 setup session；221 tests 全绿。",
           "最终独立复审 6 项 finding 修复（代码提交 e208d16），并修正此前 evidence 中被反例推翻的完成性陈述：① unbound not-submitted 的 Project wait 不再在 waitForFunction 序列化回调中引用外层 projectPathOk——Project identity 作为参数传入、纯判断内联，fixture 按真实 Playwright 序列化边界执行回调；② staged attachment 由 composer 内真实 attachment chip/remove-control 结构（remove/delete 按钮 aria-label 或 file/attachment testid）证明为 0，不再用扩展名或 attachmentNames 猜测，LICENSE(1)/无扩展名/长扩展名/非 ASCII 均被拒绝；③ setupClose 返回 sessionClosed:false/unknown 时不再 commit setup，抛 SETUP_SESSION_NOT_CLOSED 保持 cleanup 未完成，重复 setup 在同一 operation 上继续清理；④ prompt reader 只按 heading 的 DOM/role（H1-H6/role=heading）排除唯一无障碍标题，不再按文本排除任意 You said: leaf，空 prompt+附件与正文恰为 You said: 逐字可区分；⑤ seed 认证谓词同时验证 chatgpt.com 页面身份、唯一可见 composer 与无登录控件，about:blank/错误/重定向/未 hydration 页面不可认证 seed，测试实际执行生成的谓词；⑥ seed/effect-unknown + 结构合法但页面认证失效时重新进入交互登录、保存并验证新 seed 以继续同一 operation，不再永久 SEED_NOT_AUTHENTICATED。format:check/lint/typecheck/test(229) 全绿；reviews 保持为空，未写 Review 通过结论。"
         ],
-        "reviews": []
+        "reviews": [
+          "最终独立验收复审（Review Gate passed）：报告 /Users/codeartz/.local/chatgpt-pro-collab/verification/2026-08-07-independent-final-acceptance-review/review.md，审查范围 main@27e6d907..f30bdd0（重点提交 e208d16/f30bdd0）；Critical/High/Medium/Low 均 0，上一轮 6 项 finding 全部关闭，Review Gate 可通过。协调员独立 Verification：229 tests 全绿、真实空 Project composer attachment-control 匹配 0、无浏览器残留。未验证边界保留：真实 Web destructive interruption matrix 未独立重跑。"
+        ]
       }
     },
     {
       "id": "IMP-002",
       "title": "建立逐 turn 状态与可审计 transcript",
-      "status": "implemented",
+      "status": "done",
       "covers": ["BEH-007"],
       "verifies": [],
       "dependsOn": ["IMP-010"],
@@ -81,13 +83,15 @@
           "二次 Verification 阻塞修复（代码提交 7cd5a15）：verifyAuthenticatedSeed 的验证 session close 失败不再被吞掉——close 失败抛 BROWSER_CLEANUP_FAILED 使本次验证/setup 失败，且保留并合并原始失败；未认证裁决仍为正常结果但同样要求清理成功。新增确定性测试：页面检查成功但 close 失败必须失败、打开失败且 close 失败需同时报告两者、未认证裁决加 close 失败必须失败、验证 session 绝不误关交互 setup session；221 tests 全绿。",
           "最终独立复审 6 项 finding 修复（代码提交 e208d16），并修正此前 evidence 中被反例推翻的完成性陈述：① unbound not-submitted 的 Project wait 不再在 waitForFunction 序列化回调中引用外层 projectPathOk——Project identity 作为参数传入、纯判断内联，fixture 按真实 Playwright 序列化边界执行回调；② staged attachment 由 composer 内真实 attachment chip/remove-control 结构（remove/delete 按钮 aria-label 或 file/attachment testid）证明为 0，不再用扩展名或 attachmentNames 猜测，LICENSE(1)/无扩展名/长扩展名/非 ASCII 均被拒绝；③ setupClose 返回 sessionClosed:false/unknown 时不再 commit setup，抛 SETUP_SESSION_NOT_CLOSED 保持 cleanup 未完成，重复 setup 在同一 operation 上继续清理；④ prompt reader 只按 heading 的 DOM/role（H1-H6/role=heading）排除唯一无障碍标题，不再按文本排除任意 You said: leaf，空 prompt+附件与正文恰为 You said: 逐字可区分；⑤ seed 认证谓词同时验证 chatgpt.com 页面身份、唯一可见 composer 与无登录控件，about:blank/错误/重定向/未 hydration 页面不可认证 seed，测试实际执行生成的谓词；⑥ seed/effect-unknown + 结构合法但页面认证失效时重新进入交互登录、保存并验证新 seed 以继续同一 operation，不再永久 SEED_NOT_AUTHENTICATED。format:check/lint/typecheck/test(229) 全绿；reviews 保持为空，未写 Review 通过结论。"
         ],
-        "reviews": []
+        "reviews": [
+          "最终独立验收复审（Review Gate passed）：报告 /Users/codeartz/.local/chatgpt-pro-collab/verification/2026-08-07-independent-final-acceptance-review/review.md，审查范围 main@27e6d907..f30bdd0（重点提交 e208d16/f30bdd0）；Critical/High/Medium/Low 均 0，上一轮 6 项 finding 全部关闭，Review Gate 可通过。协调员独立 Verification：229 tests 全绿、真实空 Project composer attachment-control 匹配 0、无浏览器残留。未验证边界保留：真实 Web destructive interruption matrix 未独立重跑。"
+        ]
       }
     },
     {
       "id": "IMP-003",
       "title": "发送显式输入并支持单归档附件",
-      "status": "implemented",
+      "status": "done",
       "covers": ["BEH-003", "BEH-010"],
       "verifies": ["VER-003", "VER-013"],
       "dependsOn": ["IMP-001", "IMP-002", "IMP-009", "IMP-010"],
@@ -108,13 +112,15 @@
           "二次 Verification 阻塞修复（代码提交 7cd5a15）：verifyAuthenticatedSeed 的验证 session close 失败不再被吞掉——close 失败抛 BROWSER_CLEANUP_FAILED 使本次验证/setup 失败，且保留并合并原始失败；未认证裁决仍为正常结果但同样要求清理成功。新增确定性测试：页面检查成功但 close 失败必须失败、打开失败且 close 失败需同时报告两者、未认证裁决加 close 失败必须失败、验证 session 绝不误关交互 setup session；221 tests 全绿。",
           "最终独立复审 6 项 finding 修复（代码提交 e208d16），并修正此前 evidence 中被反例推翻的完成性陈述：① unbound not-submitted 的 Project wait 不再在 waitForFunction 序列化回调中引用外层 projectPathOk——Project identity 作为参数传入、纯判断内联，fixture 按真实 Playwright 序列化边界执行回调；② staged attachment 由 composer 内真实 attachment chip/remove-control 结构（remove/delete 按钮 aria-label 或 file/attachment testid）证明为 0，不再用扩展名或 attachmentNames 猜测，LICENSE(1)/无扩展名/长扩展名/非 ASCII 均被拒绝；③ setupClose 返回 sessionClosed:false/unknown 时不再 commit setup，抛 SETUP_SESSION_NOT_CLOSED 保持 cleanup 未完成，重复 setup 在同一 operation 上继续清理；④ prompt reader 只按 heading 的 DOM/role（H1-H6/role=heading）排除唯一无障碍标题，不再按文本排除任意 You said: leaf，空 prompt+附件与正文恰为 You said: 逐字可区分；⑤ seed 认证谓词同时验证 chatgpt.com 页面身份、唯一可见 composer 与无登录控件，about:blank/错误/重定向/未 hydration 页面不可认证 seed，测试实际执行生成的谓词；⑥ seed/effect-unknown + 结构合法但页面认证失效时重新进入交互登录、保存并验证新 seed 以继续同一 operation，不再永久 SEED_NOT_AUTHENTICATED。format:check/lint/typecheck/test(229) 全绿；reviews 保持为空，未写 Review 通过结论。"
         ],
-        "reviews": []
+        "reviews": [
+          "最终独立验收复审（Review Gate passed）：报告 /Users/codeartz/.local/chatgpt-pro-collab/verification/2026-08-07-independent-final-acceptance-review/review.md，审查范围 main@27e6d907..f30bdd0（重点提交 e208d16/f30bdd0）；Critical/High/Medium/Low 均 0，上一轮 6 项 finding 全部关闭，Review Gate 可通过。协调员独立 Verification：229 tests 全绿、真实空 Project composer attachment-control 匹配 0、无浏览器残留。未验证边界保留：真实 Web destructive interruption matrix 未独立重跑。"
+        ]
       }
     },
     {
       "id": "IMP-004",
       "title": "实现单次 wait 的内部观察与原始文字捕获",
-      "status": "implemented",
+      "status": "done",
       "covers": ["BEH-004", "BEH-011"],
       "verifies": ["VER-004", "VER-014"],
       "dependsOn": ["IMP-001", "IMP-002", "IMP-003", "IMP-009", "IMP-010"],
@@ -134,13 +140,15 @@
           "二次 Verification 阻塞修复（代码提交 7cd5a15）：verifyAuthenticatedSeed 的验证 session close 失败不再被吞掉——close 失败抛 BROWSER_CLEANUP_FAILED 使本次验证/setup 失败，且保留并合并原始失败；未认证裁决仍为正常结果但同样要求清理成功。新增确定性测试：页面检查成功但 close 失败必须失败、打开失败且 close 失败需同时报告两者、未认证裁决加 close 失败必须失败、验证 session 绝不误关交互 setup session；221 tests 全绿。",
           "最终独立复审 6 项 finding 修复（代码提交 e208d16），并修正此前 evidence 中被反例推翻的完成性陈述：① unbound not-submitted 的 Project wait 不再在 waitForFunction 序列化回调中引用外层 projectPathOk——Project identity 作为参数传入、纯判断内联，fixture 按真实 Playwright 序列化边界执行回调；② staged attachment 由 composer 内真实 attachment chip/remove-control 结构（remove/delete 按钮 aria-label 或 file/attachment testid）证明为 0，不再用扩展名或 attachmentNames 猜测，LICENSE(1)/无扩展名/长扩展名/非 ASCII 均被拒绝；③ setupClose 返回 sessionClosed:false/unknown 时不再 commit setup，抛 SETUP_SESSION_NOT_CLOSED 保持 cleanup 未完成，重复 setup 在同一 operation 上继续清理；④ prompt reader 只按 heading 的 DOM/role（H1-H6/role=heading）排除唯一无障碍标题，不再按文本排除任意 You said: leaf，空 prompt+附件与正文恰为 You said: 逐字可区分；⑤ seed 认证谓词同时验证 chatgpt.com 页面身份、唯一可见 composer 与无登录控件，about:blank/错误/重定向/未 hydration 页面不可认证 seed，测试实际执行生成的谓词；⑥ seed/effect-unknown + 结构合法但页面认证失效时重新进入交互登录、保存并验证新 seed 以继续同一 operation，不再永久 SEED_NOT_AUTHENTICATED。format:check/lint/typecheck/test(229) 全绿；reviews 保持为空，未写 Review 通过结论。"
         ],
-        "reviews": []
+        "reviews": [
+          "最终独立验收复审（Review Gate passed）：报告 /Users/codeartz/.local/chatgpt-pro-collab/verification/2026-08-07-independent-final-acceptance-review/review.md，审查范围 main@27e6d907..f30bdd0（重点提交 e208d16/f30bdd0）；Critical/High/Medium/Low 均 0，上一轮 6 项 finding 全部关闭，Review Gate 可通过。协调员独立 Verification：229 tests 全绿、真实空 Project composer attachment-control 匹配 0、无浏览器残留。未验证边界保留：真实 Web destructive interruption matrix 未独立重跑。"
+        ]
       }
     },
     {
       "id": "IMP-005",
       "title": "捕获返回文件并支持可恢复发布",
-      "status": "implemented",
+      "status": "done",
       "covers": ["BEH-012"],
       "verifies": ["VER-015"],
       "dependsOn": ["IMP-002", "IMP-004", "IMP-010"],
@@ -159,13 +167,15 @@
           "二次 Verification 阻塞修复（代码提交 7cd5a15）：verifyAuthenticatedSeed 的验证 session close 失败不再被吞掉——close 失败抛 BROWSER_CLEANUP_FAILED 使本次验证/setup 失败，且保留并合并原始失败；未认证裁决仍为正常结果但同样要求清理成功。新增确定性测试：页面检查成功但 close 失败必须失败、打开失败且 close 失败需同时报告两者、未认证裁决加 close 失败必须失败、验证 session 绝不误关交互 setup session；221 tests 全绿。",
           "最终独立复审 6 项 finding 修复（代码提交 e208d16），并修正此前 evidence 中被反例推翻的完成性陈述：① unbound not-submitted 的 Project wait 不再在 waitForFunction 序列化回调中引用外层 projectPathOk——Project identity 作为参数传入、纯判断内联，fixture 按真实 Playwright 序列化边界执行回调；② staged attachment 由 composer 内真实 attachment chip/remove-control 结构（remove/delete 按钮 aria-label 或 file/attachment testid）证明为 0，不再用扩展名或 attachmentNames 猜测，LICENSE(1)/无扩展名/长扩展名/非 ASCII 均被拒绝；③ setupClose 返回 sessionClosed:false/unknown 时不再 commit setup，抛 SETUP_SESSION_NOT_CLOSED 保持 cleanup 未完成，重复 setup 在同一 operation 上继续清理；④ prompt reader 只按 heading 的 DOM/role（H1-H6/role=heading）排除唯一无障碍标题，不再按文本排除任意 You said: leaf，空 prompt+附件与正文恰为 You said: 逐字可区分；⑤ seed 认证谓词同时验证 chatgpt.com 页面身份、唯一可见 composer 与无登录控件，about:blank/错误/重定向/未 hydration 页面不可认证 seed，测试实际执行生成的谓词；⑥ seed/effect-unknown + 结构合法但页面认证失效时重新进入交互登录、保存并验证新 seed 以继续同一 operation，不再永久 SEED_NOT_AUTHENTICATED。format:check/lint/typecheck/test(229) 全绿；reviews 保持为空，未写 Review 通过结论。"
         ],
-        "reviews": []
+        "reviews": [
+          "最终独立验收复审（Review Gate passed）：报告 /Users/codeartz/.local/chatgpt-pro-collab/verification/2026-08-07-independent-final-acceptance-review/review.md，审查范围 main@27e6d907..f30bdd0（重点提交 e208d16/f30bdd0）；Critical/High/Medium/Low 均 0，上一轮 6 项 finding 全部关闭，Review Gate 可通过。协调员独立 Verification：229 tests 全绿、真实空 Project composer attachment-control 匹配 0、无浏览器残留。未验证边界保留：真实 Web destructive interruption matrix 未独立重跑。"
+        ]
       }
     },
     {
       "id": "IMP-006",
       "title": "完成同会话多轮与跨任务真实并发",
-      "status": "implemented",
+      "status": "done",
       "covers": ["BEH-005", "BEH-006"],
       "verifies": ["VER-005", "VER-006"],
       "dependsOn": ["IMP-003", "IMP-004", "IMP-005", "IMP-009", "IMP-010"],
@@ -185,13 +195,15 @@
           "二次 Verification 阻塞修复（代码提交 7cd5a15）：verifyAuthenticatedSeed 的验证 session close 失败不再被吞掉——close 失败抛 BROWSER_CLEANUP_FAILED 使本次验证/setup 失败，且保留并合并原始失败；未认证裁决仍为正常结果但同样要求清理成功。新增确定性测试：页面检查成功但 close 失败必须失败、打开失败且 close 失败需同时报告两者、未认证裁决加 close 失败必须失败、验证 session 绝不误关交互 setup session；221 tests 全绿。",
           "最终独立复审 6 项 finding 修复（代码提交 e208d16），并修正此前 evidence 中被反例推翻的完成性陈述：① unbound not-submitted 的 Project wait 不再在 waitForFunction 序列化回调中引用外层 projectPathOk——Project identity 作为参数传入、纯判断内联，fixture 按真实 Playwright 序列化边界执行回调；② staged attachment 由 composer 内真实 attachment chip/remove-control 结构（remove/delete 按钮 aria-label 或 file/attachment testid）证明为 0，不再用扩展名或 attachmentNames 猜测，LICENSE(1)/无扩展名/长扩展名/非 ASCII 均被拒绝；③ setupClose 返回 sessionClosed:false/unknown 时不再 commit setup，抛 SETUP_SESSION_NOT_CLOSED 保持 cleanup 未完成，重复 setup 在同一 operation 上继续清理；④ prompt reader 只按 heading 的 DOM/role（H1-H6/role=heading）排除唯一无障碍标题，不再按文本排除任意 You said: leaf，空 prompt+附件与正文恰为 You said: 逐字可区分；⑤ seed 认证谓词同时验证 chatgpt.com 页面身份、唯一可见 composer 与无登录控件，about:blank/错误/重定向/未 hydration 页面不可认证 seed，测试实际执行生成的谓词；⑥ seed/effect-unknown + 结构合法但页面认证失效时重新进入交互登录、保存并验证新 seed 以继续同一 operation，不再永久 SEED_NOT_AUTHENTICATED。format:check/lint/typecheck/test(229) 全绿；reviews 保持为空，未写 Review 通过结论。"
         ],
-        "reviews": []
+        "reviews": [
+          "最终独立验收复审（Review Gate passed）：报告 /Users/codeartz/.local/chatgpt-pro-collab/verification/2026-08-07-independent-final-acceptance-review/review.md，审查范围 main@27e6d907..f30bdd0（重点提交 e208d16/f30bdd0）；Critical/High/Medium/Low 均 0，上一轮 6 项 finding 全部关闭，Review Gate 可通过。协调员独立 Verification：229 tests 全绿、真实空 Project composer attachment-control 匹配 0、无浏览器残留。未验证边界保留：真实 Web destructive interruption matrix 未独立重跑。"
+        ]
       }
     },
     {
       "id": "IMP-007",
       "title": "分离本地关闭与 Web conversation 归档",
-      "status": "implemented",
+      "status": "done",
       "covers": ["BEH-008", "BEH-009"],
       "verifies": ["VER-008", "VER-009"],
       "dependsOn": ["IMP-001", "IMP-002", "IMP-010"],
@@ -211,13 +223,15 @@
           "二次 Verification 阻塞修复（代码提交 7cd5a15）：verifyAuthenticatedSeed 的验证 session close 失败不再被吞掉——close 失败抛 BROWSER_CLEANUP_FAILED 使本次验证/setup 失败，且保留并合并原始失败；未认证裁决仍为正常结果但同样要求清理成功。新增确定性测试：页面检查成功但 close 失败必须失败、打开失败且 close 失败需同时报告两者、未认证裁决加 close 失败必须失败、验证 session 绝不误关交互 setup session；221 tests 全绿。",
           "最终独立复审 6 项 finding 修复（代码提交 e208d16），并修正此前 evidence 中被反例推翻的完成性陈述：① unbound not-submitted 的 Project wait 不再在 waitForFunction 序列化回调中引用外层 projectPathOk——Project identity 作为参数传入、纯判断内联，fixture 按真实 Playwright 序列化边界执行回调；② staged attachment 由 composer 内真实 attachment chip/remove-control 结构（remove/delete 按钮 aria-label 或 file/attachment testid）证明为 0，不再用扩展名或 attachmentNames 猜测，LICENSE(1)/无扩展名/长扩展名/非 ASCII 均被拒绝；③ setupClose 返回 sessionClosed:false/unknown 时不再 commit setup，抛 SETUP_SESSION_NOT_CLOSED 保持 cleanup 未完成，重复 setup 在同一 operation 上继续清理；④ prompt reader 只按 heading 的 DOM/role（H1-H6/role=heading）排除唯一无障碍标题，不再按文本排除任意 You said: leaf，空 prompt+附件与正文恰为 You said: 逐字可区分；⑤ seed 认证谓词同时验证 chatgpt.com 页面身份、唯一可见 composer 与无登录控件，about:blank/错误/重定向/未 hydration 页面不可认证 seed，测试实际执行生成的谓词；⑥ seed/effect-unknown + 结构合法但页面认证失效时重新进入交互登录、保存并验证新 seed 以继续同一 operation，不再永久 SEED_NOT_AUTHENTICATED。format:check/lint/typecheck/test(229) 全绿；reviews 保持为空，未写 Review 通过结论。"
         ],
-        "reviews": []
+        "reviews": [
+          "最终独立验收复审（Review Gate passed）：报告 /Users/codeartz/.local/chatgpt-pro-collab/verification/2026-08-07-independent-final-acceptance-review/review.md，审查范围 main@27e6d907..f30bdd0（重点提交 e208d16/f30bdd0）；Critical/High/Medium/Low 均 0，上一轮 6 项 finding 全部关闭，Review Gate 可通过。协调员独立 Verification：229 tests 全绿、真实空 Project composer attachment-control 匹配 0、无浏览器残留。未验证边界保留：真实 Web destructive interruption matrix 未独立重跑。"
+        ]
       }
     },
     {
       "id": "IMP-008",
       "title": "完成中断恢复矩阵与全量运行基线验证",
-      "status": "implemented",
+      "status": "done",
       "covers": ["BEH-004", "BEH-006", "BEH-007", "BEH-012", "BEH-013"],
       "verifies": ["VER-007", "VER-010", "VER-011", "VER-012", "VER-016"],
       "dependsOn": ["IMP-001", "IMP-002", "IMP-003", "IMP-004", "IMP-005", "IMP-006", "IMP-007", "IMP-009", "IMP-010"],
@@ -240,13 +254,15 @@
           "二次 Verification 阻塞修复（代码提交 7cd5a15）：verifyAuthenticatedSeed 的验证 session close 失败不再被吞掉——close 失败抛 BROWSER_CLEANUP_FAILED 使本次验证/setup 失败，且保留并合并原始失败；未认证裁决仍为正常结果但同样要求清理成功。新增确定性测试：页面检查成功但 close 失败必须失败、打开失败且 close 失败需同时报告两者、未认证裁决加 close 失败必须失败、验证 session 绝不误关交互 setup session；221 tests 全绿。",
           "最终独立复审 6 项 finding 修复（代码提交 e208d16），并修正此前 evidence 中被反例推翻的完成性陈述：① unbound not-submitted 的 Project wait 不再在 waitForFunction 序列化回调中引用外层 projectPathOk——Project identity 作为参数传入、纯判断内联，fixture 按真实 Playwright 序列化边界执行回调；② staged attachment 由 composer 内真实 attachment chip/remove-control 结构（remove/delete 按钮 aria-label 或 file/attachment testid）证明为 0，不再用扩展名或 attachmentNames 猜测，LICENSE(1)/无扩展名/长扩展名/非 ASCII 均被拒绝；③ setupClose 返回 sessionClosed:false/unknown 时不再 commit setup，抛 SETUP_SESSION_NOT_CLOSED 保持 cleanup 未完成，重复 setup 在同一 operation 上继续清理；④ prompt reader 只按 heading 的 DOM/role（H1-H6/role=heading）排除唯一无障碍标题，不再按文本排除任意 You said: leaf，空 prompt+附件与正文恰为 You said: 逐字可区分；⑤ seed 认证谓词同时验证 chatgpt.com 页面身份、唯一可见 composer 与无登录控件，about:blank/错误/重定向/未 hydration 页面不可认证 seed，测试实际执行生成的谓词；⑥ seed/effect-unknown + 结构合法但页面认证失效时重新进入交互登录、保存并验证新 seed 以继续同一 operation，不再永久 SEED_NOT_AUTHENTICATED。format:check/lint/typecheck/test(229) 全绿；reviews 保持为空，未写 Review 通过结论。"
         ],
-        "reviews": []
+        "reviews": [
+          "最终独立验收复审（Review Gate passed）：报告 /Users/codeartz/.local/chatgpt-pro-collab/verification/2026-08-07-independent-final-acceptance-review/review.md，审查范围 main@27e6d907..f30bdd0（重点提交 e208d16/f30bdd0）；Critical/High/Medium/Low 均 0，上一轮 6 项 finding 全部关闭，Review Gate 可通过。协调员独立 Verification：229 tests 全绿、真实空 Project composer attachment-control 匹配 0、无浏览器残留。未验证边界保留：真实 Web destructive interruption matrix 未独立重跑。"
+        ]
       }
     },
     {
       "id": "IMP-009",
       "title": "建立固定 Project 与 GPT-5.6 Sol Power 5/5 启动上下文",
-      "status": "implemented",
+      "status": "done",
       "covers": ["BEH-002"],
       "verifies": ["VER-002"],
       "dependsOn": ["IMP-001", "IMP-010"],
@@ -266,13 +282,15 @@
           "二次 Verification 阻塞修复（代码提交 7cd5a15）：verifyAuthenticatedSeed 的验证 session close 失败不再被吞掉——close 失败抛 BROWSER_CLEANUP_FAILED 使本次验证/setup 失败，且保留并合并原始失败；未认证裁决仍为正常结果但同样要求清理成功。新增确定性测试：页面检查成功但 close 失败必须失败、打开失败且 close 失败需同时报告两者、未认证裁决加 close 失败必须失败、验证 session 绝不误关交互 setup session；221 tests 全绿。",
           "最终独立复审 6 项 finding 修复（代码提交 e208d16），并修正此前 evidence 中被反例推翻的完成性陈述：① unbound not-submitted 的 Project wait 不再在 waitForFunction 序列化回调中引用外层 projectPathOk——Project identity 作为参数传入、纯判断内联，fixture 按真实 Playwright 序列化边界执行回调；② staged attachment 由 composer 内真实 attachment chip/remove-control 结构（remove/delete 按钮 aria-label 或 file/attachment testid）证明为 0，不再用扩展名或 attachmentNames 猜测，LICENSE(1)/无扩展名/长扩展名/非 ASCII 均被拒绝；③ setupClose 返回 sessionClosed:false/unknown 时不再 commit setup，抛 SETUP_SESSION_NOT_CLOSED 保持 cleanup 未完成，重复 setup 在同一 operation 上继续清理；④ prompt reader 只按 heading 的 DOM/role（H1-H6/role=heading）排除唯一无障碍标题，不再按文本排除任意 You said: leaf，空 prompt+附件与正文恰为 You said: 逐字可区分；⑤ seed 认证谓词同时验证 chatgpt.com 页面身份、唯一可见 composer 与无登录控件，about:blank/错误/重定向/未 hydration 页面不可认证 seed，测试实际执行生成的谓词；⑥ seed/effect-unknown + 结构合法但页面认证失效时重新进入交互登录、保存并验证新 seed 以继续同一 operation，不再永久 SEED_NOT_AUTHENTICATED。format:check/lint/typecheck/test(229) 全绿；reviews 保持为空，未写 Review 通过结论。"
         ],
-        "reviews": []
+        "reviews": [
+          "最终独立验收复审（Review Gate passed）：报告 /Users/codeartz/.local/chatgpt-pro-collab/verification/2026-08-07-independent-final-acceptance-review/review.md，审查范围 main@27e6d907..f30bdd0（重点提交 e208d16/f30bdd0）；Critical/High/Medium/Low 均 0，上一轮 6 项 finding 全部关闭，Review Gate 可通过。协调员独立 Verification：229 tests 全绿、真实空 Project composer attachment-control 匹配 0、无浏览器残留。未验证边界保留：真实 Web destructive interruption matrix 未独立重跑。"
+        ]
       }
     },
     {
       "id": "IMP-010",
       "title": "建立 operation journal、状态检查与恢复裁决基础",
-      "status": "implemented",
+      "status": "done",
       "covers": ["BEH-013"],
       "verifies": [],
       "dependsOn": [],
@@ -293,7 +311,9 @@
           "二次 Verification 阻塞修复（代码提交 7cd5a15）：verifyAuthenticatedSeed 的验证 session close 失败不再被吞掉——close 失败抛 BROWSER_CLEANUP_FAILED 使本次验证/setup 失败，且保留并合并原始失败；未认证裁决仍为正常结果但同样要求清理成功。新增确定性测试：页面检查成功但 close 失败必须失败、打开失败且 close 失败需同时报告两者、未认证裁决加 close 失败必须失败、验证 session 绝不误关交互 setup session；221 tests 全绿。",
           "最终独立复审 6 项 finding 修复（代码提交 e208d16），并修正此前 evidence 中被反例推翻的完成性陈述：① unbound not-submitted 的 Project wait 不再在 waitForFunction 序列化回调中引用外层 projectPathOk——Project identity 作为参数传入、纯判断内联，fixture 按真实 Playwright 序列化边界执行回调；② staged attachment 由 composer 内真实 attachment chip/remove-control 结构（remove/delete 按钮 aria-label 或 file/attachment testid）证明为 0，不再用扩展名或 attachmentNames 猜测，LICENSE(1)/无扩展名/长扩展名/非 ASCII 均被拒绝；③ setupClose 返回 sessionClosed:false/unknown 时不再 commit setup，抛 SETUP_SESSION_NOT_CLOSED 保持 cleanup 未完成，重复 setup 在同一 operation 上继续清理；④ prompt reader 只按 heading 的 DOM/role（H1-H6/role=heading）排除唯一无障碍标题，不再按文本排除任意 You said: leaf，空 prompt+附件与正文恰为 You said: 逐字可区分；⑤ seed 认证谓词同时验证 chatgpt.com 页面身份、唯一可见 composer 与无登录控件，about:blank/错误/重定向/未 hydration 页面不可认证 seed，测试实际执行生成的谓词；⑥ seed/effect-unknown + 结构合法但页面认证失效时重新进入交互登录、保存并验证新 seed 以继续同一 operation，不再永久 SEED_NOT_AUTHENTICATED。format:check/lint/typecheck/test(229) 全绿；reviews 保持为空，未写 Review 通过结论。"
         ],
-        "reviews": []
+        "reviews": [
+          "最终独立验收复审（Review Gate passed）：报告 /Users/codeartz/.local/chatgpt-pro-collab/verification/2026-08-07-independent-final-acceptance-review/review.md，审查范围 main@27e6d907..f30bdd0（重点提交 e208d16/f30bdd0）；Critical/High/Medium/Low 均 0，上一轮 6 项 finding 全部关闭，Review Gate 可通过。协调员独立 Verification：229 tests 全绿、真实空 Project composer attachment-control 匹配 0、无浏览器残留。未验证边界保留：真实 Web destructive interruption matrix 未独立重跑。"
+        ]
       }
     }
   ]
