@@ -51,9 +51,9 @@ export function completionPageFixture(options: CompletionPageOptions): Completio
         throw new Error(`unsupported completion fixture selector: ${selector}`);
       }
       return {
-        evaluateAll(callback: unknown) {
+        evaluateAll(callback: unknown, argument?: unknown) {
           events.push('observe');
-          return Promise.resolve(withGlobal('HTMLElement', FixtureHtmlElement, callback, turns));
+          return Promise.resolve(withGlobal('HTMLElement', FixtureHtmlElement, callback, turns, argument));
         },
       };
     },

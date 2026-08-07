@@ -63,6 +63,7 @@ export interface CollabBrowser {
     taskId: string,
     sessionName: string,
     expectedConversationId: string,
+    expectedUserTurnId: string,
     observationWindowMs: number,
     observer?: BrowserOperationObserver,
   ): Promise<BrowserObservationResult>;
@@ -595,10 +596,17 @@ export class CollabService {
             if (remainingObservationMs === 0) {
               return { status: 'pending' as const, taskId, turnId };
             }
+            if (turn.userTurnIdentity === null) {
+              throw new CollabError(
+                'TRANSCRIPT_INCONSISTENT',
+                `pending turn has no persisted user turn identity: ${turnId}`,
+              );
+            }
             const observed = await this.#browser.observeResponse(
               taskId,
               task.playwrightSession,
               task.conversationId,
+              turn.userTurnIdentity,
               remainingObservationMs,
               observer,
             );

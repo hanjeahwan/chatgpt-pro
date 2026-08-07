@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
@@ -1051,6 +1052,42 @@ describe('BEH-002 caller-provided task start', () => {
   });
 });
 
+describe('BEH-004 wait observation anchored on the persisted user turn', () => {
+  it('observes only the assistant after the exact persisted user turn identity', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const promptPath = join(fixture.root, 'anchor-prompt.md');
+    await writeFile(promptPath, 'anchored');
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+    const store = new StateStore(fixture.paths.database);
+    const identity = store.requireTurn(task.taskId, turn.turnId).userTurnIdentity;
+    store.close();
+
+    await fixture.service.wait(task.taskId, turn.turnId, 20_000, 20_000);
+    expect(fixture.browser.observedUserTurnIds).toEqual([identity]);
+    expect(fixture.browser.observedUserTurnIds[0]).toBe(`user-turn-${task.taskId}-1`);
+  });
+
+  it('rejects a pending turn whose persisted user identity is missing', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const promptPath = join(fixture.root, 'missing-anchor.md');
+    await writeFile(promptPath, 'missing');
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+    const store = new StateStore(fixture.paths.database);
+    store.close();
+    const raw = new DatabaseSync(fixture.paths.database);
+    raw.prepare('UPDATE turn SET user_turn_identity = NULL WHERE task_id = ? AND id = ?').run(task.taskId, turn.turnId);
+    raw.close();
+
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 20_000, 20_000)).rejects.toMatchObject({
+      code: 'TRANSCRIPT_INCONSISTENT',
+    });
+  });
+});
+
 describe('BEH-013 status, recover, and resolve-submission', () => {
   it('returns a read-only status with browser availability and the safe next action', async () => {
     const fixture = await serviceFixture();
@@ -1333,6 +1370,7 @@ class FakeBrowser implements CollabBrowser {
   captureNeverSettles = false;
   captureAbortCount = 0;
   observeResponseCalls = 0;
+  readonly observedUserTurnIds: string[] = [];
   downloadDelayMs = 0;
   downloadFailureDelayMs = 0;
   downloadNeverSettlesSourceUrl: string | null = null;
@@ -1605,6 +1643,7 @@ class FakeBrowser implements CollabBrowser {
    * @param taskId Task identifier.
    * @param _sessionName Unused named session.
    * @param expectedConversationId Database-bound identity.
+   * @param expectedUserTurnId Persisted user turn anchor.
    * @param _observationWindowMs Unused finite observation budget.
    * @param observer Task-lease child-process observer.
    * @returns Fake copied response and unchanged conversation.
@@ -1614,11 +1653,13 @@ class FakeBrowser implements CollabBrowser {
     taskId: string,
     _sessionName: string,
     expectedConversationId: string,
+    expectedUserTurnId: string,
     _observationWindowMs: number,
     observer?: BrowserOperationObserver,
   ) {
     this.observe(observer);
     this.observeResponseCalls += 1;
+    this.observedUserTurnIds.push(expectedUserTurnId);
     if (this.pendingWaitPolls > 0) {
       this.pendingWaitPolls -= 1;
       await new Promise<void>((resolve) => {

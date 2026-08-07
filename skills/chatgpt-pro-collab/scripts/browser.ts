@@ -680,21 +680,24 @@ export class PlaywrightBrowser {
   }
 
   /**
-   * Polls once for the completed assistant turn after the latest user turn.
+   * Polls once for the completed assistant turn after the exact persisted user turn.
    *
    * @param taskId Owning task identifier.
    * @param sessionName Owning Playwright named session.
    * @param expectedConversationId Database-bound conversation identity.
+   * @param expectedUserTurnId Persisted exact identity of the submitted user turn.
    * @param observationWindowMs Remaining finite observation budget.
    * @param observer Task-lease child-process observer.
    * @returns Pending, or the re-observed completed conversation identity.
-   * @throws {BrowserError} If the session exits or the page contract cannot be verified.
+   * @throws {BrowserError} If the session exits, the user anchor is absent or not unique,
+   *   or the page contract cannot be verified.
    * @throws {Error} If a local Playwright artifact cannot be written.
    */
   async observeResponse(
     taskId: string,
     sessionName: string,
     expectedConversationId: string,
+    expectedUserTurnId: string,
     observationWindowMs: number,
     observer?: BrowserOperationObserver,
   ): Promise<BrowserObservationResult> {
@@ -702,7 +705,7 @@ export class PlaywrightBrowser {
       sessionName,
       taskId,
       'observe-response',
-      observationScript(expectedConversationId, observationWindowMs),
+      observationScript(expectedConversationId, expectedUserTurnId, observationWindowMs),
       'observe response completion',
       'observe',
       observer,
@@ -2268,16 +2271,22 @@ function sendScript(expectedConversationId: string | null, prompt: string): stri
 }
 
 /**
- * Builds one bounded completion observation for the assistant after the latest user turn.
+ * Builds one bounded completion observation for the assistant after the exact user turn.
  *
  * @param expectedConversationId Database-bound canonical identity.
+ * @param expectedUserTurnId Persisted exact identity of the submitted user turn.
  * @param observationWindowMs Remaining finite observation budget.
  * @returns A Playwright page function source.
  * @throws {Error} This pure source builder does not throw.
  */
-function observationScript(expectedConversationId: string, observationWindowMs: number): string {
+function observationScript(
+  expectedConversationId: string,
+  expectedUserTurnId: string,
+  observationWindowMs: number,
+): string {
   return `async (page) => {
     const expectedConversationId = ${JSON.stringify(expectedConversationId)};
+    const expectedUserTurnId = ${JSON.stringify(expectedUserTurnId)};
     const observationWindowMs = ${JSON.stringify(observationWindowMs)};
     const observationDeadline = Date.now() + observationWindowMs;
     const conversationIdOf = (pathname) => {
@@ -2292,26 +2301,41 @@ function observationScript(expectedConversationId: string, observationWindowMs: 
     }
     const turnSelector = '[data-testid^="conversation-turn-"][data-turn]';
     const copySelector = '[data-testid="copy-turn-action-button"]';
+    const anchorState = await page.locator(turnSelector).evaluateAll((elements, anchorTurnId) => {
+      return elements.filter((element) => {
+        return element.getAttribute('data-turn') === 'user' &&
+          element.getAttribute('data-testid') === anchorTurnId;
+      }).length;
+    }, expectedUserTurnId);
+    if (anchorState !== 1) {
+      throw new Error('page contract drift: persisted user turn anchor is absent or not unique');
+    }
     let assistantIndex = -1;
     let assistantTurnId = null;
     let stableCompletedPolls = 0;
     let polls = 0;
     while (stableCompletedPolls < 6 && polls < 10 && Date.now() < observationDeadline) {
       polls += 1;
-      const candidate = await page.locator(turnSelector).evaluateAll((elements) => {
-        let latestUser = -1;
-        for (let index = 0; index < elements.length; index += 1) {
-          if (elements[index].getAttribute('data-turn') === 'user') latestUser = index;
+      const candidate = await page.locator(turnSelector).evaluateAll((elements, anchorTurnId) => {
+        const anchorMatches = elements.flatMap((element, index) => {
+          return element.getAttribute('data-turn') === 'user' &&
+            element.getAttribute('data-testid') === anchorTurnId
+            ? [index]
+            : [];
+        });
+        if (anchorMatches.length !== 1) {
+          throw new Error('page contract drift: persisted user turn anchor became absent or not unique');
         }
-        if (latestUser < 0 || latestUser + 1 >= elements.length) return null;
-        const assistant = elements[latestUser + 1];
-        const turnId = assistant.getAttribute('data-testid');
-        if (assistant.getAttribute('data-turn') !== 'assistant' || turnId === null) return null;
+        const assistant = elements[anchorMatches[0] + 1];
+        const turnId = assistant?.getAttribute('data-testid') ?? null;
+        if (assistant === undefined || assistant.getAttribute('data-turn') !== 'assistant' || turnId === null) {
+          return null;
+        }
         const copy = assistant.querySelectorAll('[data-testid="copy-turn-action-button"]');
         return copy.length === 1 && copy[0] instanceof HTMLElement && copy[0].getClientRects().length > 0
-          ? { index: latestUser + 1, turnId }
+          ? { index: anchorMatches[0] + 1, turnId }
           : null;
-      });
+      }, expectedUserTurnId);
       const stop = page.getByRole('button', { name: 'Stop answering', exact: true });
       const stopVisible = await stop.count() > 0 && await stop.first().isVisible();
       if (candidate !== null && !stopVisible) {

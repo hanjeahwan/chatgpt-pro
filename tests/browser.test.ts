@@ -695,7 +695,13 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
       }),
     ]);
 
-    const observed = await fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 5000);
+    const observed = await fixture.browser.observeResponse(
+      'task-a',
+      'session-a',
+      'conversation-a',
+      'conversation-turn-user',
+      5000,
+    );
     const controller = new AbortController();
     const captured = await fixture.browser.captureResponse(
       'task-a',
@@ -741,22 +747,34 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
   it('executes the normal completion condition and returns the stable assistant identity', async () => {
     const fixture = await executableCompletionFixture({ assistantTurnId: 'conversation-turn-t1', stopVisible: false });
 
-    await expect(fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 5000)).resolves.toEqual({
+    await expect(
+      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'conversation-turn-user', 5000),
+    ).resolves.toEqual({
       status: 'completed',
       conversationId: 'conversation-a',
       conversationUrl: 'https://chatgpt.com/c/conversation-a',
       assistantTurnId: 'conversation-turn-t1',
     });
-    expect(fixture.events).toHaveLength(6);
+    expect(fixture.events).toHaveLength(7);
   });
 
   it('returns pending without reload when Stop remains visible', async () => {
     const fixture = await executableCompletionFixture({ stopVisible: true });
 
-    await expect(fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 5000)).resolves.toEqual({
+    await expect(
+      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'conversation-turn-user', 5000),
+    ).resolves.toEqual({
       status: 'pending',
     });
-    expect(fixture.events).toHaveLength(10);
+    expect(fixture.events).toHaveLength(11);
+  });
+
+  it('rejects a missing or non-unique user turn anchor without falling back to the latest user', async () => {
+    const fixture = await executableCompletionFixture({ stopVisible: false });
+
+    await expect(
+      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'unknown-anchor', 5000),
+    ).rejects.toThrow(/persisted user turn anchor is absent or not unique/);
   });
 
   it('maps one recorded sandbox target to an exact download event and task-owned save path', async () => {
