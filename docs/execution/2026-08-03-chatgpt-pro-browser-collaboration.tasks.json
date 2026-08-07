@@ -68,7 +68,7 @@
     {
       "id": "IMP-003",
       "title": "发送显式输入并支持单归档附件",
-      "status": "implemented",
+      "status": "pending",
       "covers": ["BEH-003", "BEH-010"],
       "verifies": ["VER-003", "VER-013"],
       "dependsOn": ["IMP-001", "IMP-002", "IMP-009", "IMP-010"],
@@ -89,7 +89,7 @@
     {
       "id": "IMP-004",
       "title": "实现单次 wait 的内部观察与原始文字捕获",
-      "status": "implemented",
+      "status": "pending",
       "covers": ["BEH-004", "BEH-011"],
       "verifies": ["VER-004", "VER-014"],
       "dependsOn": ["IMP-001", "IMP-002", "IMP-003", "IMP-009", "IMP-010"],
@@ -131,7 +131,7 @@
     {
       "id": "IMP-006",
       "title": "完成同会话多轮与跨任务真实并发",
-      "status": "implemented",
+      "status": "pending",
       "covers": ["BEH-005", "BEH-006"],
       "verifies": ["VER-005", "VER-006"],
       "dependsOn": ["IMP-003", "IMP-004", "IMP-005", "IMP-009", "IMP-010"],
@@ -151,7 +151,7 @@
     {
       "id": "IMP-007",
       "title": "分离本地关闭与 Web conversation 归档",
-      "status": "implemented",
+      "status": "pending",
       "covers": ["BEH-008", "BEH-009"],
       "verifies": ["VER-008", "VER-009"],
       "dependsOn": ["IMP-001", "IMP-002", "IMP-010"],
@@ -171,7 +171,7 @@
     {
       "id": "IMP-008",
       "title": "完成中断恢复矩阵与全量运行基线验证",
-      "status": "implemented",
+      "status": "pending",
       "covers": ["BEH-004", "BEH-006", "BEH-007", "BEH-012", "BEH-013"],
       "verifies": ["VER-007", "VER-010", "VER-011", "VER-012", "VER-016"],
       "dependsOn": ["IMP-001", "IMP-002", "IMP-003", "IMP-004", "IMP-005", "IMP-006", "IMP-007", "IMP-009", "IMP-010"],
