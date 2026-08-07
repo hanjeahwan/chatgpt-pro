@@ -68,6 +68,7 @@ Git revision 只用于运行时确认审查者检查的实现内容与最终集�
 Gate 只包括 Ready、Child、Verification、Review 和 Integration。Implementation 是 Child 与 Verification 之间的阶段，不是 Gate；其完成条件为：全部可执行 IMP 已提交到 implementation branch 并取得相关检查和证据，或已到达 decision boundary 并报告。
 
 - 一个 dispatch 连续处理所有可执行 IMP，直到遇到产品决策、Spec 变化、需协调员执行的外部验证、阻塞 finding 或其他明确 decision boundary；禁止为每个 IMP 单独派发。
+- Verification Gate 只有在实施者先完成验证、协调员随后独立验证，且双方均通过后才放行；双方通过前不得进入 Review。
 - 任一 Gate 未通过时停在当前阶段，或返回表中能够解除缺口的前序阶段。禁止跨过 Gate、跳过有效测试、伪造证据或把未运行验证报告为通过。
 - Review 期间禁止修改 implementation branch。
 - 审查者返回后，只允许实施者提交对应任务账本的 Review 结论和状态。
