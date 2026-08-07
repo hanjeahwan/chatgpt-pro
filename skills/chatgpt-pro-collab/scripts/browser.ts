@@ -368,12 +368,17 @@ export class PlaywrightBrowser {
   }
 
   /**
-   * Loads an existing seed into an isolated session and verifies the authenticated page.
+   * Loads an existing seed into an isolated verification session and verifies the authenticated page.
    *
-   * The structural storage-state check is not enough: the seed must actually load and the
-   * ChatGPT page must show no login controls. The isolated session is always closed.
+   * The structural storage-state check is not enough: the seed must actually load in a fresh,
+   * independent browser context and the ChatGPT page must show no login controls. The
+   * verification always runs in a distinct named session (`<setupSession>-verify`) so the
+   * interactive setup session's own authentication can never mask an invalid seed, and that
+   * verification session is always closed after success, unauthenticated, and error paths.
+   * A leftover verification session from an interrupted prior run is closed first so a setup
+   * retry can cleanly re-verify without touching the interactive setup session.
    *
-   * @param sessionName Recorded setup session name.
+   * @param sessionName Recorded setup session name; never opened or closed by this method.
    * @param seedStatePath Absolute authentication seed path.
    * @returns Whether the loaded seed produced an authenticated ChatGPT page.
    * @throws {Error} If the browser cannot be opened or the seed cannot be loaded.
@@ -383,33 +388,43 @@ export class PlaywrightBrowser {
     seedStatePath: string,
   ): Promise<{ readonly authenticated: boolean }> {
     const setupId = sessionName.replace(/^chatgpt-pro-collab-/u, '');
-    await ensureTaskDirectories(this.#paths, setupId);
-    let opened = false;
+    const verificationSession = `${sessionName}-verify`;
+    const verificationId = `${setupId}-verify`;
+    await ensureTaskDirectories(this.#paths, verificationId);
     try {
-      if ((await this.sessionAvailability(sessionName)) === 'missing') {
-        await this.#invoke(
-          sessionName,
-          setupId,
-          ['open', 'about:blank', '--browser=chrome', '--headed'],
-          'open seed verification browser',
-        );
-        opened = true;
+      if ((await this.sessionAvailability(verificationSession)) !== 'missing') {
+        await this.#invoke(verificationSession, verificationId, ['close'], 'close leftover seed verification browser');
       }
-      await this.#invoke(sessionName, setupId, ['state-load', seedStatePath], 'load authentication state');
-      await this.#invoke(sessionName, setupId, ['goto', CHATGPT_URL], 'open chatgpt.com');
+      await this.#invoke(
+        verificationSession,
+        verificationId,
+        ['open', 'about:blank', '--browser=chrome', '--headed'],
+        'open seed verification browser',
+      );
+      await this.#invoke(
+        verificationSession,
+        verificationId,
+        ['state-load', seedStatePath],
+        'load authentication state',
+      );
+      await this.#invoke(verificationSession, verificationId, ['goto', CHATGPT_URL], 'open chatgpt.com');
       try {
-        await this.#runCodeWithoutResult(sessionName, setupId, 'verify-seed', authenticatedPageScript(), 'verify seed');
+        await this.#runCodeWithoutResult(
+          verificationSession,
+          verificationId,
+          'verify-seed',
+          authenticatedPageScript(),
+          'verify seed',
+        );
         return { authenticated: true };
       } catch {
         return { authenticated: false };
       }
     } finally {
-      if (opened) {
-        try {
-          await this.#invoke(sessionName, setupId, ['close'], 'close seed verification browser');
-        } catch {
-          // The verification session may already be gone; the setup close re-verifies.
-        }
+      try {
+        await this.#invoke(verificationSession, verificationId, ['close'], 'close seed verification browser');
+      } catch {
+        // The verification session may already be gone; the setup retry closes any leftover.
       }
     }
   }

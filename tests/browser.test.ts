@@ -63,6 +63,96 @@ describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
     expect(new Set(sessions).size).toBe(1);
   });
 
+  it('verifies a seed in a distinct named session even when the interactive setup session is logged in', async () => {
+    const fixture = await browserFixture([
+      output('Sessions:\n  - name: chatgpt-pro-collab-setup-live\n    state: open\n    pid: 100\n'),
+      output('verification opened'),
+      output('seed loaded'),
+      output('navigated to chatgpt.com'),
+      new Error('fixture verify-seed failed'),
+      output('verification closed'),
+    ]);
+    await writeFile(fixture.paths.seedState, '{}');
+
+    await expect(
+      fixture.browser.verifyAuthenticatedSeed('chatgpt-pro-collab-setup-live', fixture.paths.seedState),
+    ).resolves.toEqual({ authenticated: false });
+
+    const sessionArgs = fixture.invocations.flatMap((invocation) => {
+      return invocation.arguments[2]?.startsWith('-s=') ? [invocation.arguments[2]] : [];
+    });
+    expect(sessionArgs).toEqual([
+      '-s=chatgpt-pro-collab-setup-live-verify',
+      '-s=chatgpt-pro-collab-setup-live-verify',
+      '-s=chatgpt-pro-collab-setup-live-verify',
+      '-s=chatgpt-pro-collab-setup-live-verify',
+      '-s=chatgpt-pro-collab-setup-live-verify',
+    ]);
+    const commands = fixture.invocations.map((invocation) => {
+      return invocation.arguments.slice(4);
+    });
+    expect(commands).toEqual([
+      [],
+      ['open', 'about:blank', '--browser=chrome', '--headed'],
+      ['state-load', fixture.paths.seedState],
+      ['goto', 'https://chatgpt.com/'],
+      ['run-code', '--filename', expect.any(String)],
+      ['close'],
+    ]);
+    const touchedSetupSession = fixture.invocations.some((invocation) => {
+      return invocation.arguments[2] === '-s=chatgpt-pro-collab-setup-live' && invocation.arguments[4] === 'close';
+    });
+    expect(touchedSetupSession).toBe(false);
+  });
+
+  it('closes a leftover verification session before verifying a fresh seed', async () => {
+    const fixture = await browserFixture([
+      output('Sessions:\n  - name: chatgpt-pro-collab-setup-live-verify\n    state: open\n    pid: 200\n'),
+      output('leftover closed'),
+      output('verification opened'),
+      output('seed loaded'),
+      output('navigated to chatgpt.com'),
+      output('verify-seed passed'),
+      output('verification closed'),
+    ]);
+    await writeFile(fixture.paths.seedState, '{}');
+
+    await expect(
+      fixture.browser.verifyAuthenticatedSeed('chatgpt-pro-collab-setup-live', fixture.paths.seedState),
+    ).resolves.toEqual({ authenticated: true });
+
+    const commands = fixture.invocations.map((invocation) => {
+      return invocation.arguments.slice(4);
+    });
+    expect(commands).toEqual([
+      [],
+      ['close'],
+      ['open', 'about:blank', '--browser=chrome', '--headed'],
+      ['state-load', fixture.paths.seedState],
+      ['goto', 'https://chatgpt.com/'],
+      ['run-code', '--filename', expect.any(String)],
+      ['close'],
+    ]);
+  });
+
+  it('closes the verification session when the browser open itself fails', async () => {
+    const fixture = await browserFixture([
+      output('  (no browsers)'),
+      new Error('fixture open failed'),
+      output('verification closed'),
+    ]);
+    await writeFile(fixture.paths.seedState, '{}');
+
+    await expect(
+      fixture.browser.verifyAuthenticatedSeed('chatgpt-pro-collab-setup-live', fixture.paths.seedState),
+    ).rejects.toThrow(/fixture open failed/);
+
+    const commands = fixture.invocations.map((invocation) => {
+      return invocation.arguments.slice(4);
+    });
+    expect(commands).toEqual([[], ['open', 'about:blank', '--browser=chrome', '--headed'], ['close']]);
+  });
+
   it('uses the fixed CLI prefix, task output directory, and shared seed without persistence', async () => {
     const fixture = await browserFixture([
       output('### Browser `session-a` opened with pid 4123.'),
