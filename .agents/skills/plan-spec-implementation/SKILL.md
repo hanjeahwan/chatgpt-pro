@@ -97,8 +97,8 @@ node <skill-directory>/scripts/spec-tasks.ts diff --spec docs/specs/<spec>.md --
 ```
 
 - 本 Skill 只创建或对账任务账本，不运行 Ready Gate。`check --ready` 由 `execute-spec-workflow` 在实施输入提交后从仓库根目录运行唯一一次；本 Skill 不在实施输入提交前运行它。
-- 实现提交到 implementation branch 后记录相关检查；每项 VER 通过后记录可复现命令或证据位置。
-- 实现已提交到 implementation branch 且相关检查完成后把任务设为 `implemented`；下游任务可依赖 `implemented` 或 `done`，不必等待全量验证和 Review。
+- 实现提交到 task branch 后记录相关检查；每项 VER 通过后记录可复现命令或证据位置。
+- 实现已提交到 task branch 且相关检查完成后把任务设为 `implemented`；下游任务可依赖 `implemented` 或 `done`，不必等待全量验证和 Review。
 - Spec 在执行中变化时停止受影响实现，重新执行第 2、5、6 节；未受影响任务可以保留。
 - Code Review 完成后记录 reviewer thread 或根 Review Task 及结论。实现、验证和 Review 证据齐全时把任务设为 `done`，再由 `WORKFLOW.md` 的 Integration Gate 独立核对证据语义。
 - Integration Gate 核对通过后运行 `check --final`。该命令只校验账本 schema、Spec 摘要、覆盖、依赖、状态和证据字段非空，不判断证据内容是否真实或相关。
@@ -109,7 +109,7 @@ node <skill-directory>/scripts/spec-tasks.ts diff --spec docs/specs/<spec>.md --
 - 不创建、修订或补写 Spec；产品变化返回上游规格流程。
 - 不根据任务账本推断产品行为；发生冲突时始终以当前 Spec 为准。
 - 不把章节序号、数组位置、commit 顺序或运行时计划 ID 当作稳定身份。
-- 不为任务状态维护 Git revision 字段；implementation branch 是实施周期的持久身份，Review 所需 revision 由 `execute-spec-workflow` 在运行时临时校验。
+- 不为任务状态维护 Git revision 字段；task branch 是隔离实施成果的持久身份，integration candidate 由 `execute-spec-workflow` 在运行时通过 Git 生成和校验。
 - 不删除历史任务来伪造完成，不为旧账本格式增加迁移或兼容分支。
 - 本 Skill 不代替 `WORKFLOW.md` 的实现、验证、提交和 Review 流程。
 
