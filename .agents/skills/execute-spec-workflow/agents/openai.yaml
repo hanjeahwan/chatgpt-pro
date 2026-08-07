@@ -1,4 +1,0 @@
-interface:
-  display_name: 'Execute Spec Workflow'
-  short_description: '协调 Spec 实现、验证、Review 与集成生命周期'
-  default_prompt: '使用 $execute-spec-workflow 按目标 Spec 完成实施、验证、Review 与集成。'

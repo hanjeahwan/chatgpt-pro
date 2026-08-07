@@ -9,7 +9,7 @@
 - 跨规格或长期有效的架构决策：`docs/adr/adr-*.md`；创建 ADR 时遵守 `create-architectural-decision-record` Skill
 - 决策问题 Spike：`docs/spikes/*.md`；创建或执行时遵守 `create-spike` Skill
 - 代码规范：`CODE_STANDARD.md`
-- 规格实现、验证、提交和验收的稳定合同：`WORKFLOW.md`；执行时遵守 `execute-spec-workflow` Skill
+- 唯一仓库级开发流程合同：`WORKFLOW.md`
 - 问题修复的最小、必要、可验证流程合同：`PROBLEM_FIXING.md`
 
 维护权威文档和指令时：
@@ -19,6 +19,15 @@
 - Spec 依赖 ADR 时引用它，不重复其完整理由、替代方案和后果。
 - 文档引用 Skill 时，只说明适用场景和本仓库的额外约束；不得重复 Skill 已覆盖的命令、步骤或通用指令。
 - 规范性指令只记录会改变执行者选择、动作或放行判断的约束；沿用既有默认行为或不采取额外动作时省略。
+
+## 开发流程角色
+
+- **Coordinator**：local parent session；使用 Orca Orchestrator 建立并监督 Run、Task 与 Dispatch，维护 writer ownership，处理 Spec 变化、target branch 同步、验证、Review 调度与集成。
+- **Implementation writer**：Orca supervised worker，默认 Agent 为 `opencode`，只写入 Task 声明的 write scope。
+- **Independent reviewer**：Orca supervised worker，默认 Agent 为 `pi`，Review 指定 SHA 区间并返回 findings。
+- **Orca Orchestrator**：提供 Run、Task、Dispatch、Message 与可选 decision gate 的运行时生命周期和任务状态。
+
+同一文件或共享状态范围同时只有一个 writer；只读调查可并行。Coordinator 在 context compact 或接手后，先读本地 checkpoint（worktree comment 或 `.orca-tmp/session-handoff.md`），再以 Orca runtime、Git、requirement source 和适用 Spec 校准。
 
 ## Agent 任务协作路由
 
@@ -40,7 +49,7 @@
 - 只有用户明确要求保留分支拓扑，或上游同步必须保留 merge 关系时，才能创建 merge commit。
 - 创建 merge commit 时，在最终报告中说明原因。
 
-按 Spec 实施时，task branch 的隔离、目标分支同步、Review 冻结和集成步骤以 `execute-spec-workflow` Skill 为准。
+开发流程的 task branch 隔离、目标分支同步、Review 和集成步骤以 `WORKFLOW.md` 为准。
 
 ## Markdown 文档格式
 
@@ -68,15 +77,12 @@
 - 不得将未执行的验证描述为已通过。
 - 存在未验证项、已知限制或风险时，必须明确说明。
 
-仅在实现、检查和验证均符合要求后，才能声明任务完成。完成自审后，最终回复必须以 `🔮 自审完毕` 结尾。
+仅在实现、检查和验证均符合要求后，才能声明任务完成。
 
 ## 验证
 
 普通代码改动运行：
 
 ```sh
-pnpm format:check
-pnpm lint
-pnpm typecheck
-pnpm test
+pnpm check
 ```

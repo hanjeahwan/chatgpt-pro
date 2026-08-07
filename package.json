@@ -5,6 +5,7 @@
   "description": "",
   "type": "module",
   "scripts": {
+    "check": "pnpm run format:check && pnpm run lint && pnpm run typecheck && pnpm run test",
     "collab": "node skills/chatgpt-pro-collab/scripts/collab.ts",
     "format": "oxfmt",
     "format:all": "oxfmt .",

@@ -61,6 +61,10 @@ typings/
 # Local git worktrees
 .worktrees/
 
+# Local Orca execution checkpoints
+
+/.orca-tmp/
+
 # L5 raw eval artifacts (stay local; regenerate with `pnpm run eval`)
 evals/results/
 

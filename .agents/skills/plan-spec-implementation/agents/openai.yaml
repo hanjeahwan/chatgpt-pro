@@ -1,4 +1,0 @@
-interface:
-  display_name: 'Plan Spec Implementation'
-  short_description: '将新增或修订后的 Spec 稳定拆成可验证实施任务'
-  default_prompt: '使用 $plan-spec-implementation 为目标 Spec 生成或增量对账实施任务账本。'
