@@ -1,242 +1,137 @@
 {
   "spec": "docs/specs/2026-08-03-chatgpt-pro-browser-collaboration.md",
-  "contextDigest": "sha256:0fcc09fad366a4d1c2b27133a2aa87ab42748c9f9486d811d5ca3a267ff9f698",
+  "contextDigest": "sha256:64ab6041321442369d3b983789c2b6e409d0a81d7d6eedd7d5156bd4f6ef2142",
   "sourceDigests": {
-    "BEH-001": "sha256:81fc722eeffe25bb65e2eecd66fa5632133c4fa1cd9fc193ee60814d1fb3b0ae",
-    "BEH-002": "sha256:6e1937f525268d96d5a3c1627ac65fa37a738f932b9150f4b6d86759d36580ca",
-    "BEH-003": "sha256:3a33a5375fe8d0f24241e22a298ddce5dca588b827a649be9743ffb1edf10fd0",
+    "BEH-001": "sha256:b80a6ac23c051d7d66654be4294776b64fa7dd37b7a1b379e3c45a193aaaa233",
+    "BEH-002": "sha256:4db1a6300b27e922f4a6cfe32608bcc2a89af373cf6642cd97161d0ec8092e2f",
+    "BEH-003": "sha256:17eb3fff8eb72f6d79af3d7f152d62639120f7c1b08beca746058ead0c93b417",
     "BEH-004": "sha256:18fafefb438774cc049981837b5ee00514aea2b07d5d9e93dd4fcea68094035b",
     "BEH-005": "sha256:3a92560c8d7f89bef76669ba25c88c31182da0ea2a22052184252c32414d1bc3",
     "BEH-006": "sha256:42e460ac18db205b5071bba3fa4757244153e186168bd0038cda5cd332b16648",
-    "BEH-007": "sha256:06557b88fb956877901122ac16e98134aba1cbe59c709a3e919dbbe494e132fe",
-    "BEH-008": "sha256:2adca6bcb4df56e34a808030518a1857b439040e588c7b32425a07dbbcf7f929",
-    "BEH-009": "sha256:081033739f3142e4f24968fcce618348e6379c401dddbfe1f51eeac1a9de93c5",
+    "BEH-007": "sha256:2265798372c463dae6d895c96165c82c1fe4d9f33a68524d77700958e510859d",
+    "BEH-008": "sha256:aa988b9bc70907b62b499235e77c6b1d23ab962d347f18c3b0b86151fc57eee3",
+    "BEH-009": "sha256:0077b07b33dcee6bde5de5d17589e36c383061e51485da6e6b2f7ab7daf54d41",
     "BEH-010": "sha256:32cf4519501f2b855a9682642c5b365d1962b45609dfb9fbbea272507c441b3f",
     "BEH-011": "sha256:9b827d79f99e9906f62de1cd2fbf69b25a97036c7ccb142c6122c85a025b4634",
     "BEH-012": "sha256:a1c71b8859dd105ca3fd76483afff0b5e4725059e1cc9294ee16d32bb4ca3357",
-    "VER-001": "sha256:0ae22d0562343db6fa8fa45b2421d950b5e5420bfbd61731d969dc1ff0236a85",
-    "VER-002": "sha256:46b2816c70a581d1416b155dfcf9df1ba95e8e85b75d4bbf34bb330a42afd484",
-    "VER-003": "sha256:7707532a8944369bb139c708146758ef058c9da5d03ecf55befb871eb31ef7ed",
-    "VER-004": "sha256:6eb9c62502684cefe3fcd68204592c07d8d306c0b3c00766fd96ad0cc09cba71",
+    "BEH-013": "sha256:975acf8572ba4b01384258d5a60218e481a27fcc3857ddf1bf431c54d8ea77b5",
+    "VER-001": "sha256:c6c466b4f0293e024ae578e0e1892ca95460d8463c7fce95f3ce8ba82b719a51",
+    "VER-002": "sha256:a1cb4c73370d4f3fab83529548f496303f3bd47b494fc3d3876db86d1a2020fe",
+    "VER-003": "sha256:28fffc8270002dcd7cc42d3519e7f2aaed22aaba73e511be7b21d6799f5e8a9d",
+    "VER-004": "sha256:6e7a3e3547c14389346cc8c60fa30e76aed1010ab4f42c3a4ea3cca2e9d6a00a",
     "VER-005": "sha256:5b723ada9786cd3d392edffec5f5fa356489ad9f61d0379b925bcc889c8d6368",
     "VER-006": "sha256:fa0e9fcceb838cd692b2feac9ed537e654047668832243f3f589ac1cb9c1eaca",
-    "VER-007": "sha256:8d53c9eb45049b4cb12c69d304a12b925da0c1e09a029e66b54e5a80d6305073",
-    "VER-008": "sha256:f848a08fea813c2803bd0bc9c61c1fcda1a94a00ac5aba87a37955b43afe897c",
-    "VER-009": "sha256:413d5e9c673210ee2412000340c56bd45b2c2972603c752c958d5ace29fb9bf4",
-    "VER-010": "sha256:1db6a0a5673c9d4bcaed189b0854ba1768de653c766b87952a26bacadf1b0642",
-    "VER-011": "sha256:3f3249c3549a3285269e8616e3f143f507f60fde76cdce91c3e473016d498555",
-    "VER-012": "sha256:11ee6da311459e2696aac1295c43afab734617fa76a6023f44cdc4c64842a134",
+    "VER-007": "sha256:8261744bf722df9432f81b6a28f35b2ca983f200467a76f6f41e36768b2fd98e",
+    "VER-008": "sha256:bd97fc2e742da64861b51db6f65feea0d205e984861b24f2e180987daf630cf7",
+    "VER-009": "sha256:75f9cd8e636919d75fe492c8dfe0e5d553bc467a6b10416f69ad346199510d38",
+    "VER-010": "sha256:acd89f2a6901ec9a6addaeb3bc2e5100d97ed11e8cfdafda0c5ed74f669b3a04",
+    "VER-011": "sha256:fa00338420da124fe672346164df379d4954de2d66e7f3f26e997f18330f6f91",
+    "VER-012": "sha256:44996aa66d3aacd73af883269b1c7e7867b179642b5f408bec8d73935c9086d6",
     "VER-013": "sha256:c629aaba3a6f3d130ec300def84e501c1b6cc8b0ce48cdeb4cc152eab85a6bc9",
     "VER-014": "sha256:bb23407878e06604dee9ebf0ae0ffbf89f1c509d3e6c376851421fc2080375c3",
-    "VER-015": "sha256:7af0b117c34968180c549def1b6b5fc9fc94889b2a3f1ef106f092bce0ea5a51"
+    "VER-015": "sha256:4688daf7cef35a69ea0568242a9af6f9058fb561fa30976d42d2d256b67ad7a8",
+    "VER-016": "sha256:2fc342819e3783ced93b3d12363ff7608af04a01236d9e9e0a2c439cadd6572d"
   },
   "tasks": [
     {
       "id": "IMP-001",
       "title": "固化共享认证源",
-      "status": "done",
+      "status": "pending",
       "covers": ["BEH-001"],
-      "verifies": [],
-      "dependsOn": [],
+      "verifies": ["VER-001"],
+      "dependsOn": ["IMP-010"],
       "scope": ["Skill entry", "CLI", "Browser boundary", "State store"],
-      "evidence": {
-        "checks": [
-          "pnpm lint",
-          "pnpm test -- tests/browser.test.ts",
-          "git diff --check",
-          "VER-001/002 live 2026-08-05: setup-f21cebca-f3d6-4136-8976-8e4738469351, tasks 764edd5a-f884-4c04-8f2e-b9ce293e769b, 45921cbf-74ba-4646-be17-ff0fc77a1ba9, a07ea1df-5f57-43b8-961a-5acaebb65c70, fc4bad58-0475-4725-9e03-662255b55adb (session/Orca Task)"
-        ],
-        "reviews": [
-          "task_f83d3a0d427b / conversation 019fcdfa-ef5f-7410-a245-6bbaf7be52dd: F1-F5 closed, no independent candidate"
-        ]
-      }
+      "evidence": { "checks": [], "reviews": [] }
     },
     {
       "id": "IMP-002",
       "title": "建立逐 turn 状态与可审计 transcript",
-      "status": "done",
+      "status": "pending",
       "covers": ["BEH-007"],
       "verifies": [],
-      "dependsOn": ["IMP-001"],
+      "dependsOn": ["IMP-010"],
       "scope": ["State store", "Transcript/artifact store"],
-      "evidence": {
-        "checks": ["pnpm format:check", "pnpm lint", "pnpm typecheck", "pnpm test", "git diff --check"],
-        "reviews": [
-          "task_f83d3a0d427b / conversation 019fcdfa-ef5f-7410-a245-6bbaf7be52dd: F1-F5 closed, no independent candidate"
-        ]
-      }
+      "evidence": { "checks": [], "reviews": [] }
     },
     {
       "id": "IMP-003",
       "title": "发送显式输入并支持单归档附件",
-      "status": "done",
+      "status": "pending",
       "covers": ["BEH-003", "BEH-010"],
       "verifies": ["VER-003", "VER-013"],
-      "dependsOn": ["IMP-001", "IMP-002"],
-      "scope": ["Skill entry", "CLI", "Browser boundary"],
-      "evidence": {
-        "checks": [
-          "pnpm format:check",
-          "pnpm lint",
-          "pnpm typecheck",
-          "pnpm test",
-          "git diff --check",
-          "VER-013 host A task_c4fbc6efab2a (tar), host B task_823bbdaa4c97 (zip): one upload item, extraction matched, manifest comparison passed",
-          "VER-013 current-HEAD tasks ce881056-79ae-45c3-bcb3-019633cc4459, 2daa2bb6-1c29-4230-8f9c-78fe6a50ca6a: one finite wait each, exact manifest comparison passed",
-          "2026-08-06 sendTargetOk 沿用 conversation identity 合同：bound conversation 接受 project-scoped pathname 并按最后 /c/<id> 段核对，null 首次发送只接受 /g/g-p-<id>/project 且 send 预检与提交脚本均对固定 chatgpt-pro-collab Project 空白 composer 重新验证（URL、main h1 标题、空白 composer、无 conversation turn）；提交脚本在 send click 前以有界等待复验，页面漂移到首页、既有 conversation 或其他 /g/g-p-<id>/project composer、composer 出现草稿或 conversation turn 时均 not-submitted、零 send-click、不绑定 conversation；可执行交错测试覆盖预检前首页、预检后提交前漂移首页、漂移既有 conversation、漂移另一 Project composer、composer 出现草稿、出现 conversation turn；live task b40073ac-143c-4d21-9f95-5e41eb73c843 归档后二次 send 成功（turn b7fb1cd4-5cfe-4e52-8144-a646b37e8c17），conversation_id 与 conversation_url 不变",
-          "task_41fae0c4571f 最终全量验证引用：共享 browser.ts 提交前复验改动后 format:check/lint/typecheck/pnpm test (8 files/121 tests)/git diff --check 全部通过"
-        ],
-        "reviews": [
-          "task_f83d3a0d427b / conversation 019fcdfa-ef5f-7410-a245-6bbaf7be52dd: F1-F5 closed, no independent candidate",
-          "task_4ec4f0565302 / task_8c0d9c241154 / term_966bbf07-b818-4378-ad95-a0542aa34004: ACCEPTED, P1/P2/P3 CLOSED, no remaining findings"
-        ]
-      }
+      "dependsOn": ["IMP-001", "IMP-002", "IMP-009", "IMP-010"],
+      "scope": ["Skill entry", "CLI", "Browser boundary", "State store"],
+      "evidence": { "checks": [], "reviews": [] }
     },
     {
       "id": "IMP-004",
       "title": "实现单次 wait 的内部观察与原始文字捕获",
-      "status": "done",
+      "status": "pending",
       "covers": ["BEH-004", "BEH-011"],
       "verifies": ["VER-004", "VER-014"],
-      "dependsOn": ["IMP-001", "IMP-002", "IMP-003"],
-      "scope": ["CLI", "Browser boundary", "Transcript/artifact store"],
-      "evidence": {
-        "checks": [
-          "pnpm format:check",
-          "pnpm lint",
-          "pnpm typecheck",
-          "pnpm test (8 files/94 tests)",
-          "git diff --check",
-          "pnpm exec vitest --run tests/browser.test.ts tests/collab.test.ts: 54 tests passed",
-          "VER-004 live task c043880e-0df0-4512-a342-0ec7a907dbb6 turn cff5b7c9-6f58-41b4-bb55-76ca41645012: one finite wait, artifactPaths=[], repeat wait byte-identical; page clipboard override byte-equal to response.md, clipboard restored"
-        ],
-        "reviews": ["task_3e0f0281cad7 / ctx_d6b7437bcbe7: ACCEPTED/CLOSED, no P1/P2/P3"]
-      }
+      "dependsOn": ["IMP-001", "IMP-002", "IMP-003", "IMP-009", "IMP-010"],
+      "scope": ["CLI", "Browser boundary", "State store", "Transcript/artifact store"],
+      "evidence": { "checks": [], "reviews": [] }
     },
     {
       "id": "IMP-005",
       "title": "捕获返回文件并支持可恢复发布",
-      "status": "done",
+      "status": "pending",
       "covers": ["BEH-012"],
       "verifies": ["VER-015"],
-      "dependsOn": ["IMP-002", "IMP-004"],
+      "dependsOn": ["IMP-002", "IMP-004", "IMP-010"],
       "scope": ["Browser boundary", "State store", "Transcript/artifact store"],
-      "evidence": {
-        "checks": [
-          "pnpm format:check",
-          "pnpm lint",
-          "pnpm typecheck",
-          "pnpm test",
-          "git diff --check",
-          "VER-015 live task f44b6453-b56a-471a-8c39-606291de98f2 turn 7567c354-7a47-4674-9cd6-1bff68820f50: 7 ordered occurrences, 6 unique targets, HTTPS excluded, 6 SQLite rows, no overwrite, repeat wait identical, close succeeded"
-        ],
-        "reviews": [
-          "task_f83d3a0d427b / conversation 019fcdfa-ef5f-7410-a245-6bbaf7be52dd: F1-F5 closed, no independent candidate"
-        ]
-      }
+      "evidence": { "checks": [], "reviews": [] }
     },
     {
       "id": "IMP-006",
       "title": "完成同会话多轮与跨任务真实并发",
-      "status": "done",
+      "status": "pending",
       "covers": ["BEH-005", "BEH-006"],
       "verifies": ["VER-005", "VER-006"],
-      "dependsOn": ["IMP-003", "IMP-004", "IMP-005"],
+      "dependsOn": ["IMP-003", "IMP-004", "IMP-005", "IMP-009", "IMP-010"],
       "scope": ["CLI", "Browser boundary", "State store"],
-      "evidence": {
-        "checks": [
-          "pnpm format:check",
-          "pnpm lint",
-          "pnpm typecheck",
-          "pnpm test",
-          "git diff --check",
-          "VER-006 tasks c043880e-0df0-4512-a342-0ec7a907dbb6, 39f72602-b03a-4875-a2b0-101fe49f41ba: concurrent start/wait, one completed while other pending"
-        ],
-        "reviews": [
-          "task_f83d3a0d427b / conversation 019fcdfa-ef5f-7410-a245-6bbaf7be52dd: F1-F5 closed, no independent candidate"
-        ]
-      }
+      "evidence": { "checks": [], "reviews": [] }
     },
     {
       "id": "IMP-007",
       "title": "分离本地关闭与 Web conversation 归档",
-      "status": "done",
+      "status": "pending",
       "covers": ["BEH-008", "BEH-009"],
       "verifies": ["VER-008", "VER-009"],
-      "dependsOn": ["IMP-001", "IMP-002"],
+      "dependsOn": ["IMP-001", "IMP-002", "IMP-010"],
       "scope": ["CLI", "Browser boundary", "State store"],
-      "evidence": {
-        "checks": [
-          "pnpm format:check",
-          "pnpm lint",
-          "pnpm typecheck",
-          "pnpm test (8 files/113 tests)",
-          "git diff --check",
-          "live 2026-08-05 task 72a8d8dc-80ae-4821-b478-745a5d2701d8: repeated close alreadyClosed=true without reopening browser; archive restored original canonical page and turns, next send reused same ID and marker",
-          "tests/state.test.ts two-connection interleaved regression: repeated close byte-stable",
-          "pnpm exec vitest --run tests/collab.test.ts: 26 tests passed",
-          "2026-08-06 BEH-009 project-scoped archive 回归修复：archive 边界改用共享 conversation identity 合同（初始与恢复核对按最后 /c/<id> 段，侧栏链接按 /c/<id>，离开与恢复导航用录制 canonical URL）；确定性回归 tests/browser.test.ts 新增 project-scoped 成功与恢复路径；live 2026-08-06 task b40073ac-143c-4d21-9f95-5e41eb73c843：复现旧 /c/<id> 判定失败后修复成功，归档后侧栏链接消失、恢复回 canonical project-scoped URL 且 turn 可定位，二次 send（b7fb1cd4）与 wait 均成功且 conversation_id/conversation_url 不变",
-          "task_41fae0c4571f 最终全量验证引用：共享 browser.ts 提交前复验改动后 format:check/lint/typecheck/pnpm test (8 files/121 tests)/git diff --check 全部通过"
-        ],
-        "reviews": [
-          "task_f83d3a0d427b / conversation 019fcdfa-ef5f-7410-a245-6bbaf7be52dd: F1-F5 closed, no independent candidate",
-          "task_d8758885857a / term_1f28048f-d0f0-44b1-92f0-18251e33850c: P1 repeated-close atomicity",
-          "task_0b1df9dbb32c / ctx_f1f1f4a70d6b: P1 closed, no P1/P2/P3",
-          "task_4ec4f0565302 / task_8c0d9c241154 / term_966bbf07-b818-4378-ad95-a0542aa34004: ACCEPTED, P1/P2/P3 CLOSED, no remaining findings"
-        ]
-      }
+      "evidence": { "checks": [], "reviews": [] }
     },
     {
       "id": "IMP-008",
       "title": "完成中断恢复矩阵与全量运行基线验证",
-      "status": "done",
-      "covers": ["BEH-004", "BEH-006", "BEH-007", "BEH-012"],
-      "verifies": ["VER-007", "VER-010", "VER-011", "VER-012"],
-      "dependsOn": ["IMP-001", "IMP-002", "IMP-003", "IMP-004", "IMP-005", "IMP-006", "IMP-007", "IMP-009"],
-      "scope": ["CLI", "State store", "Transcript/artifact store", "Test suite"],
-      "evidence": {
-        "checks": [
-          "pnpm format:check",
-          "pnpm lint",
-          "pnpm typecheck",
-          "pnpm test (8 files/121 tests)",
-          "git diff --check",
-          "pnpm exec vitest --run tests/browser.test.ts: 54 tests passed",
-          "pnpm collab -- help: exit 0, help 含 wait 两个时长参数",
-          "无 package.json 的临时宿主目录绝对路径 help: exit 0 (VER-010)",
-          "task_41fae0c4571f 最终修复后重跑：VER-002 live（并发 start c216d461-121f-4053-93cb-b33c9356fc60 / fde9eec1-eae0-43c0-83ef-278628a829d4 + 并发首次 send 均成功并绑定不同 conversation id，seed sha256 不变，任务 close 无残留进程）、VER-010（仓库与临时宿主目录 help exit 0）、VER-012（node 25.9.0、node:sqlite smoke、固定 Playwright CLI help exit 0）与 format:check/lint/typecheck/pnpm test (8 files/121 tests)/git diff --check 全部通过",
-          "spec-tasks diff: specChanged=false, contextChanged=false, no impacted tasks"
-        ],
-        "reviews": [
-          "task_4ec4f0565302 / task_8c0d9c241154 / term_966bbf07-b818-4378-ad95-a0542aa34004: ACCEPTED, P1/P2/P3 CLOSED, no remaining findings"
-        ]
-      }
+      "status": "pending",
+      "covers": ["BEH-004", "BEH-006", "BEH-007", "BEH-012", "BEH-013"],
+      "verifies": ["VER-007", "VER-010", "VER-011", "VER-012", "VER-016"],
+      "dependsOn": ["IMP-001", "IMP-002", "IMP-003", "IMP-004", "IMP-005", "IMP-006", "IMP-007", "IMP-009", "IMP-010"],
+      "scope": ["CLI", "Browser boundary", "State store", "Transcript/artifact store", "Test suite"],
+      "evidence": { "checks": [], "reviews": [] }
     },
     {
       "id": "IMP-009",
       "title": "建立固定 Project 与 GPT-5.6 Sol Pro 启动上下文",
-      "status": "done",
+      "status": "pending",
       "covers": ["BEH-002"],
-      "verifies": ["VER-001", "VER-002"],
-      "dependsOn": ["IMP-001"],
-      "scope": ["CLI", "Browser boundary", "Test suite"],
-      "evidence": {
-        "checks": [
-          "pnpm format:check",
-          "pnpm lint",
-          "pnpm typecheck",
-          "pnpm test (8 files/121 tests)",
-          "git diff --check",
-          "pnpm exec vitest --run tests/browser.test.ts: 54 tests passed，含 BEH-002 成功路径与 PROJECT_NOT_FOUND/PROJECT_NOT_UNIQUE/FIXED_TARGET_UNAVAILABLE/SELECTION_UNCONFIRMED/PAGE_CONTRACT_DRIFT 各失败夹具；start-page fixture 为 Project create/options 控件记录事件，所有失败夹具经 expectNoProjectModifyEvents 显式断言零 project-create-click/project-options-click；模型选择导致模式复位的确定性夹具经最终联合回读返回 SELECTION_UNCONFIRMED",
-          "VER-001/VER-002 live 2026-08-06: 并发 start 任务 404a8666-741e-413f-929a-bbe284ac77c4 与 a5859c62-1590-48a6-9a1b-4c5e77415cbc 均成功；两任务页面均回读 /g/g-p-6a72a51fc0ac81919292bcd8e256bb56/project、标题 ChatGPT - chatgpt-pro-collab、main h1 精确 Project 标题、唯一空白 #prompt-textarea、turn 数 0，且 GPT-5.6 Sol 与 Pro menuitemradio 各自唯一并 aria-checked=true；named session、浏览器 PID、session 目录、taskId 均不同；并发首次 send 均成功（turn 99741e8c-4a57-4942-8b64-75e439e274e9 / ff897d68-fe76-4acf-87b3-e09851ba5e50），SQLite 绑定不同 conversation id（6a73750b-175c... / 6a73750b-31f4...）及各自 project-scoped conversationUrl；wait 完成并落盘 response.md（README 校验 READY）；共享 seed sha256 3e4b106c38bf33013d364cc2e0c16711e04cba0c486de8531747f96680aba352 前后未变；失败夹具各错误均关闭已打开 session 并保留 failed task 记录；最终联合回读在全部选择动作后重新打开选择控件并同时确认唯一 GPT-5.6 Sol 与唯一 Pro 均 aria-checked=true",
-          "VER-002 live 复审重跑 2026-08-06（Review finding 修复后）：并发 start 6baeb20a-be4f-4fd1-816d-c82e84b9e9c3 与 d7a082c0-de83-4378-8511-b009feedbc9d 均成功，页面身份与唯一 GPT-5.6 Sol/Pro aria-checked=true 回读一致；并发首次 send 均成功（turn af80fbe3-9e45-46c4-930a-69a29b9cd565 / 7d54e563-8982-4cc5-9825-e2551bbe937b）并绑定不同 conversation id（6a737bcd-8f7c... / 6a737bcd-7638...）；seed sha256 不变；任务已 close 无残留进程",
-          "VER-002 live 复审重跑 2026-08-06（提交前复验修复后，task_41fae0c4571f）：并发 start c216d461-121f-4053-93cb-b33c9356fc60 与 fde9eec1-eae0-43c0-83ef-278628a829d4 均成功；并发首次 send 在 send click 前有界复验固定 chatgpt-pro-collab Project 空白 composer 后均成功（turn df948220-881f-4652-bd5e-8624b1d6cafd / 61fca507-4373-4be1-bad4-296b9fc8b87d）并绑定不同 conversation id（6a737d73-d248... / 6a737d73-f238...）；seed sha256 不变；任务已 close 无残留进程；同 dispatch 重跑 VER-010（仓库与临时宿主目录 help exit 0）、VER-012（node 25.9.0、node:sqlite smoke、固定 Playwright CLI help exit 0）与 format:check/lint/typecheck/pnpm test (8 files/121 tests)/git diff --check 全部通过",
-          "spec-tasks diff: specChanged=false, contextChanged=false, no impacted tasks"
-        ],
-        "reviews": [
-          "task_4ec4f0565302 / task_8c0d9c241154 / term_966bbf07-b818-4378-ad95-a0542aa34004: ACCEPTED, P1/P2/P3 CLOSED, no remaining findings"
-        ]
-      }
+      "verifies": ["VER-002"],
+      "dependsOn": ["IMP-001", "IMP-010"],
+      "scope": ["CLI", "Browser boundary", "State store", "Test suite"],
+      "evidence": { "checks": [], "reviews": [] }
+    },
+    {
+      "id": "IMP-010",
+      "title": "建立 operation journal、状态检查与恢复裁决基础",
+      "status": "pending",
+      "covers": ["BEH-013"],
+      "verifies": [],
+      "dependsOn": [],
+      "scope": ["Skill entry", "CLI", "Browser boundary", "State store"],
+      "evidence": { "checks": [], "reviews": [] }
     }
   ]
 }

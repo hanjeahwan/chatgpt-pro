@@ -1,6 +1,6 @@
 # ChatGPT Pro 浏览器协作
 
-- status: approved
+- status: review
 - version: 0.1
 
 ## 背景与目标
@@ -16,22 +16,22 @@
 ### BEH-001 一次登录设置
 
 - **触发与前置条件**：用户执行 `setup`，本机可以打开 ChatGPT Web。
-- **可观察行为**：Collab 打开一次交互式登录流程，并在用户完成登录后保留可供后续任务加载的本地认证源；`setup` 完成后关闭本次设置使用的浏览器。
-- **验收条件**：完成一次人工登录后，两个后续任务都能在不再次要求用户登录的情况下进入已登录的 ChatGPT Web。
+- **可观察行为**：Collab 打开一次交互式登录流程，并在用户完成登录后保留可供后续任务加载的本地认证源；`setup` 完成后关闭本次设置使用的浏览器。`setup` 在认证源保存前后被中断时，后续同一命令先核对持久状态：认证源未保存时重新进入登录流程；认证源已经有效时只完成尚未完成的 setup session 清理，不要求用户重复登录。
+- **验收条件**：完成一次人工登录后，两个后续任务都能在不再次要求用户登录的情况下进入已登录的 ChatGPT Web。认证源保存前中断不会留下成功记录，保存后但浏览器关闭前中断可由后续 `setup` 清理；恢复不删除有效认证源，也不把无法验证的认证源报告为成功。
 - **状态**：已确认。
 
 ### BEH-002 启动独立任务
 
-- **触发与前置条件**：宿主执行 `start`，且 BEH-001 的认证源可用。
-- **可观察行为**：Collab 为该任务创建独立浏览器进程、独立 browser context 和独立会话目录；只读加载 BEH-001 的认证源后，在现有 Project 中精确定位唯一名为 `chatgpt-pro-collab` 的 Project，进入该 Project 的空白新 conversation composer，并把模型固定选择为 `GPT-5.6 Sol`、模式固定选择为 `Pro`。Collab 只有在重新读取页面并确认 Project、模型和模式都正确后才返回唯一 `taskId`；首次成功发送时，任务固定绑定由该 Project composer 建立的新 conversation。Collab 不自动创建或修改 Project，也不创建 task 认证状态副本。
-- **验收条件**：成功返回时，页面位于唯一 `chatgpt-pro-collab` Project 的新 conversation composer，`GPT-5.6 Sol` 与 `Pro` 都处于已选择状态；任意两个活动任务具有不同的 `taskId`、浏览器进程、browser context 和会话目录，首次发送后在同一 Project 中建立不同 conversation；启动新任务不因其他未关闭任务而拒绝。Project 缺失或不唯一时，错误建议用户检查登录账号以及手动创建或整理 `chatgpt-pro-collab` Project；固定模型或模式不可用、选择失败或结果无法回读时，错误指出无法确认的固定目标。所有失败都不返回成功 `taskId`，关闭已打开的 task 浏览器，且不得调用 Project 创建或修改操作。
+- **触发与前置条件**：宿主预先生成一个在其协作范围内稳定且唯一的 canonical lowercase UUID v4 `taskId`，执行 `start(taskId)`，且 BEH-001 的认证源可用。
+- **可观察行为**：Collab 为该 `taskId` 创建独立浏览器进程、独立 browser context 和独立会话目录；只读加载 BEH-001 的认证源后，在现有 Project 中精确定位唯一名为 `chatgpt-pro-collab` 的 Project，进入该 Project 的空白新 conversation composer，并把模型固定选择为 `GPT-5.6 Sol`、模式固定选择为 `Pro`。Collab 只有在重新读取页面并确认 Project、模型和模式都正确后才返回同一个 `taskId`；首次成功发送时，任务固定绑定由该 Project composer 建立的新 conversation。相同 `taskId` 的重复或并发 `start` 只在 task 仍为 `starting`，或已完成启动但尚未绑定 conversation 时恢复或返回同一次启动，不创建第二个 task、browser context 或新 conversation composer；task 已绑定 conversation、正在关闭、已经关闭、失败或与持久状态冲突时返回冲突。Collab 不自动创建或修改 Project，也不创建 task 认证状态副本。
+- **验收条件**：成功返回时，页面位于唯一 `chatgpt-pro-collab` Project 的新 conversation composer，`GPT-5.6 Sol` 与 `Pro` 都处于已选择状态；任意两个不同 `taskId` 的活动任务具有不同的浏览器进程、browser context 和会话目录，首次发送后在同一 Project 中建立不同 conversation；启动新任务不因其他未关闭任务而拒绝。在浏览器创建、认证加载、Project 导航或固定模型与模式确认前后中断时，使用同一 `taskId` 重试可核对并继续同一次启动。Project 缺失或不唯一时，错误建议用户检查登录账号以及手动创建或整理 `chatgpt-pro-collab` Project；固定模型或模式不可用、选择失败或结果无法回读时，错误指出无法确认的固定目标。所有失败都不返回成功结果，且不得调用 Project 创建或修改操作。
 - **状态**：已确认。
 
 ### BEH-003 发送明确输入
 
 - **触发与前置条件**：宿主对活动任务执行 `send(taskId, promptPath, attachmentPaths[])`；该任务没有未完成 turn；所有传入路径均由宿主明确指定且当前可读。
-- **可观察行为**：Collab 输入选择层只解析并读取 `promptPath` 与 `attachmentPaths` 中明确列出的文件，向该任务的 conversation 提交一次消息，随后立即返回唯一 `turnId`，不等待 Pro 完成回复。
-- **验收条件**：输入选择层的文件访问记录只包含指定 prompt 和附件；Web 端收到的 prompt 与指定文件一致；未列出的仓库输入不会被该层枚举、打开、打包或上传；调用方在消息提交完成后取得 `turnId`。
+- **可观察行为**：Collab 输入选择层只解析并读取 `promptPath` 与 `attachmentPaths` 中明确列出的文件，先持久化本轮输入与提交阶段，再向该任务的 conversation 提交一次消息，随后立即返回唯一 `turnId`，不等待 Pro 完成回复。提交前中断时，恢复清理或重建为可安全发送的相同 composer；提交命令已经释放但结果未返回时，Collab 先通过页面证据自动判断是否已提交，不能证明时将 turn 保持为 `unknown-submission`，禁止自动重发。
+- **验收条件**：输入选择层的文件访问记录只包含指定 prompt 和附件；Web 端收到的 prompt 与指定文件一致；未列出的仓库输入不会被该层枚举、打开、打包或上传；调用方在消息提交完成后取得 `turnId`。附件上传期间中断且尚未释放提交命令时，恢复后页面没有残留或重复附件，原 turn 记为 `failed`，只有宿主再次显式 `send` 才建立新 turn；提交结果不明确时不会产生自动重发，后续行为遵守 BEH-013。
 - **状态**：已确认。
 
 ### BEH-004 等待并捕获原始回复
@@ -57,23 +57,23 @@
 
 ### BEH-007 保留逐 turn 审计记录
 
-- **触发与前置条件**：任务启动或 turn 状态发生变化。
-- **可观察行为**：Collab 在 `~/.local/chatgpt-pro-collab/` 下保留 task、turn 与返回文件元数据，并为每个 turn 保存 prompt 副本、原始附件路径清单、状态、完整 response 和 BEH-012 下载的文件。新 turn 不覆盖旧 turn；宿主之后改写原始 `promptPath` 不改变已保存副本。
-- **验收条件**：任务关闭后仍能按 `taskId` 和 `turnId` 复原文字交互次序、返回文件顺序和本地路径；重复使用同一输入或返回文件名不会改变旧记录；发送附件正文不因审计目的被额外复制。
+- **触发与前置条件**：任务启动，或 task、turn、operation 状态发生变化。
+- **可观察行为**：Collab 在 `~/.local/chatgpt-pro-collab/` 下保留 task、turn、未完成浏览器副作用与返回文件元数据，并为每个 turn 保存 prompt 副本、原始附件路径清单、状态、完整 response 和 BEH-012 下载的文件。恢复采用的页面证据、自动判定或人工裁决来源进入审计记录。新 turn 不覆盖旧 turn；宿主之后改写原始 `promptPath` 不改变已保存副本。
+- **验收条件**：任务关闭后仍能按 `taskId` 和 `turnId` 复原文字交互次序、返回文件顺序、本地路径，以及未完成副作用的恢复与裁决结果；重复使用同一输入或返回文件名不会改变旧记录；发送附件正文不因审计目的被额外复制。人工裁决记录包含操作者给出的结论、验证到的页面身份、时间和结果，但不把人工结论伪装为自动证明。
 - **状态**：已确认。
 
 ### BEH-008 关闭本地任务
 
 - **触发与前置条件**：宿主执行 `close(taskId)`。
-- **可观察行为**：Collab 终止该任务的浏览器进程，同时保留 BEH-007 的 transcript 和 BEH-001 的共享认证源。`close` 不归档或删除 Web conversation，也不修改用户仓库。
-- **验收条件**：浏览器进程不再存在；transcript 和共享认证源仍可读取；Web conversation 保持原状态；重复 `close` 不产生额外副作用。
+- **可观察行为**：Collab 在终止浏览器前把 task 持久化为 `closing`，终止该任务的浏览器进程并确认 session 不存在后再置为 `closed`，同时保留 BEH-007 的 transcript 和 BEH-001 的共享认证源。`close` 不归档或删除 Web conversation，也不修改用户仓库。
+- **验收条件**：浏览器进程不再存在；transcript 和共享认证源仍可读取；Web conversation 保持原状态；`close` 中断后再次执行可继续清理，重复 `close` 不产生额外副作用。
 - **状态**：已确认。
 
 ### BEH-009 显式归档 Web conversation
 
 - **触发与前置条件**：宿主对活动任务执行 `archive(taskId)`。
-- **可观察行为**：Collab 只在 ChatGPT Web 归档该任务绑定的 conversation；归档不隐式关闭本地任务，也不处理其他 conversation。
-- **验收条件**：指定 conversation 进入 Web Archive；任务的本地进程和 transcript 不变；对已关闭任务调用时返回明确错误且不静默重启浏览器。
+- **可观察行为**：Collab 只在 ChatGPT Web 归档该任务绑定的 conversation；归档命令释放前先记录目标 canonical identity，命令中断后先观察该 conversation 的实际归档状态，再决定完成恢复或在证明确未归档时重试。归档不隐式关闭本地任务，也不处理其他 conversation。
+- **验收条件**：指定 conversation 进入 Web Archive；任务的本地进程和 transcript 不变；对已关闭任务调用时返回明确错误且不静默重启浏览器。归档点击前后或页面恢复期间中断时，后续恢复不会对无法判定状态的 conversation 再次点击 Archive；已归档时只恢复原 canonical 绑定，证明确未归档时才重试。
 - **状态**：已确认。
 
 ### BEH-010 用归档文件批量传递输入
@@ -97,45 +97,52 @@
 - **验收条件**：同一 `sandbox:` 目标只下载一次；多个同名文件不会相互覆盖；没有返回文件时得到空文件列表。取得完整 Copy response 与有序 artifact 描述前达到 `captureTimeoutMs` 时返回 `CAPTURE_TIMEOUT` 并保持 `pending`；原子进入 `capturing` 后，任一文件下载失败或整轮捕获超时时不把 turn 标为 completed，后续 `wait` 复用已成功保存的文件并继续未完成项。网页完成在观察窗口到期前被观察到后，即使文字或文件捕获跨过该窗口也不返回成功的 `pending` 结果，只会在全部完成后返回 `completed`，或在捕获超时及其他真实错误时返回错误。
 - **状态**：已确认。
 
+### BEH-013 检查并恢复中断状态
+
+- **触发与前置条件**：宿主执行 `status(taskId)` 检查任务，执行 `recover(taskId)` 恢复中断操作，或对无法自动判定的 `unknown-submission` 执行 `resolve-submission`；本地 task、turn 或 operation 记录仍可读取。
+- **可观察行为**：`status` 只读取持久状态与当前 browser session 可用性，返回 task、turn、未完成 operation、最近证据、错误和唯一安全的 `nextAction`，不执行远端副作用。`recover` 取得该 task 的互斥 lease 后，按持久阶段与页面后置条件继续 setup 之外的启动、发送准备、浏览器重建或归档恢复；`pending` 或 `capturing` turn 的下一步仍是使用原参数合同执行 `wait`，关闭恢复仍由幂等 `close` 承担。浏览器进程退出时，未绑定 conversation 的任务从共享认证源重建同一 Project composer；已经绑定的任务只导航到记录的 canonical URL，并核对唯一 conversation identity 与相关 turn 后恢复。任何恢复都不自动重发消息。
+- **验收条件**：可自动证明的状态由系统恢复到既有安全命令入口；无法自动证明首次消息是否提交且尚无 canonical identity 时返回 `nextAction: resolve-submission`。`submitted` 裁决必须提供 canonical conversation URL，Collab 必须在已登录页面中验证其属于唯一 `chatgpt-pro-collab` Project；task 已有绑定时还必须与已记录 conversation identity 相同，随后把位于已记录前一 turn 锚点之后、与已保存 prompt 及有序附件名称一致的唯一 user turn 绑定到原 `turnId` 后才能置为 `pending`。`not-submitted` 裁决由用户提供“未提交”的权限性事实，Collab 仍须验证页面已经恢复为该 task 已绑定 conversation 的安全 composer，或在尚未绑定时恢复为唯一目标 Project 的空白安全 composer，且预期锚点之后没有匹配 user turn 或进行中的发送状态；之后把原 turn 置为 `failed`，由宿主另行显式 `send`。该验证不被表述为对历史未提交的自动证明。页面身份、输入或附件不匹配、候选 turn 不唯一、页面不可用或裁决与持久状态冲突时，不改变原状态。两个裁决分支都不自动发送消息。
+- **状态**：已确认。
+
 ## 产品边界
 
 - 宿主 Agent 对 prompt、附件与归档内容选择负责。宿主可以为 BEH-010 读取并打包明确选择的输入；Collab 输入选择层只解析和读取 BEH-003 明确传入的路径，不枚举或打开其他仓库输入。该边界不约束 Node.js、npm/npx、浏览器或操作系统读取其运行依赖、配置与缓存。Collab 运行时把附件视为不透明文件，不判断秘密、不检查 Git 状态，也不因 symlink、dirty worktree、分支或项目布局设置额外安全门。
-- Collab 只操作由 BEH-001、BEH-002 和 BEH-009 指定的 ChatGPT Web 页面，不代替用户进行仓库修改、命令执行、patch 应用、提交、合并或发布。
+- Collab 只操作由 BEH-001、BEH-002、BEH-009 和 BEH-013 指定身份边界内的 ChatGPT Web 页面，不代替用户进行仓库修改、命令执行、patch 应用、提交、合并或发布。
 - Pro 回复与返回文件都是原始协作输出。Pro 可以返回文字、git patch、`.tar.gz`、`.zip` 或其他产物；Collab 不要求固定回复格式，不识别或自动应用 diff、digest、receipt 或成功标记，不自动重发 prompt，也不根据回复内容阻塞后续宿主行为。宿主 Agent 负责验证、解压、执行、修改或应用这些输出。
 - 认证源只保存在本机，不作为附件上传。各任务只读加载同一认证源，运行期间产生的 cookie 或 Web Storage 变化只保留在各自的内存 browser context；本版不新增 Unix 权限模式合同。
-- 浏览器可见性、自动最小化、Dock 图标管理、返回产物自动集成和进程崩溃后的 conversation 恢复不在本版产品合同内。需要这些行为时必须新增或修订 `BEH-*`。
+- 浏览器可见性、自动最小化、Dock 图标管理和返回产物自动集成不在本版产品合同内。BEH-013 只在同一登录账号、固定 Project、原 `taskId` 与已记录 canonical conversation identity 内恢复；不迁移 conversation，不恢复已删除或当前账号无权访问的 conversation，也不绕过 ChatGPT Web 的登录与权限检查。
 
 ## 技术基线
 
 以下 checkout 事实共同约束技术设计和验证方式：
 
-- 当前 checkout 已有 `skills/chatgpt-pro-collab/` 实现、`tests/` 自动化测试以及可从任意宿主目录执行的绝对路径 CLI 入口。现有代码形成 BEH-001–BEH-003、BEH-005、BEH-006、BEH-008 和 BEH-009 的实现基线；只部分承载修订后的 BEH-004（有界页面检查与 Copy response）和 BEH-007（文字 transcript），尚未承载 `capturing`、artifact、BEH-010–BEH-012 或本规格的新 wait 参数。全部行为仍须按当前 VER 重新验证，不能把旧测试结果视为当前规格已通过。
+- 当前 checkout 已有 `skills/chatgpt-pro-collab/` 实现、`tests/` 自动化测试以及可从任意宿主目录执行的绝对路径 CLI 入口。现有代码已承载 setup、start、send、有限 wait、capture、artifact、archive、close、browser-operation lease 和逐 turn transcript 的实现基线；BEH-013、调用方提供稳定 `taskId`、通用 operation journal、浏览器进程重建和公开的提交裁决命令尚未实现。全部行为仍须按当前 VER 重新验证，不能把已有测试结果视为当前规格已通过。
 - 运行约束为 Node.js `>=22.19.0`、ESM、TypeScript `^6.0.3` 和 Vitest `4.0.18`；格式化和 lint 分别使用 oxfmt 与 oxlint。当前 `tsconfig.json` 已采用 Node 原生 TypeScript type stripping 所需的 `erasableSyntaxOnly`、`verbatimModuleSyntax`、`rewriteRelativeImportExtensions` 与 `noEmit` 约束（REF-003）。
 - 当前 manifest 没有浏览器自动化或数据库 npm dependency；`browser.ts` 固定调用 `@playwright/cli@0.1.17`，并已实现 named session、storage state 保存与加载、显式附件上传、有界页面检查、页面内文字捕获和归档后恢复绑定 conversation。固定 CLI 的命令能力由版本化官方资料承载（REF-001）。
-- 当前 `state.ts` 使用 Node.js 标准库同步 `DatabaseSync` 保存 task/turn 状态和 browser-operation lease；schema 尚无 `capturing` 状态与 artifact 表（REF-002）。
-- 当前 `send` 已能按顺序上传宿主明确指定的可读普通文件；当前 Skill 禁止打包，尚未实现 BEH-010 的宿主准备流程。当前 `wait` 在 CLI 进程内无限循环调用有界页面检查，完成后只返回 `responsePath`，尚未实现观察窗口、`pending` 终态、捕获时长或返回文件下载。
-- 当前 `start` 只打开 ChatGPT 首页并验证登录状态，尚未进入 `chatgpt-pro-collab` Project，也未选择和回读 `GPT-5.6 Sol + Pro`。
+- 当前 `state.ts` 使用 Node.js 标准库同步 `DatabaseSync` 保存 task、turn、artifact 和 browser-operation lease，并以 `pending → capturing → completed` 及无覆盖文件发布支持捕获恢复；schema 尚无覆盖 setup、start、send 准备与 archive 的 operation journal，也没有稳定的 browser 重建状态（REF-002）。
+- 当前 `send` 已记录提交释放边界并在结果不明时保留 `unknown-submission`，但公开接口只能阻塞后续发送，尚未持久化精确 user turn identity，也不能自动重建页面、核对已有 user turn 或接受页面验证的人工裁决；附件已进入 Web draft、但提交命令尚未释放时的进程中断也没有持久恢复阶段。
+- 当前 `wait` 已支持有限观察、原子冻结 response 与 artifact 集、复用已完成文件及继续未完成下载；`close` 可重复调用，但尚无 `closing` 持久状态。当前 `start` 由 Collab 内部生成 `taskId`，中断后调用方可能拿不到该身份；`archive` 没有覆盖点击前后进程退出的持久后置条件核对；task browser 退出后不会从 seed 与 canonical identity 重建。
 
 ## 技术设计
 
 ### 实现机制与最小性
 
-- **BEH-001–BEH-012 的 CLI 运行入口**：使用 Node.js 原生 type stripping 直接执行 ESM TypeScript，不生成运行产物，不引入 Jiti、tsx 或其他运行时转译器。运行代码只允许可擦除 TypeScript 语法，类型正确性由独立 `typecheck` 保证（REF-003）。
+- **BEH-001–BEH-013 的 CLI 运行入口**：使用 Node.js 原生 type stripping 直接执行 ESM TypeScript，不生成运行产物，不引入 Jiti、tsx 或其他运行时转译器。运行代码只允许可擦除 TypeScript 语法，类型正确性由独立 `typecheck` 保证（REF-003）。
 - **BEH-010 的输入归档**：由 Skill 指导宿主 Agent 使用当前执行环境已有的归档工具生成 `.tar.gz` 或 `.zip`，并在调用 `send` 前检查归档成员与所选输入一致。归档不得携带会在 Pro 沙盒中物化为额外文件的宿主扩展属性；macOS bsdtar 的目标命令使用 `COPYFILE_DISABLE=1` 和 `--no-xattrs`。Collab CLI 不增加 pack 命令，也不增加归档 dependency、manifest 或目录 schema。
-- **BEH-001–BEH-006、BEH-008、BEH-009 与 BEH-012 的浏览器边界**：固定使用 `@playwright/cli@0.1.17`。`browser.ts` 通过参数数组调用 `npx -y @playwright/cli@0.1.17`，不经 shell 拼接，也不把 Playwright 写入项目 dependency。本版使用 setup 生成的 storage state 作为共享只读认证源；这里的只读表示 task 不回写 seed，不要求修改文件权限。每个 task 使用独立 named session 和独立内存 browser context（REF-001）。
+- **BEH-001–BEH-006、BEH-008、BEH-009、BEH-012 与 BEH-013 的浏览器边界**：固定使用 `@playwright/cli@0.1.17`。`browser.ts` 通过参数数组调用 `npx -y @playwright/cli@0.1.17`，不经 shell 拼接，也不把 Playwright 写入项目 dependency。本版使用 setup 生成的 storage state 作为共享只读认证源；这里的只读表示 task 不回写 seed，不要求修改文件权限。每个 task 使用由 `taskId` 确定的独立 named session 和独立内存 browser context（REF-001）。
 - **BEH-011 的单次等待调用**：一次 `wait` 对应一个前台 CLI 进程。页面检查与等待全部在该进程内完成；CLI 在终态前不输出应用进度，结束时只返回一条终态 JSON。Skill 只发起这一次调用，不由 Agent 重复执行 `wait` 或另行检查浏览器来模拟订阅。
-- **BEH-002–BEH-009、BEH-011 与 BEH-012 的跨命令协调状态**：继续使用 Node 标准库 `node:sqlite` 的同步 `DatabaseSync`。SQLite 保存 task、turn、返回文件和 browser-operation lease 的协调状态；逐 turn 文件保存可审计正文与返回产物（REF-002）。
+- **BEH-001–BEH-009、BEH-011–BEH-013 的跨命令协调状态**：继续使用 Node 标准库 `node:sqlite` 的同步 `DatabaseSync`。SQLite 保存 task、turn、返回文件、operation journal 和 browser-operation lease 的协调状态；逐 turn 文件保存可审计正文与返回产物（REF-002）。
 - **BEH-001、BEH-003、BEH-004、BEH-007 与 BEH-012 的文件状态**：除 `state.sqlite` 外，文件系统保存认证数据、prompt、response、下载的返回文件和 Playwright 运行产物。SQLite 与 transcript 职责分开，不用 JSON 元数据文件复制数据库状态。
 
 ### 组件与职责
 
-| 组件                      | 文件或边界                                     | 承载行为                                    | 职责                                                                               |
-| ------------------------- | ---------------------------------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------- |
-| Skill entry               | `skills/chatgpt-pro-collab/SKILL.md`           | BEH-001–BEH-012                             | 触发边界、归档输入准备、宿主职责和 CLI 阶段路由；不复制页面或 SQL 实现             |
-| CLI                       | `skills/chatgpt-pro-collab/scripts/collab.ts`  | BEH-001–BEH-009、BEH-011、BEH-012           | 参数解析、观察窗口、命令路由、单一终态结果与错误输出                               |
-| Browser boundary          | `skills/chatgpt-pro-collab/scripts/browser.ts` | BEH-001–BEH-006、BEH-008、BEH-009、BEH-012  | Playwright CLI 进程调用、页面动作、目标 turn 完成检测、文字与文件捕获、归档        |
-| State store               | `skills/chatgpt-pro-collab/scripts/state.ts`   | BEH-002–BEH-009、BEH-011、BEH-012           | `node:sqlite` schema、事务、task/turn/artifact 状态、operation lease 和并发写入    |
-| Transcript/artifact store | `skills/chatgpt-pro-collab/scripts/session.ts` | BEH-001、BEH-003、BEH-004、BEH-007、BEH-012 | 数据目录、认证源、prompt/response 与返回文件的无覆盖发布、已有文件复用和一致性检查 |
+| 组件                      | 文件或边界                                     | 承载行为                                            | 职责                                                                                      |
+| ------------------------- | ---------------------------------------------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Skill entry               | `skills/chatgpt-pro-collab/SKILL.md`           | BEH-001–BEH-013                                     | 触发边界、归档输入准备、恢复路由、宿主职责和 CLI 阶段路由；不复制页面或 SQL 实现          |
+| CLI                       | `skills/chatgpt-pro-collab/scripts/collab.ts`  | BEH-001–BEH-009、BEH-011–BEH-013                    | 参数解析、观察窗口、命令与恢复路由、单一终态结果和错误输出                                |
+| Browser boundary          | `skills/chatgpt-pro-collab/scripts/browser.ts` | BEH-001–BEH-006、BEH-008、BEH-009、BEH-012、BEH-013 | Playwright CLI 进程调用、页面动作、后置条件核对、目标 turn 完成检测、文字与文件捕获、归档 |
+| State store               | `skills/chatgpt-pro-collab/scripts/state.ts`   | BEH-001–BEH-009、BEH-011–BEH-013                    | `node:sqlite` schema、事务、task/turn/artifact/operation 状态、operation lease 和并发写入 |
+| Transcript/artifact store | `skills/chatgpt-pro-collab/scripts/session.ts` | BEH-001、BEH-003、BEH-004、BEH-007、BEH-012         | 数据目录、认证源、prompt/response 与返回文件的无覆盖发布、已有文件复用和一致性检查        |
 
 不创建自定义常驻 task worker、全局 daemon 或新的 IPC 协议。Playwright CLI named session 保持每个 task 的浏览器实例；SQLite 保持跨命令状态。每次 Collab CLI 调用只打开所需数据库连接并调用目标 named session，因此两个 `wait` 进程可以并发操作不同 task，而同一 task 的状态门禁止第二个未完成 turn。
 
@@ -149,44 +156,50 @@
 
 ### Playwright CLI 合同
 
-- `browser.ts` 使用固定命令前缀 `npx -y @playwright/cli@0.1.17 -s=<sessionName> --raw`；不同 task 不共享 session name、browser context 或输出目录，只共享只读认证源路径。
-- `setup` 使用独立的非持久 setup session，通过 `open https://chatgpt.com/ --browser=chrome --headed` 完成人工登录。确认已登录后执行 `state-save <seedStatePath>`，成功保存 `auth/seed.json` 后关闭 setup session；不得保留完整 Chrome profile（REF-001）。
-- `start` 以该 task 的 named session 执行 `open about:blank --browser=chrome --headed`、`state-load <seedStatePath>` 和 `goto https://chatgpt.com/projects`。登录确认后，启动脚本在 Project `role=row` 范围内精确匹配文本 `chatgpt-pro-collab` 并要求结果严格等于一项；进入该行后，联合核对 `/g/g-p-<id>/project` 路径、主区域内的精确 Project 标题和唯一可见空白 composer，不能把首页或既有 `/c/...` conversation 当作启动成功（REF-005）。
+- `browser.ts` 使用固定命令前缀 `npx -y @playwright/cli@0.1.17 -s=<sessionName> --raw`；task session name 确定为 `chatgpt-pro-collab-<taskId>`，同一 task 的启动重试与重建不得生成新名称。不同 task 不共享 session name、browser context 或输出目录，只共享只读认证源路径。
+- `setup` 使用写入 operation journal 的独立 setup session，通过 `open https://chatgpt.com/ --browser=chrome --headed` 完成人工登录。确认已登录后执行 `state-save <seedStatePath>`，成功保存并重新验证 `auth/seed.json` 后关闭记录的 setup session；后续 `setup` 依据该记录清理中断遗留，不得保留完整 Chrome profile（REF-001）。
+- `start <taskId>` 以由 `taskId` 确定且持久记录的 named session 执行 `open about:blank --browser=chrome --headed`、`state-load <seedStatePath>` 和 `goto https://chatgpt.com/projects`。登录确认后，启动脚本在 Project `role=row` 范围内精确匹配文本 `chatgpt-pro-collab` 并要求结果严格等于一项；进入该行后，联合核对 `/g/g-p-<id>/project` 路径、主区域内的精确 Project 标题和唯一可见空白 composer，不能把首页或既有 `/c/...` conversation 当作启动成功（REF-005）。相同 `taskId` 的重复调用只在 `starting` 或 active 且未绑定 conversation 时恢复该 task 的 operation 与 session，不重新分配身份；其他 task 状态在浏览器动作前返回冲突。
 - Project 身份确认后，`start` 在 composer 的模型与模式选择器中分别精确选择无障碍名称为 `GPT-5.6 Sol` 和 `Pro` 的 `menuitemradio`，并要求两者各自唯一且 `aria-checked=true`；即使当前页面已显示目标值也必须回读确认。通用控件定位使用角色、层级、URL 和状态，不依赖 `Projects`、`New chat in...`、`Open project options...` 等会随页面语言变化的文案，也不改变用户或浏览器语言。Project 名、模型名和模式名是 BEH-002 固定的目标值，不属于可本地化的通用控件文案（REF-005）。
-- `start` 的 Project 定位、导航或模型/模式确认任一步失败时，browser boundary 关闭已打开的 named session，服务层保留 `failed` task 记录但不返回成功 `taskId`。错误区分 Project 缺失或不唯一、固定模型或模式不可用、选择无法确认和页面合同漂移；任何分支都不得调用 Project 创建或修改控件。不同任务读取同一 seed 文件，之后产生的 cookie 或 Web Storage 变化只留在各自内存 browser context，不回写 seed。
-- 启动、页面动作、上传、等待和关闭分别使用 `open`、`run-code --filename`、`upload`、`run-code --filename` 和 `close`。多个附件按 `attachmentPaths` 顺序逐个上传；BEH-010 生成的归档沿用同一单文件 upload，不增加特殊传输协议。
+- `start` 的 Project 定位、导航或模型/模式确认发生已确定失败时，browser boundary 关闭已打开的 named session，服务层保留 `failed` task 记录但不返回成功结果。进程中断或效果无法判断时保留 `starting` task 与 operation，不能清理成确定失败。错误区分 Project 缺失或不唯一、固定模型或模式不可用、选择无法确认和页面合同漂移；任何分支都不得调用 Project 创建或修改控件。不同任务读取同一 seed 文件，之后产生的 cookie 或 Web Storage 变化只留在各自内存 browser context，不回写 seed。
+- 启动、页面动作、上传、等待和关闭分别使用 `open`、`run-code --filename`、`upload`、`run-code --filename` 和 `close`。多个附件按 `attachmentPaths` 顺序逐个上传；BEH-010 生成的归档沿用同一单文件 upload，不增加特殊传输协议。会产生远端副作用的命令在实际 command PID 放行前先持久化 `effect-unknown`，正常结果返回后再以页面后置条件提交业务状态；进程退出不能绕过这两个边界。
 - Playwright 子进程设置 `PLAYWRIGHT_MCP_ALLOW_UNRESTRICTED_FILE_ACCESS=true`，允许访问宿主传入的任意绝对附件路径；这个能力只扩大 CLI 文件读取边界，不改变产品边界中由宿主负责选择文件的合同（REF-001）。
 - ChatGPT 专属 selector、conversation identity、完成检测、回复 Copy、返回文件发现与下载和 Archive 全部封装在 `browser.ts`。当前实现以 composer `#prompt-textarea`、send `[data-testid="send-button"]`、turn `[data-testid^="conversation-turn-"][data-turn]`、Copy `[data-testid="copy-turn-action-button"]`、conversation options `[data-testid="conversation-options-button"]` 和 `/c/<conversationId>` canonical identity 为基线；selector 找不到或不唯一时返回页面合同漂移，不猜测相邻元素。易变页面合同只能由对应 live VER 证明，不能因当前代码存在而视为通过。
-- `wait` 以最新 user turn 为锚点，只接受其后的 assistant turn；该 assistant 的 Copy 按钮可见、页面没有可见的 `Stop answering` 按钮且连续稳定检查通过时才判定完成。observation 返回该 assistant 的稳定 DOM identity，本次 pending→capture 显式传入并只接受该 exact identity；若 target 缺失、重复或漂移则在 Copy 前返回页面合同漂移，不重新隐式接受 T2。Stop 持续可见时继续内部检查并按观察窗口返回 `pending`，不点击 Stop、不 reload，也不按内容稳定性建立另一种完成模式。回复捕获在点击该 assistant 的 Copy 前临时拦截当前页面 `navigator.clipboard.write`/`writeText`，取得同一个 ClipboardItem 的 `text/plain` 和 `text/html` 后恢复原方法；`text/plain` 原样保存为 response，`text/html` 只用于当次文件发现。任一类型缺失时返回页面合同漂移，不读取或写入操作系统全局剪贴板。
+- `wait` 以当前 turn 持久化的精确 user DOM identity 为锚点，只接受其后的 assistant turn；user target 缺失或不唯一时返回页面合同漂移，不退回 latest user turn。该 assistant 的 Copy 按钮可见、页面没有可见的 `Stop answering` 按钮且连续稳定检查通过时才判定完成。observation 返回该 assistant 的稳定 DOM identity，本次 pending→capture 显式传入并只接受该 exact identity；若 target 缺失、重复或漂移则在 Copy 前返回页面合同漂移，不重新隐式接受 T2。Stop 持续可见时继续内部检查并按观察窗口返回 `pending`，不点击 Stop、不 reload，也不按内容稳定性建立另一种完成模式。回复捕获在点击该 assistant 的 Copy 前临时拦截当前页面 `navigator.clipboard.write`/`writeText`，取得同一个 ClipboardItem 的 `text/plain` 和 `text/html` 后恢复原方法；`text/plain` 原样保存为 response，`text/html` 只用于当次文件发现。任一类型缺失时返回页面合同漂移，不读取或写入操作系统全局剪贴板。
 - 同一个目标 assistant turn 同时作为返回文件发现边界。实现从 Copy response 的 `text/html` 按文档顺序提取 `sandbox:` anchor，按完整逻辑 URL 去重并保留首次出现位置；普通 `https:` 等链接不触发下载。去重前的 sandbox occurrence 与该 turn 中按文档顺序出现的 `button.behavior-btn` 按位置对应；数量不等时返回页面合同漂移。不得从其他 assistant turn、侧栏或页面其他区域发现文件（REF-004）。
 - 目标 turn 的 artifact 行按首次出现顺序构成唯一 sandbox 目标的子序列。实现展开 artifact 列表，以逻辑目标 basename 和顺序把每行的 `Open file` 与同级 `Download file` 映射到对应目标；同名目标按顺序区分。映射到 artifact 行的目标通过行内 `Download file` 捕获 download event；未映射目标通过对应正文行为按钮捕获直接 download event。artifact 行无法形成无歧义子序列、事件没有发生或页面数量、顺序、控件关系发生变化时返回页面合同漂移，不猜测相邻控件（REF-004）。
 - 每个唯一逻辑目标在页面动作前先建立 artifact 记录。`source_url` 保存完整 `sandbox:` 逻辑 URL；浏览器建议名称和带签名的实际下载 URL 只属于当次 download event，不作为目标身份。下载成功后使用建议名称作为原始名称，并保存到带 ordinal 的 turn 路径。
 - 每次页面完成检查保持有界。服务层使用单调时钟分别控制 `observationWindowMs` 和 `captureTimeoutMs`；网页尚未报告完成且达到观察 deadline 时返回 `pending`。一旦观察到完成，观察 deadline 不再参与判断，服务在宿主侧 capture watchdog 内取得完整 Copy response 与有序 artifact 描述；此阶段达到捕获 deadline 时返回 `CAPTURE_TIMEOUT` 并保持 `pending`，后续 `wait` 重新观察并重取 Copy。取得完整描述后才以单个事务进入 `capturing`；捕获 deadline 继续覆盖本次调用的 response 发布与全部文件捕获，不按文件重新计时。turn 已经是 `capturing` 时从本次调用开始建立新的捕获 deadline；此后达到 deadline 时返回 `CAPTURE_TIMEOUT` 并保留 `capturing`。deadline 前发生的真实浏览器错误保留原错误码；watchdog 必须安全终止对应 command，不能遗留悬挂 command 或 operation lease。
 - `archive` 只使用唯一的 `[data-testid="conversation-options-button"]` 和精确名称为 `Archive` 的 menuitem。脚本先观察 Archive menuitem，只有不可见时才打开菜单，避免把已打开菜单反向关闭；不得用模糊的 `Open conversation options` 匹配侧栏按钮。点击后等待离开目标 `/c/<conversationId>`，刷新侧栏并确认目标链接消失；随后重新导航到原 canonical URL，重新确认页面仍绑定原 `conversationId` 且目标 conversation turn 可定位，才返回成功。恢复后后续 `send` 与 `wait` 必须继续使用同一绑定。
-- Playwright session 自身是浏览器生命周期权威；SQLite 只记录 session name 和已观察到的 conversation identity，不伪造浏览器仍存活。
+- 浏览器重建只在确认原 named session 不存在后进行，再使用同一 `taskId`、session name 和 seed 创建新内存 context。未绑定 conversation 时只恢复唯一 `chatgpt-pro-collab` Project 的空白 composer 及固定模型与模式；已经绑定时只打开记录的 canonical URL，并要求 URL、conversation identity 与已记录相关 turn 一致。`unknown-submission` 且没有 canonical identity 时不得猜测目标 conversation。
+- `status` 只调用固定版本 CLI 的全局 `list` 并精确匹配已记录 session name，不执行 `open`、`goto`、`run-code` 或页面读取；唯一匹配为 `available`，确定无匹配为 `missing`，CLI 失败或输出无法解析为 `unknown` 并附带真实错误。
+- Playwright session 自身是浏览器生命周期事实来源；SQLite 记录稳定 session name、已观察到的可用性、conversation identity、重建证据与 `closing` 意图，但不伪造浏览器仍存活。
 
 ### 命令与结果合同
 
-| 命令      | 必要输入                                                                            | 成功结果                                                                                | 主要失败                                                                             |
-| --------- | ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `setup`   | 无                                                                                  | 认证源已建立，设置浏览器已关闭                                                          | 用户未完成登录；认证源无法生成                                                       |
-| `start`   | 无                                                                                  | 已确认目标 Project、`GPT-5.6 Sol + Pro` 和新 conversation composer 后返回 `taskId`      | 未 setup；认证源或浏览器失败；Project 缺失或不唯一；固定模型、模式或页面合同无法确认 |
-| `send`    | `taskId`、`promptPath`、零或多个 `attachmentPath`                                   | 消息已提交并返回 `turnId`                                                               | task 非活动；本 task 已有未完成 turn；输入不可读；上传或提交失败                     |
-| `wait`    | `taskId`、`turnId`、有限正整数 `observationWindowMs`、有限正整数 `captureTimeoutMs` | `status: pending`；或 `status: completed`、`responsePath`、按顺序排列的 `artifactPaths` | 标识不存在；浏览器已退出；Web 状态无法判断；捕获超时；文字或文件捕获失败             |
-| `close`   | `taskId`                                                                            | 本地任务已关闭                                                                          | 清理未完成时返回具体残留，不声称完整成功                                             |
-| `archive` | 活动 `taskId`                                                                       | 指定 Web conversation 已归档，task 页面已恢复原绑定                                     | task 非活动；conversation 尚未建立；Web 操作失败                                     |
+| 命令                 | 必要输入                                                                            | 成功结果                                                                                | 主要失败                                                                                |
+| -------------------- | ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `setup`              | 无                                                                                  | 认证源已建立，设置浏览器已关闭                                                          | 用户未完成登录；认证源无法生成或验证；中断清理仍未完成                                  |
+| `start`              | 调用方提供的稳定 `taskId`                                                           | 已确认目标 Project、`GPT-5.6 Sol + Pro` 和新 conversation composer 后返回同一 `taskId`  | 未 setup；身份冲突；认证源或浏览器失败；Project、固定模型、模式或页面合同无法确认       |
+| `send`               | `taskId`、`promptPath`、零或多个 `attachmentPath`                                   | 消息已提交并返回 `turnId`                                                               | task 非活动；本 task 已有未完成 turn；输入不可读；上传失败；提交结果不明                |
+| `wait`               | `taskId`、`turnId`、有限正整数 `observationWindowMs`、有限正整数 `captureTimeoutMs` | `status: pending`；或 `status: completed`、`responsePath`、按顺序排列的 `artifactPaths` | 标识不存在；浏览器不可恢复；Web 状态无法判断；捕获超时；文字或文件捕获失败              |
+| `status`             | `taskId`                                                                            | 返回持久状态、browser 可用性、未完成 operation、证据、错误与 `nextAction`               | task 不存在；状态存储不可读                                                             |
+| `recover`            | `taskId`                                                                            | 恢复到可安全继续的既有命令入口，并返回 `nextAction`                                     | 页面后置条件无法取得；conversation 无权访问或身份不符；需要人工提交裁决                 |
+| `resolve-submission` | `taskId`、`turnId`、`submitted`、canonical `conversationUrl`                        | 页面验证并绑定原 turn，返回 `status: pending`                                           | 非 `unknown-submission`；conversation、prompt、附件或唯一 user turn 无法验证            |
+| `resolve-submission` | `taskId`、`turnId`、`not-submitted`                                                 | 页面验证安全 composer，把原 turn置为 `failed`                                           | 非 `unknown-submission`；页面仍有匹配提交、不是目标 Project composer 或无法验证安全状态 |
+| `close`              | `taskId`                                                                            | 本地任务已关闭                                                                          | 清理未完成时返回具体残留，不声称完整成功                                                |
+| `archive`            | 活动 `taskId`                                                                       | 指定 Web conversation 已归档，task 页面已恢复原绑定                                     | task 非活动；conversation 尚未建立；Web 后置条件无法判断                                |
 
-`wait` 的命令形式为 `wait <taskId> <turnId> <observationWindowMs> <captureTimeoutMs>`。`pending` 是本次有限观察正常到期的成功结果，不是 turn 失败；捕获超时使用错误码 `CAPTURE_TIMEOUT`。完成结果和 pending 结果都包含 `taskId` 与 `turnId`。CLI 在一次调用中不得输出进度 JSON，错误只通过现有非零退出码与单条错误 JSON 返回。
+`start` 的命令形式为 `start <taskId>`，`taskId` 必须是 canonical lowercase UUID v4；CLI 在打开数据库、创建目录或调用浏览器前拒绝其他格式。`wait` 的命令形式为 `wait <taskId> <turnId> <observationWindowMs> <captureTimeoutMs>`；人工裁决只允许 `resolve-submission <taskId> <turnId> submitted <conversationUrl>` 或 `resolve-submission <taskId> <turnId> not-submitted`。`conversationUrl` 必须由 URL parser 验证为无用户名、密码、query 和 fragment 的 `https://chatgpt.com/c/<conversationId>` canonical URL，其他 origin 或路径在浏览器动作前拒绝。`status` 的 `nextAction` 只允许 `setup | start | send | wait | recover | resolve-submission | close | none`。`pending` 是本次有限观察正常到期的成功结果，不是 turn 失败；捕获超时使用错误码 `CAPTURE_TIMEOUT`。完成结果和 pending 结果都包含 `taskId` 与 `turnId`。CLI 在一次调用中不得输出进度 JSON，错误只通过现有非零退出码与单条错误 JSON 返回。
 
 安装后的 Skill 以加载到的 `SKILL.md` 所在绝对目录定位 CLI，保持宿主项目为当前工作目录，并调用 `node "<skill-directory>/scripts/collab.ts" <command>`；不得要求宿主项目提供 `package.json` 或 `collab` package script。源码仓库保留 `"collab": "node skills/chatgpt-pro-collab/scripts/collab.ts"` 作为开发入口，调用形式为 `pnpm collab -- <command>`，并提供 `"test": "vitest --run"` 供 VER-010 使用。命令不得要求宿主提供 repository root、branch、snapshot、bundle 或授权 token。
 
 ### 最小状态与数据布局
 
-每个 task 只定义 `active`、`closed`、`failed` 三种状态；每个 turn 定义 `sending`、`pending`、`capturing`、`completed`、`failed` 和 `unknown-submission`。`pending` 表示提交已成功，但尚未取得完整 Copy response 与有序 artifact 描述并原子建立 `capturing` 边界；它是本地持久化阶段，不等同于 Pro 必然仍在生成。`capturing` 表示原始 response 路径与完整 artifact 集已经冻结，后续只允许发布或核对原始文字并下载返回文件，不能再返回成功的 `pending` 结果。`unknown-submission` 只用于浏览器在提交边界失败、实现无法证明消息是否已经发送的真实歧义，不能被自动重试掩盖。
+每个 task 只定义 `starting`、`active`、`closing`、`closed`、`failed` 五种状态；每个 turn 定义 `sending`、`pending`、`capturing`、`completed`、`failed` 和 `unknown-submission`。`starting` 表示调用方身份与启动意图已经持久化，但目标 composer 尚未完成后置条件确认；`closing` 表示关闭意图已经持久化，后续只能继续 `close`，不能重建 browser。`pending` 表示提交已成功，但尚未取得完整 Copy response 与有序 artifact 描述并原子建立 `capturing` 边界；它是本地持久化阶段，不等同于 Pro 必然仍在生成。`capturing` 表示原始 response 路径与完整 artifact 集已经冻结，后续只允许发布或核对原始文字并下载返回文件，不能再返回成功的 `pending` 结果。`unknown-submission` 只用于浏览器在提交边界失败、实现无法证明消息是否已经发送的真实歧义，不能被自动重试掩盖。
 
 ```text
 ~/.local/chatgpt-pro-collab/
-├── state.sqlite                     # task/turn 控制状态
+├── state.sqlite                     # 协调状态与文件索引
 ├── auth/
 │   └── seed.json                     # setup 保存的共享只读认证源
 └── sessions/
@@ -205,19 +218,45 @@
 
 ### SQLite 合同
 
-SQLite 只保存协调状态和文件索引，不保存 prompt、response 或返回文件正文。目标 schema 包含三张表：
+SQLite 只保存协调状态和文件索引，不保存 prompt、response 或返回文件正文。目标 schema 包含四张表：
 
-| 表         | 主键                        | 必要字段                                                                                                                                     |
-| ---------- | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `task`     | `id`                        | `playwright_session`、`conversation_id`、`conversation_url`、`status`、browser-operation lease 字段、`created_at`、`updated_at`、`closed_at` |
-| `turn`     | `task_id, id`               | `status`、`prompt_path`、`attachments_json`、`response_path`、`error`、`created_at`、`updated_at`                                            |
-| `artifact` | `task_id, turn_id, ordinal` | `source_url`、`label`、`filename`、`local_path`、`status`、`error`、`created_at`、`updated_at`                                               |
+| 表          | 主键                        | 必要字段                                                                                                                                                                       |
+| ----------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `task`      | `id`                        | `playwright_session`、`conversation_id`、`conversation_url`、`status`、browser-operation lease 字段、`created_at`、`updated_at`、`closed_at`                                   |
+| `turn`      | `task_id, id`               | `status`、`prompt_path`、`attachments_json`、可空 `user_turn_identity`、`response_path`、`error`、`created_at`、`updated_at`                                                   |
+| `artifact`  | `task_id, turn_id, ordinal` | `source_url`、`label`、`filename`、`local_path`、`status`、`error`、`created_at`、`updated_at`                                                                                 |
+| `operation` | `id`                        | `kind`、`step`、`phase`、`progress`、可空 `task_id`、可空 `turn_id`、`session_name`、`evidence_json`、`resolution_source`、`error`、`created_at`、`updated_at`、`committed_at` |
 
-`task.status` 只允许 `active | closed | failed`；`turn.status` 只允许 `sending | pending | capturing | completed | failed | unknown-submission`；`artifact.status` 只允许 `pending | completed`。`turn.task_id` 与 artifact 的 task/turn 组合使用外键关联，session name 唯一，单个 turn 的 `source_url` 唯一。所有时间使用 ISO 8601 UTC 字符串；附件数组按上传顺序编码为 JSON 字符串。
+`task.status` 只允许 `starting | active | closing | closed | failed`；`turn.status` 只允许 `sending | pending | capturing | completed | failed | unknown-submission`；`artifact.status` 只允许 `pending | completed`。`pending`、`capturing` 和 `completed` turn 必须有唯一 `user_turn_identity`，其他状态允许为空。`operation.kind` 只允许 `setup | start | send | archive`；`step` 按 kind 只允许 `setup: login | seed | cleanup`、`start: session | project | configuration`、`send: draft | submit`、`archive: archive | restore`；`progress` 是当前 step 已验证的非负序号。`operation.phase` 只允许 `prepared | effect-unknown | needs-decision | committed`，`resolution_source` 只允许空值、`automatic` 或 `human`。`turn.task_id` 与 artifact 的 task/turn 组合使用外键关联，session name 唯一，单个 turn 的 `source_url` 唯一；每个 task 同时最多一个未 `committed` operation，全局同时最多一个未 `committed` setup operation。所有时间使用 ISO 8601 UTC 字符串；附件数组和 evidence 按稳定 schema 编码为 JSON 字符串。
+
+`evidence_json` 只记录实际观察，不记录推断为事实；公共字段为 `observedAt`、`sessionName`、可空 `pageUrl` 和 `postcondition`。setup evidence 另含 `seedValidated` 与 `sessionClosed`；start evidence 另含 Project identity、模型与模式；send evidence 另含可空 conversation identity、可空 user turn identity、prompt 是否逐字匹配和有序附件名称匹配结果；archive evidence 另含 conversation identity、`archived` 与 `bindingRestored`。人工提交裁决另记录 `decision`、用户提供的 canonical URL 和页面验证结果；不在 evidence 中复制 prompt 正文、附件字节、cookie 或 storage state。
 
 每个 CLI 进程使用自己的 `DatabaseSync` 连接，并设置 `foreign_keys=ON`、WAL journal 和有限 busy timeout。会影响状态门或外部副作用归属的变更在 `BEGIN IMMEDIATE` 事务中完成；业务代码不得依赖进程内全局状态代替数据库约束。
 
-prompt 文件成功落盘后，turn 才能从 `sending` 进入 `pending`。观察到网页完成后，turn 在取得 Copy response 与完整有序 artifact 描述期间仍保持 `pending`；超时、中断或浏览器错误不得留下 response 路径或部分 artifact 行。取得全部数据后，单个 `BEGIN IMMEDIATE` 事务必须同时把 turn 从 `pending` 置为 `capturing`、记录确定的 `response_path`，并按页面顺序建立全部 artifact 行；事务只能全部提交或全部回滚，不得把 `beginCapture` 与 artifact 建行拆成两个事务。事务提交后才发布 `response.md` 和返回文件。每个文件先写同目录临时文件，再无覆盖地发布到最终路径并标为 completed。只有 response 和全部 artifact 文件均可读时，turn 才能进入 `completed`。
+`setup` 在打开 session 前创建全局 `setup: login: prepared` operation。`start` 在一个事务中创建 `starting` task 与 `start: session: prepared` operation；已存在且仍处于启动范围内的 taskId 只能进入同一任务恢复，其他状态返回冲突。`archive` 在点击前把已绑定 canonical identity 写入 `archive: archive: prepared` operation。上述意图未成功持久化时不得放行对应浏览器 command。
+
+`send` 先在一个事务中创建 `sending` turn 与 `send: draft: prepared` operation，再无覆盖地发布 prompt 副本；prompt 缺失或不一致时不得执行浏览器动作，恢复把原 turn 置为 `failed`。turn 在证明提交完成前保持 `sending`。提交 command PID 放行前，operation 必须进入 `send: submit: effect-unknown`；页面自动证明提交或经过 BEH-013 的 `submitted` 裁决后，单个事务把 turn 置为 `pending`，记录唯一 user DOM identity，绑定 canonical conversation identity，并把 operation 置为 `committed`。`not-submitted` 裁决把 turn 置为 `failed` 后提交 operation。观察到网页完成后，turn 在取得 Copy response 与完整有序 artifact 描述期间仍保持 `pending`；超时、中断或浏览器错误不得留下 response 路径或部分 artifact 行。取得全部数据后，单个 `BEGIN IMMEDIATE` 事务必须同时把 turn 从 `pending` 置为 `capturing`、记录确定的 `response_path`，并按页面顺序建立全部 artifact 行；事务只能全部提交或全部回滚，不得把 `beginCapture` 与 artifact 建行拆成两个事务。事务提交后才发布 `response.md` 和返回文件。每个文件先写同目录临时文件，再无覆盖地发布到最终路径并标为 completed。只有 response 和全部 artifact 文件均可读时，turn 才能进入 `completed`。
+
+### 浏览器副作用恢复
+
+operation journal 只承载可能因进程退出而丢失确认的浏览器副作用，不复制 `wait` 的 capture 状态机或幂等 `close`。每个 operation 先保存 kind、当前 step、已验证 progress 与 `prepared`；实际浏览器 command 放行前写入 `effect-unknown`；取得该 step 的可验证后置条件后，推进下一个 `prepared` step，或在同一事务提交对应 task 或 turn 状态、证据、`resolution_source` 和 `committed`。自动判定无法得到唯一结论时，只有 `send: submit` 可进入 `needs-decision`；其他操作保留 `effect-unknown` 并在页面证据重新可用后恢复，不能让用户用无页面验证的声明代替系统状态。
+
+| 中断状态                                          | 恢复动作                                                                                                                                                                                  | 禁止或失败处理                                                                        |
+| ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| setup operation 为 `prepared`                     | 重新进入登录或 seed 保存；已有 seed 必须先验证                                                                                                                                            | 不把文件存在等同于认证有效                                                            |
+| setup operation 为 `effect-unknown`               | 核对 seed；有效则只关闭记录的 setup session 并提交，无效则回到登录流程                                                                                                                    | 不删除有效 seed，不要求已完成登录的用户重复登录                                       |
+| task 为 `starting`，start operation 未提交        | 使用同一 `taskId` 与 session name 核对 session；缺失时从 seed 重建，再验证 Project、composer、模型和模式                                                                                  | 不创建第二个 task、session identity 或 conversation                                   |
+| send operation 的 step 为 `draft`                 | 清理或重建目标 composer；确认安全后把原 turn 置为 `failed` 并提交 operation，返回 `nextAction: send`                                                                                      | 不继续上传，不提交消息，不保留残留或重复附件；新的消息必须由宿主显式再次 `send`       |
+| send operation 为 `send: submit: effect-unknown`  | 在已绑定 conversation 或唯一目标 Project 中可识别的新 conversation 中，从已记录前一 turn 锚点之后查找与保存的 prompt 及有序附件名称一致的唯一 user turn；唯一匹配时自动绑定并置 `pending` | 零个或多个候选、无 canonical identity 或证据不完整时进入 `needs-decision`，不自动重发 |
+| browser session 不存在且 task 已绑定 conversation | 从 seed 重建相同 named session，打开记录的 canonical URL，核对 conversation identity 与相关 turn                                                                                          | 无权访问、目标缺失或身份不符时保持不可继续状态，不迁移 conversation                   |
+| browser session 不存在且 task 未绑定 conversation | 从 seed 重建相同 named session，只恢复固定 Project 的空白 composer、模型和模式                                                                                                            | `unknown-submission` 不得走本分支猜测未提交                                           |
+| archive operation 为 `effect-unknown`             | 重建或复用 session，核对目标是否已归档；已归档时恢复 canonical 绑定并提交，证明确未归档时重试一次归档流程                                                                                 | 后置条件不可得或相互冲突时保持原状态，不重复点击                                      |
+
+首个 turn 的前一 turn 锚点是 conversation 起点，匹配候选必须是该 conversation 的第一个 user turn；后续 turn 使用已持久化的前一 completed turn identity 作为锚点。恢复不得只凭全文搜索在 conversation 的其他位置接受相同 prompt。
+
+`status` 不取得 mutating operation lease，也不执行本表动作；它对同一数据库快照返回 `taskId`、`taskStatus`、可空 `turnId`、可空 `turnStatus`、`browserStatus: available | missing | unknown`、可空 `operationKind`、可空 `operationStep`、可空 `operationPhase`、可空 `operationProgress`、最近 evidence、最近 error 和唯一 `nextAction`。`nextAction` 表示继续或解除当前持久工作流的系统选定动作，不枚举 `close` 等调用方仍可主动选择的其他命令；没有待继续或待解除状态时为 `none`。`recover` 取得 lease 后只执行表中与当前持久状态匹配的一个恢复路径，并返回恢复后的同一组状态字段；若下一步是 `wait`、`close` 或人工裁决，只返回该 `nextAction`，不代替对应命令。
+
+`close` 在关闭浏览器前以事务把任一非 `closed` task 置为 `closing`；`closing` task 的 `status.nextAction` 固定为 `close`，`recover` 不得重建其 browser。后续 `close` 只核对或终止记录的 named session，并在确认 session 不存在后把 task 置为 `closed`；状态写入失败时保持 `closing`，不得删除 transcript 或改回先前状态。
 
 ### 捕获提交与中断恢复
 
@@ -238,16 +277,17 @@ prompt 文件成功落盘后，turn 才能从 `sending` 进入 `pending`。观�
 ### 顺序、并发与幂等
 
 - 同一 task 的 CLI 调用通过 SQLite 状态门和同一个 Playwright named session 排序；不同 task 使用不同 named session、浏览器进程、browser context 和 turn 目录。
-- `send` 先写入 turn 标识和 prompt 副本，再进行浏览器副作用；只有确认消息已提交后才返回成功。提交结果不明确时记录 `unknown-submission`，不自动重发。
+- `start`、`send`、`archive`、`recover` 和 `resolve-submission` 共享同一 task operation lease；对同一 `taskId` 的重复或并发 `start` 只能观察或继续同一个 `starting` task。
+- `send` 先写入 turn 标识、prompt 副本与 operation，再进行浏览器副作用；只有确认消息已提交后才返回成功。提交结果不明确时记录 `unknown-submission` 和 `needs-decision`，不自动重发。
 - `wait` 的内部页面检查、operation lease 释放和再次检查都不写宿主可见进度；网页未报告完成且达到观察 deadline 后才返回一次 pending。网页已报告完成但捕获在原子边界前失败时返回真实错误并保持持久状态 `pending`；后续重试仍重新观察目标 turn 并重取 Copy。turn 进入 `capturing` 后，重试跳过生成等待，先执行捕获恢复核对，再复用已完成 artifact 并只下载未完成项。
 - completed turn 的 `wait` 是幂等读取；`close` 是幂等清理。`archive` 依赖 Web 端实际状态，只有观察到指定 conversation 已归档且 task 页面恢复原绑定才返回成功。
-- 观察窗口不会关闭 task 或取消远端生成。调用环境中断时，Playwright session 和未完成 turn 继续存在，后续可再次 `wait`。
+- 观察窗口不会关闭 task 或取消远端生成。调用环境中断时，持久 task、turn、operation 和 transcript 继续存在；Playwright session 仍在时复用，已经退出时按 BEH-013 重建。
 - 回复捕获不得依赖未经隔离验证的全局剪贴板。若驱动必须使用 Copy 控件，VER-004 和 VER-006 必须证明并发任务不会读到彼此内容。
 
 ### 失败与运行边界
 
 - 输入路径、归档生成、浏览器动作、返回文件下载或本地写入失败时返回具体操作和原因；不得把失败记为 completed，也不得因为失败扫描更多本地文件。
-- 不进行自动 prompt 重发、Playwright session 自动重启或 conversation 自动迁移。浏览器进程崩溃时保留 SQLite 状态与已有 transcript，并报告任务不可用；崩溃恢复属于后续规格。
+- 不进行自动 prompt 重发或 conversation 迁移。Playwright session 只能由 `start` 重试或 `recover` 按已记录的 seed、`taskId`、固定 Project 和 canonical identity 重建；普通 `send`、`wait` 或 `archive` 不得静默切换到新 session 或其他 conversation。
 - BEH-008 的进程终止出现部分失败时，保留可定位的进程或 session 信息并返回失败；不删除 transcript 来伪造清理完成。
 - task 和 turn 标识必须不可碰撞；prompt、response 和返回文件写入先落到同目录临时文件，再无覆盖地发布各自目标文件。已经发布的文件不再覆盖；相同 `sandbox:` 目标只关联一个本地文件。
 - Pro 与本地 Agent 是受信任的协作方。Collab 对返回文件只承担保存职责，不自动解压、预览、执行、应用 patch 或修改权限；这些动作由宿主在 `wait` 返回后按任务需要决定。
@@ -259,8 +299,8 @@ prompt 文件成功落盘后，turn 才能从 `sending` 进入 `pending`。观�
 
 - **覆盖对象**：BEH-001。
 - **前置条件**：可交互登录的 Pro 账号、干净认证目录，以及满足 BEH-002 启动前提的现有 Project 和模型能力。
-- **执行或检查**：使用固定 Playwright CLI 登录并 `state-save`；关闭 setup session，从同一 seed state 同时执行两次 `start`。
-- **通过证据**：setup session 已关闭；两个非持久 task session 均已登录且未再次请求登录；seed 文件未被 task 改写。
+- **执行或检查**：使用固定 Playwright CLI 登录并 `state-save`；分别在 seed 发布前、seed 验证后但 setup session 关闭前终止进程，再执行 `setup`；最后从同一 seed state 同时执行 `start task-a` 与 `start task-b`。
+- **通过证据**：seed 发布前中断不产生成功认证状态；seed 验证后的重试不要求重复登录，只关闭记录的 setup session；两个非持久 task session 均已登录且未再次请求登录；seed 文件未被 task 改写。
 - **证明边界**：不证明认证长期不过期。
 - **必需性**：必需。
 
@@ -268,8 +308,8 @@ prompt 文件成功落盘后，turn 才能从 `sending` 进入 `pending`。观�
 
 - **覆盖对象**：BEH-002。
 - **前置条件**：VER-001 通过；账号中恰有一个现有 Project 精确命名为 `chatgpt-pro-collab`，并可使用 `GPT-5.6 Sol` 模型与 `Pro` 模式。
-- **执行或检查**：同时启动两个任务；对每个任务检查 Project URL、主区域 Project 标题、空白 composer、模型与模式 radio 状态、Playwright session、浏览器进程、browser context 和 session 目录，再分别完成首次发送。确定性页面夹具另从非目标模型与模式开始，并分别覆盖 Project 缺失、同名 Project 不唯一、固定模型或模式缺失、点击后无法回读选择以及页面合同漂移。
-- **通过证据**：两个任务都只在唯一 `chatgpt-pro-collab` Project 的空白 composer 中返回成功，且 `GPT-5.6 Sol` 和 `Pro` 各自唯一并满足 `aria-checked=true`；两个任务具有不同 named session、浏览器 PID、内存 browser context、taskId、session 路径和 Project 内 conversation。各失败夹具返回对应错误，不产生成功 `taskId`，已打开 session 被关闭，`failed` task 记录保留，且没有调用 Project 创建或修改操作。
+- **执行或检查**：调用方生成两个 canonical lowercase UUID v4，并同时启动；对每个任务检查 Project URL、主区域 Project 标题、空白 composer、模型与模式 radio 状态、Playwright session、浏览器进程、browser context 和 session 目录，再分别完成首次发送。对第一个 `taskId` 在绑定 conversation 前并发重复 `start`，并分别在 task 事务提交后、session 打开后、seed 加载后、Project 导航后和固定模型与模式回读前后终止进程，再以同一 `taskId` 重试；绑定 conversation 后再次 `start`。确定性夹具另覆盖大小写错误、非 UUID、路径分隔符与 closing、closed、failed taskId，并从非目标模型与模式开始，分别覆盖 Project 缺失、同名 Project 不唯一、固定模型或模式缺失、点击后无法回读选择以及页面合同漂移。
+- **通过证据**：两个任务都只在唯一 `chatgpt-pro-collab` Project 的空白 composer 中返回成功，且 `GPT-5.6 Sol` 和 `Pro` 各自唯一并满足 `aria-checked=true`；两个不同 task 具有不同 named session、浏览器 PID、内存 browser context、taskId、session 路径和 Project 内 conversation。相同 `taskId` 的并发与中断重试只有一条 task 记录、一个稳定 session identity 和一个 composer，不分配新 taskId。非法、已绑定 conversation 或已终结的 taskId 在目录或浏览器副作用前被拒绝；其他确定失败夹具返回对应错误，不产生成功结果，`failed` task 记录保留，且没有调用 Project 创建或修改操作。
 - **证明边界**：不证明消息并发、回复隔离、其他账号权限或未来 ChatGPT Web 页面结构。
 - **必需性**：必需。
 
@@ -277,8 +317,8 @@ prompt 文件成功落盘后，turn 才能从 `sending` 进入 `pending`。观�
 
 - **覆盖对象**：BEH-003 与产品边界。
 - **前置条件**：活动任务；当前目录含 dirty Git 状态、未指定文件和 symlink；输入选择层使用可观察或可注入的文件访问边界。
-- **执行或检查**：从工作区内外各选择明确的普通附件执行 `send`，记录输入选择层的路径解析、文件访问和读取调用；另以 live Web 检查实际上传项，不传入其他文件。
-- **通过证据**：输入选择层只解析和访问指定 prompt 与附件；显式外部路径可上传；Web 输入与指定内容一致且没有未指定上传项或归档；返回 turnId。
+- **执行或检查**：从工作区内外各选择明确的普通附件执行 `send`，记录输入选择层的路径解析、文件访问和读取调用；另以 live Web 检查实际上传项，不传入其他文件。分别在每个附件上传后且提交 command 放行前终止进程，再执行 `recover` 并重新进入显式 send 流程。
+- **通过证据**：输入选择层只解析和访问指定 prompt 与附件；显式外部路径可上传；Web 输入与指定内容一致且没有未指定上传项或归档；正常路径返回 turnId。提交放行前的每个中断点都恢复为没有残留或重复附件的安全 composer，原 turn 标为 `failed`，未产生 user turn，也未自动发送；新的消息只有在宿主再次显式 `send` 后出现。
 - **证明边界**：不约束 Node.js、npm/npx、浏览器或操作系统读取其运行依赖、配置与缓存；不证明归档输入或 Pro 回复正确。
 - **必需性**：必需。
 
@@ -286,8 +326,8 @@ prompt 文件成功落盘后，turn 才能从 `sending` 进入 `pending`。观�
 
 - **覆盖对象**：BEH-004。
 - **前置条件**：已发送包含长文本与代码块、可产生无文件回复的 turn。
-- **执行或检查**：使用足够的观察窗口与捕获超时执行 `wait`；检查目标 assistant、`Stop answering` 与 Copy 状态，将页面内 Copy response 和 `response.md` 逐字节比较，再重复 wait。自动化 fixture 另覆盖 observation 已判定 T1 完成、capture 前页面新增 T2 的竞态，以及 Stop 持续可见的观察到期路径；正常捕获 fixture 必须真实执行页面内 clipboard install→Copy click/write→captured read→restore。
-- **通过证据**：正常路径返回 completed，内容一致，没有读取系统剪贴板，artifactPaths 为空，重复调用返回同一路径且旧 response 未覆盖；observation 返回的 T1 identity 被显式传给 capture，页面新增 T2 时 capture 仍只接受 T1，T1 缺失或不唯一时不点击 Copy、不进入 `capturing`；Stop 持续可见时不点击 Stop、不 reload，并在观察窗口到期后返回 pending。页面内 clipboard fixture 逐字验证 `text/plain`、`text/html` 和失败/成功路径的全局恢复。
+- **执行或检查**：使用足够的观察窗口与捕获超时执行 `wait`；检查持久化 user identity、目标 assistant、`Stop answering` 与 Copy 状态，将页面内 Copy response 和 `response.md` 逐字节比较，再重复 wait。自动化 fixture 另覆盖目标 user 之后出现额外 user turn、observation 已判定 T1 完成但 capture 前页面新增 T2 的竞态，以及 Stop 持续可见的观察到期路径；正常捕获 fixture 必须真实执行页面内 clipboard install→Copy click/write→captured read→restore。
+- **通过证据**：正常路径返回 completed，内容一致，没有读取系统剪贴板，artifactPaths 为空，重复调用返回同一路径且旧 response 未覆盖；wait 只使用持久化 user identity，target 缺失或不唯一时不退回 latest user。observation 返回的 T1 identity 被显式传给 capture，页面新增 T2 时 capture 仍只接受 T1，T1 缺失或不唯一时不点击 Copy、不进入 `capturing`；Stop 持续可见时不点击 Stop、不 reload，并在观察窗口到期后返回 pending。页面内 clipboard fixture 逐字验证 `text/plain`、`text/html` 和失败/成功路径的全局恢复。
 - **证明边界**：不覆盖返回文件下载、其他未知 ChatGPT Web 加载指示漂移或用户主动刷新。
 - **必需性**：必需。
 
@@ -311,10 +351,10 @@ prompt 文件成功落盘后，turn 才能从 `sending` 进入 `pending`。观�
 
 ### VER-007 审计记录持久性
 
-- **覆盖对象**：BEH-007、BEH-012。
+- **覆盖对象**：BEH-007、BEH-012、BEH-013。
 - **前置条件**：至少两个 completed turn 使用过同名 prompt 和返回文件名。
-- **执行或检查**：修改原 prompt 文件；检查 SQLite 与 turn 目录；关闭任务后用新的 CLI 进程复读。
-- **通过证据**：task、turn、artifact 顺序和路径可查询；prompt、response、返回文件保持原内容；发送附件正文没有副本。
+- **执行或检查**：修改原 prompt 文件；检查 SQLite 与 turn 目录；对一个自动恢复和两个提交裁决分支检查 operation evidence 与 resolution source；关闭任务后用新的 CLI 进程复读。
+- **通过证据**：task、turn、user turn identity、artifact 顺序和路径可查询；prompt、response、返回文件保持原内容；发送附件正文没有副本；自动恢复与人工裁决可区分，人工记录包含结论、页面 identity、时间和最终状态。
 - **证明边界**：不保证已修改发送附件的字节级复原。
 - **必需性**：必需。
 
@@ -322,8 +362,8 @@ prompt 文件成功落盘后，turn 才能从 `sending` 进入 `pending`。观�
 
 - **覆盖对象**：BEH-008。
 - **前置条件**：活动任务且 Web conversation 已建立。
-- **执行或检查**：执行 `close` 两次并检查 Playwright session、本地目录与 Web。
-- **通过证据**：named session 和浏览器进程消失；SQLite、transcript、返回文件与共享 seed 保留；Web 未归档；第二次调用无额外副作用。
+- **执行或检查**：在浏览器关闭前、浏览器关闭后但 task 状态提交前分别终止 `close`，先执行 `status` 与 `recover`，再并发执行两次 `close`，检查 Playwright session、本地目录与 Web。
+- **通过证据**：中断后 task 保持 `closing`，`status.nextAction` 为 `close`，`recover` 不重建 session；所有路径最终只有同一个 closed task，named session 和浏览器进程消失；SQLite、transcript、返回文件与共享 seed 保留；Web 未归档；重复调用无额外副作用。
 - **证明边界**：不证明操作系统能清理被外部程序锁定的文件。
 - **必需性**：必需。
 
@@ -331,35 +371,35 @@ prompt 文件成功落盘后，turn 才能从 `sending` 进入 `pending`。观�
 
 - **覆盖对象**：BEH-005、BEH-009。
 - **前置条件**：活动任务且 Web conversation 已建立。
-- **执行或检查**：执行 `archive`，等待离开目标 canonical URL，刷新侧栏并确认归档；随后检查恢复后的页面绑定，再在同一 task 执行一次 send/wait。
-- **通过证据**：刷新后目标 conversation 不在侧栏；页面恢复到原 `/c/<conversationId>` 且原 turn 可定位；后续 send/wait 仍使用相同 conversation 标识；进程和 transcript 保持；其他 conversation 不变。
+- **执行或检查**：正常执行 `archive`，等待离开目标 canonical URL，刷新侧栏并确认归档；随后检查恢复后的页面绑定，再在同一 task 执行一次 send/wait。另分别在 operation 准备后、Archive command 放行后、Web 已归档但本地未提交以及 canonical 页面恢复前终止进程，执行 `status` 与 `recover`；页面夹具覆盖“已归档”“证明确未归档”和后置条件不可得。
+- **通过证据**：刷新后目标 conversation 不在侧栏；页面恢复到原 `/c/<conversationId>` 且原 turn 可定位；后续 send/wait 仍使用相同 conversation 标识；进程和 transcript 保持；其他 conversation 不变。`status` 不改变页面；已归档路径不再点击 Archive，证明确未归档路径只重试一次归档流程，证据不可得时保持 `effect-unknown` 且不点击。
 - **证明边界**：只覆盖当次 ChatGPT Web Archive 与 canonical URL 恢复界面。
 - **必需性**：必需。
 
 ### VER-010 确定性实现检查
 
-- **覆盖对象**：BEH-001–BEH-012 的确定性实现。
+- **覆盖对象**：BEH-001–BEH-013 的确定性实现。
 - **前置条件**：依赖已安装，目标代码和测试存在。
 - **执行或检查**：在最后一次相关修改后运行 `pnpm format:check`、`pnpm lint`、`pnpm typecheck`、`pnpm test`、`pnpm collab -- help`；从无 `package.json` 的临时宿主目录用绝对路径执行 Skill CLI `help`。
-- **通过证据**：每条命令退出码为 0；入口不依赖宿主 package manifest；help 含两个 wait 时长参数；测试输出可追溯对应 `BEH-*`。
+- **通过证据**：每条命令退出码为 0；入口不依赖宿主 package manifest；help 含稳定 taskId、两个 wait 时长参数、`status`、`recover` 与两个 `resolve-submission` 形式；测试输出可追溯对应 `BEH-*`。
 - **证明边界**：不证明真实 ChatGPT Web 或用户主动中断行为。
 - **必需性**：必需。
 
 ### VER-011 中断恢复与并发状态
 
-- **覆盖对象**：BEH-002、BEH-004、BEH-006、BEH-007、BEH-012。
+- **覆盖对象**：BEH-001–BEH-004、BEH-006–BEH-009、BEH-012、BEH-013。
 - **前置条件**：state 与文件存储实现及测试存在。
-- **执行或检查**：以多进程覆盖不同 task，并分别在原子 capturing 事务提交前、事务提交后、response 发布后、artifact 发布但状态更新前、部分 artifact 完成后终止进程；重开数据库并执行恢复矩阵，最后并发 close。
-- **通过证据**：事务提交前的中断只保留完整 `pending`，提交后一次可见 `capturing`、response_path 与全部 artifact 行；无丢失更新、半冻结状态或跨 task 污染；各后续中断点都能复用或补齐一致内容；不一致使用规定错误码；文件无覆盖；completed 不变量保持；重启后可继续。
+- **执行或检查**：以多进程覆盖相同与不同 task，在每种 operation 的 `prepared`、command 放行前、`effect-unknown`、业务状态提交前后终止进程；验证单 task 未提交 operation 唯一约束、lease orphan 回收和旧 command PID fencing。另分别在原子 capturing 事务提交前、事务提交后、response 发布后、artifact 发布但状态更新前、部分 artifact 完成后终止进程；重开数据库并执行两张恢复矩阵，最后并发 close。
+- **通过证据**：operation 与 task/turn 状态只按规定事务组合出现；同 task 不存在两个未提交 operation，旧 owner 或 command 不能越过新 lease 产生副作用，不同 task 无跨任务污染。capturing 事务提交前的中断只保留完整 `pending`，提交后一次可见 `capturing`、response_path 与全部 artifact 行；各后续中断点都能复用或补齐一致内容；不一致使用规定错误码；文件无覆盖；completed 不变量保持；重启后可继续。
 - **证明边界**：不证明浏览器、下载或 ChatGPT Web 行为。
 - **必需性**：必需。
 
 ### VER-012 运行前提
 
-- **覆盖对象**：BEH-001–BEH-012 的运行前提。
+- **覆盖对象**：BEH-001–BEH-013 的运行前提。
 - **前置条件**：Node.js v22.19.0、当前受支持 Node、npm/npx 和网络可用。
-- **执行或检查**：分别在最低与当前 Node 执行版本检查、`node:sqlite` DatabaseSync 内存库 smoke test 和最小 `.ts` 入口 smoke test；执行固定 Playwright CLI help。
-- **通过证据**：两个 Node 版本的 smoke test 与 `npx -y @playwright/cli@0.1.17 --help` 退出码均为 0。
+- **执行或检查**：分别在最低与当前 Node 执行版本检查、`node:sqlite` DatabaseSync 内存库 smoke test 和最小 `.ts` 入口 smoke test；执行固定 Playwright CLI help 与无 browser 的 raw `list`。
+- **通过证据**：两个 Node 版本的 smoke test、`npx -y @playwright/cli@0.1.17 --help` 与 `npx -y @playwright/cli@0.1.17 --raw list` 退出码均为 0，list 结果可确定表达当前没有 browser。
 - **证明边界**：不证明登录、storage state、页面 selector 或归档工具。
 - **必需性**：必需。
 
@@ -385,12 +425,21 @@ prompt 文件成功落盘后，turn 才能从 `sending` 进入 `pending`。观�
 
 - **覆盖对象**：BEH-004、BEH-012。
 - **前置条件**：Live Pro 能生成含 sandbox 文件链接的目标回复。
-- **执行或检查**：让目标 turn 返回 HTML、ZIP、图片、源码、两个同名文件、重复 sandbox 目标和普通 HTTPS 链接；执行带两个时长的 wait，核对 Copy response 的两种 ClipboardItem 类型、sandbox occurrence 与正文按钮的顺序、artifact 子序列、直接与 artifact download event 以及落盘文件；另用确定性故障注入覆盖页面数量或顺序漂移、部分下载失败、原子边界前后捕获超时、重试及下载跨过观察 deadline。
-- **通过证据**：Copy response 原样保存；唯一 sandbox 文件按顺序落盘；重复项只下载一次；同名目标以逻辑 URL 区分且本地文件不覆盖；HTTPS 未下载；直接与 artifact 页面路径均成功产生对应 download event；页面映射不一致时返回页面合同漂移；原子边界前捕获超时返回 `CAPTURE_TIMEOUT` 且保持完整 `pending`，边界后捕获超时返回同一码并保持 `capturing`；deadline 前的真实浏览器错误保留原码；重试分别重取 Copy 或复用已冻结内容并完成；不因观察 deadline 返回成功的 pending。
+- **执行或检查**：让目标 turn 返回 HTML、ZIP、图片、源码、两个同名文件、重复 sandbox 目标和普通 HTTPS 链接；执行带两个时长的 wait，核对 Copy response 的两种 ClipboardItem 类型、sandbox occurrence 与正文按钮的顺序、artifact 子序列、直接与 artifact download event 以及落盘文件；另用确定性故障注入覆盖下载控件被滚动容器遮挡、页面数量或顺序漂移、部分下载失败、原子边界前后捕获超时、重试及下载跨过观察 deadline。
+- **通过证据**：Copy response 原样保存；唯一 sandbox 文件按顺序落盘；重复项只下载一次；同名目标以逻辑 URL 区分且本地文件不覆盖；HTTPS 未下载；直接与 artifact 页面路径均成功产生对应 download event，控件被遮挡时仍通过已验证的目标控件触发下载；页面映射不一致时返回页面合同漂移；原子边界前捕获超时返回 `CAPTURE_TIMEOUT` 且保持完整 `pending`，边界后捕获超时返回同一码并保持 `capturing`；deadline 前的真实浏览器错误保留原码；重试分别重取 Copy 或复用已冻结内容并完成；不因观察 deadline 返回成功的 pending。
 - **证明边界**：只覆盖当次 ChatGPT Web 文件 UI 与注入的下载失败路径。
 - **必需性**：必需。
 
-VER-001–VER-015 均为完成本规格的必需验证。涉及真实 ChatGPT Web 的 VER-001–VER-009、VER-013 和 VER-015 未经 live 执行，不得以 mock、单元测试或代码审查声称通过；VER-014 必须实际运行 Skill 与 CLI，并取得调用次数、页面检查和进程输出证据，不能只检查 Skill 文案或页面循环的单元测试。
+### VER-016 端到端恢复与提交裁决
+
+- **覆盖对象**：BEH-002、BEH-003、BEH-005–BEH-009、BEH-013。
+- **前置条件**：有效 seed、可建立 conversation 的 Live Pro 账号、可终止 task browser 与 CLI command 的测试驱动，以及能呈现唯一、零个和多个匹配 user turn 的确定性页面夹具。
+- **执行或检查**：先证明 `status` 对活动、browser 缺失、operation 未完成和 `needs-decision` 状态只读。随后分别终止尚未首次发送的 task browser、已经绑定 conversation 且 turn 为 pending 的 task browser，以及提交 command 已放行但首次 conversation identity 尚未持久化的 browser；对前两者执行并发 `recover`，对第三者检查阻塞。另制造提交返回丢失但页面保留唯一匹配 user turn 的自动恢复、零个或多个候选的阻塞、携带正确或错误 canonical URL 的 `submitted` 裁决，以及用户给出 `not-submitted` 但页面分别处于安全 composer、有匹配提交或错误 Project 的场景。每个场景记录 browser command、页面 identity、operation transition、turn transition 和 user turn 数量。
+- **通过证据**：`status` 前后数据库与页面无变化；未绑定 task 只恢复同一 `taskId` 的固定 Project composer，已绑定 task 只恢复同一 canonical conversation 与相关 turn，两个并发 `recover` 只创建一个有效 named session。唯一页面匹配可自动置为 `pending` 且 user turn 总数不增加；无 canonical identity、零个或多个候选进入 `needs-decision` 且不发送。有效 `submitted` URL 只在固定 Project、既有 task 绑定、conversation、保存的 prompt、有序附件名称和唯一 user turn 全部匹配后绑定原 turn；有效 `not-submitted` 只在用户裁决且已绑定 conversation 或未绑定 Project composer 验证安全后把原 turn 置为 `failed`。错误 URL、输入不符、候选不唯一、有匹配提交、错误 Project、无权限和并发状态冲突均保持原状态；所有路径的自动或人工 resolution source 可审计，消息均不自动重发。
+- **证明边界**：页面匹配只能证明当时可见的 conversation、prompt 和附件名称，不能证明远端附件字节；`not-submitted` 的历史事实来自用户裁决，页面只证明后续发送状态安全；不证明已删除或当前账号无权访问的 conversation 可恢复。
+- **必需性**：必需。
+
+VER-001–VER-016 均为完成本规格的必需验证。涉及真实 ChatGPT Web 的 VER-001–VER-009、VER-013、VER-015 和 VER-016 未经 live 执行，不得以 mock、单元测试或代码审查声称通过；VER-014 必须实际运行 Skill 与 CLI，并取得调用次数、页面检查和进程输出证据，不能只检查 Skill 文案或页面循环的单元测试。
 
 **相关修改**是指改变任一 `VER-*` 的覆盖行为、组件映射、状态、接口、前置条件、执行步骤或证据判据的变更。全部必需 `VER-*` 必须在最后一次相关修改后重新通过；局部修复至少重跑失败的 `VER-*`、所有受影响的 `VER-*`、VER-010 和 VER-012；涉及 SQLite 状态时还必须重跑 VER-011。
 
@@ -400,27 +449,30 @@ VER-001–VER-015 均为完成本规格的必需验证。涉及真实 ChatGPT We
 
 没有新证据，且下一步不会引入新的可验证假设、证据来源或不同修复动作时，停止重复尝试。报告已尝试动作、现有证据、阻塞原因和解除条件；固定重试次数不能替代该判断。
 
-完成条件是：所有 `BEH-*`、产品边界和不可接受结果均有验证覆盖；VER-001–VER-015 在最后一次相关修改后通过；本规格标记为需要直接检查的 SQLite、session 文件、浏览器进程、Playwright session、Web conversation、transcript、返回文件和 CLI 终态结果已实际检查；不存在阻塞未决事项；最终变更未加入仓库理解、返回产物自动集成或其他规格外能力。
+完成条件是：所有 `BEH-*`、产品边界和不可接受结果均有验证覆盖；VER-001–VER-016 在最后一次相关修改后通过；本规格标记为需要直接检查的 SQLite、session 文件、浏览器进程、Playwright session、Web conversation、transcript、返回文件和 CLI 终态结果已实际检查；不存在阻塞未决事项；最终变更未加入仓库理解、返回产物自动集成或其他规格外能力。
 
 ## 决策记录
 
-| 选择                                | 状态   | 理由                                                                                                  | 影响                                                                  |
-| ----------------------------------- | ------ | ----------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| 轻量浏览器协作通道                  | 已确认 | 仓库理解、安全判断和代码集成不属于浏览器传输职责；核心只保留协作输入、浏览器操作和原始输出            | BEH-001–BEH-012、产品边界、技术设计                                   |
-| 每 task 独立浏览器进程              | 已确认 | 多任务必须能够同时等待和操作，不能由共享浏览器或串行控制互相影响                                      | BEH-002、BEH-006、VER-002、VER-006                                    |
-| 宿主显式提供输入                    | 已确认 | Collab 不可能可靠理解所有用户项目；文件与归档内容应由掌握任务上下文的宿主负责                         | BEH-003、BEH-010、产品边界、VER-003、VER-013                          |
-| send 与 wait 分离                   | 已确认 | Pro 可能长时间生成；提交不应占住宿主模型或阻止其他任务继续工作                                        | BEH-003、BEH-004、BEH-006、BEH-011                                    |
-| 一次 wait 只产生一个终态结果        | 已确认 | 让 Agent 反复检查会浪费 token；页面检查应由浏览器层承担，宿主只在完成、到期或真实错误时取得结果       | BEH-004、BEH-011、CLI、VER-014                                        |
-| 生成观察与结果捕获使用独立时长      | 已确认 | 观察窗口只决定何时返回 pending；回复完成后仍需给整轮文件捕获一个独立、有限且可重试的执行窗口          | BEH-004、BEH-012、命令合同、VER-014、VER-015                          |
-| capturing 以完整描述原子冻结为边界  | 已确认 | 网页完成观察不是可恢复的数据边界；response 路径与完整 artifact 集必须同时可见，边界前错误保持 pending | BEH-004、BEH-012、SQLite 合同、VER-011、VER-015                       |
-| Stop 持续可见时不自动恢复           | 已确认 | 持续加载指示不能证明网页已经完成；自动 reload 或仅凭内容稳定捕获会引入错误目标和截断回复风险          | BEH-004、Playwright CLI 合同、VER-004                                 |
-| `.tar.gz` 默认、`.zip` 可选         | 已确认 | 归档用于避免上传大量分散文件；代码任务偏向 tar，跨平台或任务约定需要 zip，同时不固定协作协议          | BEH-010、输入归档合同、VER-013                                        |
-| 原始回复与产物交给宿主解释          | 已确认 | 固定 response schema、diff 或 receipt 解析会写死协作方式；Pro 和宿主应按任务选择 patch、归档或文字    | BEH-004、BEH-012、产品边界、VER-004、VER-015                          |
-| 全部 sandbox 文件落盘后才 completed | 已确认 | 宿主被唤醒时应拿到可操作的完整结果；生成观察窗口不应截断已开始的文件捕获                              | BEH-004、BEH-012、capturing 状态、VER-011、VER-015                    |
-| close 与 Web archive 分离           | 已确认 | 本地进程生命周期与 Web conversation 生命周期是两种独立副作用，必须由不同显式命令触发                  | BEH-008、BEH-009、VER-008、VER-009                                    |
-| Playwright CLI 浏览器边界           | 已确认 | 固定版本外部 CLI 提供 session、storage state 和页面命令；浏览器易变细节集中在单一边界（REF-001）      | Browser boundary、VER-001–VER-006、VER-008、VER-009、VER-012、VER-015 |
-| 共享只读 storage state              | 已确认 | 共享 seed 只提供启动认证数据；每 task 独立 browser context 承担运行时状态隔离，复制 seed 不增加隔离   | BEH-001、BEH-002、BEH-006、VER-001、VER-002、VER-006                  |
-| SQLite 与正文/文件分离              | 已确认 | 结构化状态需要事务和跨进程恢复；文字与返回文件仍应直接可读、逐 turn 无覆盖                            | State store、Transcript/artifact store、VER-007、VER-011、VER-012     |
+| 选择                                | 状态   | 理由                                                                                                       | 影响                                                                                            |
+| ----------------------------------- | ------ | ---------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| 轻量浏览器协作通道                  | 已确认 | 仓库理解、安全判断和代码集成不属于浏览器传输职责；核心只保留协作输入、浏览器操作和原始输出                 | BEH-001–BEH-013、产品边界、技术设计                                                             |
+| 每 task 独立浏览器进程              | 已确认 | 多任务必须能够同时等待和操作，不能由共享浏览器或串行控制互相影响                                           | BEH-002、BEH-006、VER-002、VER-006                                                              |
+| 宿主显式提供输入                    | 已确认 | Collab 不可能可靠理解所有用户项目；文件与归档内容应由掌握任务上下文的宿主负责                              | BEH-003、BEH-010、产品边界、VER-003、VER-013                                                    |
+| send 与 wait 分离                   | 已确认 | Pro 可能长时间生成；提交不应占住宿主模型或阻止其他任务继续工作                                             | BEH-003、BEH-004、BEH-006、BEH-011                                                              |
+| 一次 wait 只产生一个终态结果        | 已确认 | 让 Agent 反复检查会浪费 token；页面检查应由浏览器层承担，宿主只在完成、到期或真实错误时取得结果            | BEH-004、BEH-011、CLI、VER-014                                                                  |
+| 生成观察与结果捕获使用独立时长      | 已确认 | 观察窗口只决定何时返回 pending；回复完成后仍需给整轮文件捕获一个独立、有限且可重试的执行窗口               | BEH-004、BEH-012、命令合同、VER-014、VER-015                                                    |
+| capturing 以完整描述原子冻结为边界  | 已确认 | 网页完成观察不是可恢复的数据边界；response 路径与完整 artifact 集必须同时可见，边界前错误保持 pending      | BEH-004、BEH-012、SQLite 合同、VER-011、VER-015                                                 |
+| Stop 持续可见时不自动恢复           | 已确认 | 持续加载指示不能证明网页已经完成；自动 reload 或仅凭内容稳定捕获会引入错误目标和截断回复风险               | BEH-004、Playwright CLI 合同、VER-004                                                           |
+| `.tar.gz` 默认、`.zip` 可选         | 已确认 | 归档用于避免上传大量分散文件；代码任务偏向 tar，跨平台或任务约定需要 zip，同时不固定协作协议               | BEH-010、输入归档合同、VER-013                                                                  |
+| 原始回复与产物交给宿主解释          | 已确认 | 固定 response schema、diff 或 receipt 解析会写死协作方式；Pro 和宿主应按任务选择 patch、归档或文字         | BEH-004、BEH-012、产品边界、VER-004、VER-015                                                    |
+| 全部 sandbox 文件落盘后才 completed | 已确认 | 宿主被唤醒时应拿到可操作的完整结果；生成观察窗口不应截断已开始的文件捕获                                   | BEH-004、BEH-012、capturing 状态、VER-011、VER-015                                              |
+| close 与 Web archive 分离           | 已确认 | 本地进程生命周期与 Web conversation 生命周期是两种独立副作用，必须由不同显式命令触发                       | BEH-008、BEH-009、VER-008、VER-009                                                              |
+| Playwright CLI 浏览器边界           | 已确认 | 固定版本外部 CLI 提供 session、storage state 和页面命令；浏览器易变细节集中在单一边界（REF-001）           | Browser boundary、VER-001–VER-006、VER-008、VER-009、VER-012、VER-015                           |
+| 共享只读 storage state              | 已确认 | 共享 seed 只提供启动认证数据；每 task 独立 browser context 承担运行时状态隔离，复制 seed 不增加隔离        | BEH-001、BEH-002、BEH-006、VER-001、VER-002、VER-006                                            |
+| SQLite 与正文/文件分离              | 已确认 | 结构化状态需要事务和跨进程恢复；文字与返回文件仍应直接可读、逐 turn 无覆盖                                 | State store、Transcript/artifact store、VER-007、VER-011、VER-012                               |
+| 调用方提供稳定 task identity        | 已确认 | `start` 中断或并发重试时只有调用方预先持有稳定身份，才能确定恢复同一任务而不是创建第二个浏览器与 composer  | BEH-002、命令合同、SQLite 合同、VER-002、VER-016                                                |
+| 证据优先的阶段恢复                  | 已确认 | 浏览器副作用可能在本地确认前已经发生；持久阶段与页面后置条件可以避免重复发送、重复归档和人工修改数据库     | BEH-001–BEH-009、BEH-012、BEH-013、技术设计、VER-001–VER-003、VER-007–VER-012、VER-015、VER-016 |
+| 页面验证的人工提交裁决              | 已确认 | Web 没有调用方可持有的提交幂等 receipt；自动证据不足时需要由用户补充历史事实，同时由页面验证约束可执行后果 | BEH-003、BEH-007、BEH-013、命令合同、VER-007、VER-016                                           |
 
 ## 参考资料
 
