@@ -297,6 +297,46 @@ export class StateStore {
   }
 
   /**
+   * Reserves a starting task and its start operation in one transaction.
+   *
+   * @param taskId Caller-provided canonical task identifier.
+   * @param playwrightSession Unique Playwright CLI session name.
+   * @param operationId Collision-resistant operation identifier.
+   * @returns The inserted starting task.
+   * @throws {StateError} If either identifier already exists or the task has an uncommitted operation.
+   * @throws {Error} If SQLite rejects the transaction.
+   */
+  createStartingTask(taskId: string, playwrightSession: string, operationId: string): TaskRecord {
+    return this.#transaction(() => {
+      const now = new Date().toISOString();
+      try {
+        this.#database
+          .prepare(
+            `INSERT INTO task (
+              id, playwright_session, conversation_id, conversation_url,
+              status, created_at, updated_at, closed_at
+            ) VALUES (?, ?, NULL, NULL, 'starting', ?, ?, NULL)`,
+          )
+          .run(taskId, playwrightSession, now, now);
+      } catch (error) {
+        if (!isSqliteConstraint(error)) {
+          throw error;
+        }
+        throw new StateError('TASK_CONFLICT', `task or Playwright session already exists: ${errorMessage(error)}`);
+      }
+      this.#insertOperation({
+        id: operationId,
+        kind: 'start',
+        step: 'session',
+        taskId,
+        turnId: null,
+        sessionName: playwrightSession,
+      });
+      return this.requireTask(taskId);
+    });
+  }
+
+  /**
    * Loads one task regardless of lifecycle status.
    *
    * @param taskId Task identifier.
@@ -1109,6 +1149,20 @@ export class StateStore {
    * @throws {Error} If SQLite rejects the insert or referenced rows are absent.
    */
   createOperation(insert: OperationInsert): OperationRecord {
+    return this.#transaction(() => {
+      return this.#insertOperation(insert);
+    });
+  }
+
+  /**
+   * Inserts one operation row inside the caller's immediate transaction.
+   *
+   * @param insert Kind, step, optional task and turn, session, and initial evidence.
+   * @returns The prepared operation.
+   * @throws {StateError} If the step is invalid or an uncommitted constraint fires.
+   * @throws {Error} If SQLite rejects the insert or referenced rows are absent.
+   */
+  #insertOperation(insert: OperationInsert): OperationRecord {
     const steps = OPERATION_STEPS[insert.kind];
     if (!steps.includes(insert.step)) {
       throw new StateError('OPERATION_STEP_INVALID', `step ${insert.step} is invalid for ${insert.kind}`);
@@ -1142,7 +1196,7 @@ export class StateStore {
       if (insert.kind === 'setup') {
         throw new StateError('SETUP_OPERATION_IN_PROGRESS', 'an uncommitted setup operation already exists');
       }
-      throw new StateError('OPERATION_IN_PROGRESS', `task already has an uncommitted operation`);
+      throw new StateError('OPERATION_IN_PROGRESS', 'task already has an uncommitted operation');
     }
     return this.requireOperation(insert.id);
   }

@@ -67,7 +67,15 @@ describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
       output('### Browser `session-a` opened with pid 4123.'),
       output('state loaded'),
       output('navigated to projects'),
-      pageResult({ protocol, kind: 'start', url: 'https://chatgpt.com/g/g-p-123/project', contextMarker: 'context-a' }),
+      pageResult({
+        protocol,
+        kind: 'start',
+        url: 'https://chatgpt.com/g/g-p-123/project',
+        contextMarker: 'context-a',
+        projectId: 'g-p-123',
+        modelConfirmed: true,
+        modeConfirmed: true,
+      }),
     ]);
     await writeFile(fixture.paths.seedState, '{}');
 
@@ -77,6 +85,9 @@ describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
       pid: 4123,
       url: 'https://chatgpt.com/g/g-p-123/project',
       contextMarker: 'context-a',
+      projectId: 'g-p-123',
+      modelConfirmed: true,
+      modeConfirmed: true,
       persistent: false,
     });
     expect(fixture.invocations[0]?.arguments).toEqual([
@@ -1192,7 +1203,15 @@ describe('BEH-013 browser boundary support', () => {
     const fixture = await browserFixture([
       output('Sessions:\n  - name: session-a\n    state: open\n    pid: 4123\n'),
       output('navigated to projects'),
-      pageResult({ protocol, kind: 'start', url: 'https://chatgpt.com/g/g-p-123/project', contextMarker: 'ctx' }),
+      pageResult({
+        protocol,
+        kind: 'start',
+        url: 'https://chatgpt.com/g/g-p-123/project',
+        contextMarker: 'ctx',
+        projectId: 'g-p-123',
+        modelConfirmed: true,
+        modeConfirmed: true,
+      }),
       output('Sessions:\n  - name: session-a\n    state: open\n    pid: 4123\n'),
     ]);
     await writeFile(fixture.paths.seedState, '{}');
@@ -1203,6 +1222,9 @@ describe('BEH-013 browser boundary support', () => {
       pid: 4123,
       url: 'https://chatgpt.com/g/g-p-123/project',
       contextMarker: 'ctx',
+      projectId: 'g-p-123',
+      modelConfirmed: true,
+      modeConfirmed: true,
       persistent: false,
     });
     expect(

@@ -19,11 +19,13 @@ node "<skill-directory>/scripts/collab.ts" setup
 
 ## 2. 启动任务
 
+启动前由宿主预生成一个在本轮协作范围内稳定且唯一的 canonical lowercase UUID v4（例如 `uuidgen` 或 `crypto.randomUUID()` 的输出），并保存为 `taskId`：
+
 ```sh
-node "<skill-directory>/scripts/collab.ts" start
+node "<skill-directory>/scripts/collab.ts" start <taskId>
 ```
 
-保存返回的 `taskId`。每次 `start` 都创建独立浏览器进程、context、session 目录和新 conversation；不要因同项目已有任务而复用或拒绝新任务。
+每个 `start` 都创建独立浏览器进程、context、session 目录和新 conversation；不要因同项目已有任务而复用或拒绝新任务。相同 `taskId` 的重复或并发 `start` 只恢复同一次启动：任务仍在启动中，或已完成启动但尚未绑定 conversation 时，返回同一个 `taskId`；已绑定 conversation、正在关闭、已关闭或失败时返回冲突，不要换用其他身份重试。中断后使用同一 `taskId` 重试即可继续同一次启动。
 
 ## 3. 准备本轮输入
 

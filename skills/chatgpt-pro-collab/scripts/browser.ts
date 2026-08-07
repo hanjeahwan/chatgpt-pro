@@ -61,6 +61,9 @@ export interface BrowserSessionInfo {
   readonly pid: number;
   readonly url: string;
   readonly contextMarker: string;
+  readonly projectId: string;
+  readonly modelConfirmed: boolean;
+  readonly modeConfirmed: boolean;
   readonly persistent: false;
 }
 
@@ -123,6 +126,9 @@ interface StartProtocolResult extends ProtocolResult {
   readonly kind: 'start';
   readonly url: string;
   readonly contextMarker: string;
+  readonly projectId: string;
+  readonly modelConfirmed: boolean;
+  readonly modeConfirmed: boolean;
 }
 
 interface StartFailedProtocolResult extends ProtocolResult {
@@ -408,7 +414,15 @@ export class PlaywrightBrowser {
           return parseSessionPid(listed.stdout, sessionName);
         });
       }
-      return { pid, url: result.url, contextMarker: result.contextMarker, persistent: false };
+      return {
+        pid,
+        url: result.url,
+        contextMarker: result.contextMarker,
+        projectId: result.projectId,
+        modelConfirmed: result.modelConfirmed,
+        modeConfirmed: result.modeConfirmed,
+        persistent: false,
+      };
     } catch (error) {
       if (opened) {
         try {
@@ -1431,11 +1445,11 @@ function parseProtocolResult<T extends ProtocolResult>(stdout: string, expectedK
 }
 
 /**
- * Parses the start page envelope, preserving typed failure codes.
+ * Parses the start page envelope, preserving typed failure codes and fixed-target readbacks.
  *
  * @param stdout Complete `run-code` output for the start verification script.
  * @returns The success envelope or the typed failure envelope.
- * @throws {BrowserError} If no start envelope is present.
+ * @throws {BrowserError} If no start envelope is present or the success envelope omits readbacks.
  */
 function parseStartProtocolResult(stdout: string): StartProtocolResult | StartFailedProtocolResult {
   const lines = stdout.trim().split(/\r?\n/u).reverse();
@@ -1449,10 +1463,25 @@ function parseStartProtocolResult(stdout: string): StartProtocolResult | StartFa
         candidate.protocol === PROTOCOL &&
         (candidate.kind === 'start' || candidate.kind === 'start-failed')
       ) {
+        if (candidate.kind === 'start') {
+          if (
+            typeof candidate.projectId !== 'string' ||
+            candidate.modelConfirmed !== true ||
+            candidate.modeConfirmed !== true
+          ) {
+            throw new BrowserError(
+              'PLAYWRIGHT_CONTRACT_DRIFT',
+              'parse start result',
+              'start envelope omitted the fixed-target readbacks',
+            );
+          }
+        }
         return candidate as StartProtocolResult | StartFailedProtocolResult;
       }
-    } catch {
-      // CLI wrapper lines are not JSON; only the page result envelope is relevant.
+    } catch (error) {
+      if (error instanceof BrowserError) {
+        throw error;
+      }
     }
   }
   throw new BrowserError('PLAYWRIGHT_CONTRACT_DRIFT', 'parse start result', protocolFailureDetail(stdout));
@@ -1939,11 +1968,21 @@ function startVerificationScript(contextMarker: string): string {
     if (observedContextMarker !== contextMarker) {
       return fail('PAGE_CONTRACT_DRIFT', 'task context marker could not be read back');
     }
+    const finalUrl = await page.evaluate(() => {
+      return { hostname: location.hostname, pathname: location.pathname };
+    });
+    const projectMatch = /^\\/g\\/g-p-([^/]+)\\/project$/.exec(finalUrl.pathname);
+    if (finalUrl.hostname !== 'chatgpt.com' || projectMatch === null) {
+      return fail('PAGE_CONTRACT_DRIFT', 'final project context drifted before the start result');
+    }
     return JSON.stringify({
       protocol: '${PROTOCOL}',
       kind: 'start',
       url: page.url(),
       contextMarker: observedContextMarker,
+      projectId: projectMatch[1],
+      modelConfirmed: true,
+      modeConfirmed: true,
     });
   }`;
 }

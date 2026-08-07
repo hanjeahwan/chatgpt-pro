@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -20,8 +21,8 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
   it('supports setup, isolated tasks, multiple turns, idempotent wait, archive, and close', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
-    const firstTask = await fixture.service.start();
-    const secondTask = await fixture.service.start();
+    const firstTask = await fixture.start();
+    const secondTask = await fixture.start();
     expect(firstTask.taskId).not.toBe(secondTask.taskId);
     expect(firstTask.browserPid).not.toBe(secondTask.browserPid);
     expect(firstTask.contextMarker).not.toBe(secondTask.contextMarker);
@@ -94,7 +95,7 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
   it('records submission ambiguity and blocks an automatic resend', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
-    const task = await fixture.service.start();
+    const task = await fixture.start();
     const promptPath = join(fixture.root, 'prompt.md');
     await writeFile(promptPath, 'ambiguous');
     fixture.browser.nextSendStatus = 'unknown-submission';
@@ -110,7 +111,7 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
   it('fails the task when an unsubmitted attachment draft cannot be cleared safely', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
-    const task = await fixture.service.start();
+    const task = await fixture.start();
     const promptPath = join(fixture.root, 'prompt.md');
     await writeFile(promptPath, 'unsafe cleanup');
     fixture.browser.nextSendStatus = 'unsafe-not-submitted';
@@ -129,7 +130,7 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
   it('fails a known pre-submission error without creating submission ambiguity', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
-    const task = await fixture.service.start();
+    const task = await fixture.start();
     const promptPath = join(fixture.root, 'prompt.md');
     await writeFile(promptPath, 'known preflight failure');
     fixture.browser.nextSendStatus = 'not-submitted';
@@ -146,7 +147,7 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
   it('restores the bound conversation so a pending turn can be captured after archive', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
-    const task = await fixture.service.start();
+    const task = await fixture.start();
     const promptPath = join(fixture.root, 'prompt.md');
     await writeFile(promptPath, 'pending archive');
     const turn = await fixture.service.send(task.taskId, promptPath, []);
@@ -161,7 +162,7 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
   it('rejects a concurrent non-wait same-task browser operation', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
-    const task = await fixture.service.start();
+    const task = await fixture.start();
     const owner = new StateStore(fixture.paths.database);
     owner.acquireTaskOperation(task.taskId, 'send', 'external-owner');
 
@@ -176,7 +177,7 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
   it('lets close take the task between bounded wait polls', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
-    const task = await fixture.service.start();
+    const task = await fixture.start();
     const promptPath = join(fixture.root, 'prompt.md');
     await writeFile(promptPath, 'long response');
     const turn = await fixture.service.send(task.taskId, promptPath, []);
@@ -194,7 +195,7 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
   it('returns pending once at observation expiry and resumes the same turn later', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
-    const task = await fixture.service.start();
+    const task = await fixture.start();
     const promptPath = join(fixture.root, 'prompt.md');
     await writeFile(promptPath, 'long response');
     const turn = await fixture.service.send(task.taskId, promptPath, []);
@@ -217,7 +218,7 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
   it('keeps a pre-freeze timeout pending and re-observes with a fresh capture timeout', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
-    const task = await fixture.service.start();
+    const task = await fixture.start();
     const promptPath = join(fixture.root, 'prompt.md');
     await writeFile(promptPath, 'capture timeout');
     const turn = await fixture.service.send(task.taskId, promptPath, []);
@@ -247,7 +248,7 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
   it('maps a delayed browser failure after a 1ms deadline to CAPTURE_TIMEOUT', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
-    const task = await fixture.service.start();
+    const task = await fixture.start();
     const promptPath = join(fixture.root, 'prompt.md');
     await writeFile(promptPath, 'delayed capture failure');
     const turn = await fixture.service.send(task.taskId, promptPath, []);
@@ -267,7 +268,7 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
   it('aborts a capture that never resolves and releases its task lease', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
-    const task = await fixture.service.start();
+    const task = await fixture.start();
     const promptPath = join(fixture.root, 'prompt.md');
     await writeFile(promptPath, 'never resolving capture');
     const turn = await fixture.service.send(task.taskId, promptPath, []);
@@ -290,7 +291,7 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
   it('preserves a real browser error that settles before the capture deadline', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
-    const task = await fixture.service.start();
+    const task = await fixture.start();
     const promptPath = join(fixture.root, 'prompt.md');
     await writeFile(promptPath, 'immediate capture failure');
     const turn = await fixture.service.send(task.taskId, promptPath, []);
@@ -308,7 +309,7 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
   it('publishes every ordered artifact without same-name collisions and reuses completed files', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
-    const task = await fixture.service.start();
+    const task = await fixture.start();
     const promptPath = join(fixture.root, 'prompt.md');
     await writeFile(promptPath, 'return files');
     fixture.browser.responseArtifacts.push(
@@ -345,7 +346,7 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
   it('preserves a pre-deadline download error and resumes only pending rows', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
-    const task = await fixture.service.start();
+    const task = await fixture.start();
     const promptPath = join(fixture.root, 'prompt.md');
     await writeFile(promptPath, 'return files with retry');
     const firstSource = 'sandbox:/mnt/data/first.txt';
@@ -377,7 +378,7 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
   it('maps a delayed artifact failure after the shared deadline to CAPTURE_TIMEOUT', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
-    const task = await fixture.service.start();
+    const task = await fixture.start();
     const promptPath = join(fixture.root, 'prompt.md');
     await writeFile(promptPath, 'delayed artifact failure');
     const sourceUrl = 'sandbox:/mnt/data/result.txt';
@@ -403,7 +404,7 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
   it('bounds a never-settling artifact provider, releases its lease, and retries only the remainder', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
-    const task = await fixture.service.start();
+    const task = await fixture.start();
     const promptPath = join(fixture.root, 'prompt.md');
     await writeFile(promptPath, 'never-settling artifact');
     const firstSource = 'sandbox:/mnt/data/first.txt';
@@ -444,8 +445,8 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
   it('overlaps different task waits and contains a one-sided capture failure', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
-    const firstTask = await fixture.service.start();
-    const secondTask = await fixture.service.start();
+    const firstTask = await fixture.start();
+    const secondTask = await fixture.start();
     const firstPrompt = join(fixture.root, 'first.md');
     const secondPrompt = join(fixture.root, 'second.md');
     await Promise.all([writeFile(firstPrompt, 'first'), writeFile(secondPrompt, 'second')]);
@@ -477,7 +478,7 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
   it('keeps Web archive and local close as separate transcript-preserving side effects', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
-    const task = await fixture.service.start();
+    const task = await fixture.start();
     const promptPath = join(fixture.root, 'prompt.md');
     await writeFile(promptPath, 'lifecycle separation');
     fixture.browser.responseArtifacts.push({
@@ -517,7 +518,7 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
   it('aborts a delayed artifact download at the shared deadline and retries it', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
-    const task = await fixture.service.start();
+    const task = await fixture.start();
     const promptPath = join(fixture.root, 'prompt.md');
     await writeFile(promptPath, 'interrupt after artifact publication');
     const sourceUrl = 'sandbox:/mnt/data/result.txt';
@@ -549,7 +550,7 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
   it('rejects changed response bytes during capture recovery without overwriting the transcript', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
-    const task = await fixture.service.start();
+    const task = await fixture.start();
     const promptPath = join(fixture.root, 'prompt.md');
     await writeFile(promptPath, 'response consistency');
     const sourceUrl = 'sandbox:/mnt/data/result.txt';
@@ -576,7 +577,7 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
   it('rejects a changed logical artifact set before resuming downloads', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
-    const task = await fixture.service.start();
+    const task = await fixture.start();
     const promptPath = join(fixture.root, 'prompt.md');
     await writeFile(promptPath, 'artifact set consistency');
     const sourceUrl = 'sandbox:/mnt/data/result.txt';
@@ -600,7 +601,7 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
   it('rejects changed pending artifact bytes and a missing completed artifact', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
-    const task = await fixture.service.start();
+    const task = await fixture.start();
     const promptPath = join(fixture.root, 'prompt.md');
     await writeFile(promptPath, 'artifact byte consistency');
     const sourceUrl = 'sandbox:/mnt/data/result.txt';
@@ -632,7 +633,7 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
   it('re-reads archive lifecycle state after acquiring the task lease', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
-    const task = await fixture.service.start();
+    const task = await fixture.start();
     const promptPath = join(fixture.root, 'prompt.md');
     await writeFile(promptPath, 'establish conversation');
     await fixture.service.send(task.taskId, promptPath, []);
@@ -678,7 +679,7 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
   it('prints one pending CLI result after clearing the reconciled submission diagnostic', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
-    const task = await fixture.service.start();
+    const task = await fixture.start();
     const promptPath = join(fixture.root, 'pending-prompt.md');
     await writeFile(promptPath, 'long response');
     const turn = await fixture.service.send(task.taskId, promptPath, []);
@@ -815,11 +816,136 @@ describe('BEH-001 setup journal and interruption recovery', () => {
   });
 });
 
+describe('BEH-002 caller-provided task start', () => {
+  it('rejects a non-canonical taskId before any database or browser side effect', async () => {
+    const fixture = await serviceFixture();
+    await writeFile(fixture.paths.seedState, '{}');
+    for (const invalid of ['task-1', '123e4567-e89b-12d3-a456-426614174000', 'ABC', '']) {
+      await expect(fixture.service.start(invalid)).rejects.toMatchObject({ code: 'USAGE' });
+    }
+    const store = new StateStore(fixture.paths.database);
+    expect(store.listOperations()).toEqual([]);
+    store.close();
+    expect(fixture.browser.startCount).toBe(0);
+  });
+
+  it('starts a task and journals the fixed Project and model/mode readbacks', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const taskId = randomUUID();
+    const started = await fixture.service.start(taskId);
+    expect(started.taskId).toBe(taskId);
+    expect(started.contextMarker).toBe(`context-${taskId}`);
+    const store = new StateStore(fixture.paths.database);
+    expect(store.requireTask(taskId)).toMatchObject({ status: 'active' });
+    expect(store.listOperations(taskId)).toMatchObject([
+      {
+        kind: 'start',
+        phase: 'committed',
+        resolutionSource: 'automatic',
+        evidence: { projectIdentity: 'g-p-123', modelConfirmed: true, modeConfirmed: true },
+      },
+    ]);
+    store.close();
+  });
+
+  it('resumes the same starting task and never allocates a second identity', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const taskId = randomUUID();
+    const first = await fixture.service.start(taskId);
+    const resumed = await fixture.service.start(taskId);
+    expect(resumed.taskId).toBe(taskId);
+    expect(first.taskId).toBe(taskId);
+    const store = new StateStore(fixture.paths.database);
+    expect(store.listOperations(taskId)).toHaveLength(1);
+    expect(store.requireTask(taskId).playwrightSession).toBe(`chatgpt-pro-collab-${taskId}`);
+    store.close();
+  });
+
+  it('returns the same active task before a conversation is bound and conflicts afterwards', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const taskId = randomUUID();
+    await fixture.service.start(taskId);
+    const resumed = await fixture.service.start(taskId);
+    expect(resumed.taskId).toBe(taskId);
+
+    const promptPath = join(fixture.root, 'bind-prompt.md');
+    await writeFile(promptPath, 'bind');
+    await fixture.service.send(taskId, promptPath, []);
+    await expect(fixture.service.start(taskId)).rejects.toMatchObject({ code: 'TASK_CONFLICT' });
+  });
+
+  it('conflicts with closing, closed, and failed task identities', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const closedId = randomUUID();
+    await fixture.service.start(closedId);
+    await fixture.service.close(closedId);
+    await expect(fixture.service.start(closedId)).rejects.toMatchObject({ code: 'TASK_CONFLICT' });
+
+    const failedId = randomUUID();
+    fixture.browser.nextStartFailureCode = 'PROJECT_NOT_FOUND';
+    await expect(fixture.service.start(failedId)).rejects.toMatchObject({ code: 'PROJECT_NOT_FOUND' });
+    fixture.browser.nextStartFailureCode = null;
+    await expect(fixture.service.start(failedId)).rejects.toMatchObject({ code: 'TASK_CONFLICT' });
+  });
+
+  it('keeps a starting task recoverable when the browser fails without a definite page verdict', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const taskId = randomUUID();
+    fixture.browser.nextStartFailureCode = 'BROWSER_COMMAND_FAILED';
+    await expect(fixture.service.start(taskId)).rejects.toMatchObject({ code: 'BROWSER_COMMAND_FAILED' });
+    const store = new StateStore(fixture.paths.database);
+    expect(store.requireTask(taskId)).toMatchObject({ status: 'starting' });
+    expect(store.getUncommittedTaskOperation(taskId)).toMatchObject({ kind: 'start', phase: 'effect-unknown' });
+    store.close();
+
+    fixture.browser.nextStartFailureCode = null;
+    const resumed = await fixture.service.start(taskId);
+    expect(resumed.taskId).toBe(taskId);
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireTask(taskId)).toMatchObject({ status: 'active' });
+    reopened.close();
+  });
+
+  it('marks a definitely failed start failed and commits the journal', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const taskId = randomUUID();
+    fixture.browser.nextStartFailureCode = 'FIXED_TARGET_UNAVAILABLE';
+    await expect(fixture.service.start(taskId)).rejects.toMatchObject({ code: 'FIXED_TARGET_UNAVAILABLE' });
+    const store = new StateStore(fixture.paths.database);
+    expect(store.requireTask(taskId)).toMatchObject({ status: 'failed' });
+    expect(store.getUncommittedTaskOperation(taskId)).toBeNull();
+    expect(store.listOperations(taskId)).toMatchObject([
+      { kind: 'start', phase: 'committed', error: expect.stringContaining('FIXED_TARGET_UNAVAILABLE') },
+    ]);
+    store.close();
+    expect(fixture.browser.startCount).toBe(1);
+  });
+
+  it('rejects a start invocation without a taskId in the CLI', async () => {
+    const fixture = await serviceFixture();
+    const errors: string[] = [];
+    const io: CliIo = {
+      writeOutput() {},
+      writeError(value) {
+        errors.push(value);
+      },
+    };
+    await expect(runCli(['start'], fixture.service, io)).resolves.toBe(1);
+    expect(JSON.parse(errors.at(-1) ?? '{}')).toMatchObject({ ok: false, error: { code: 'USAGE' } });
+  });
+});
+
 describe('BEH-013 status, recover, and resolve-submission', () => {
   it('returns a read-only status with browser availability and the safe next action', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
-    const task = await fixture.service.start();
+    const task = await fixture.start();
     const promptPath = join(fixture.root, 'pending-prompt.md');
     await writeFile(promptPath, 'pending');
     const turn = await fixture.service.send(task.taskId, promptPath, []);
@@ -843,7 +969,7 @@ describe('BEH-013 status, recover, and resolve-submission', () => {
   it('returns nextAction close for a closing task without touching the browser', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
-    const task = await fixture.service.start();
+    const task = await fixture.start();
     const store = new StateStore(fixture.paths.database);
     store.markTaskClosing(task.taskId);
     store.close();
@@ -856,7 +982,7 @@ describe('BEH-013 status, recover, and resolve-submission', () => {
   it('returns nextAction wait for a pending turn without a recovery side effect', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
-    const task = await fixture.service.start();
+    const task = await fixture.start();
     const promptPath = join(fixture.root, 'wait-prompt.md');
     await writeFile(promptPath, 'pending');
     await fixture.service.send(task.taskId, promptPath, []);
@@ -870,7 +996,7 @@ describe('BEH-013 status, recover, and resolve-submission', () => {
   it('rebuilds a missing bound browser session and restores the canonical conversation', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
-    const task = await fixture.service.start();
+    const task = await fixture.start();
     const promptPath = join(fixture.root, 'bound-prompt.md');
     await writeFile(promptPath, 'bound');
     const turn = await fixture.service.send(task.taskId, promptPath, []);
@@ -988,7 +1114,7 @@ describe('BEH-013 status, recover, and resolve-submission', () => {
   it('rejects a non-canonical adjudication URL before any browser action', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
-    const task = await fixture.service.start();
+    const task = await fixture.start();
     const promptPath = join(fixture.root, 'url-prompt.md');
     await writeFile(promptPath, 'url');
     const turn = await fixture.service.send(task.taskId, promptPath, []);
@@ -1010,7 +1136,7 @@ describe('BEH-013 status, recover, and resolve-submission', () => {
   it('rejects an adjudication on a non-unknown-submission turn', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
-    const task = await fixture.service.start();
+    const task = await fixture.start();
     const promptPath = join(fixture.root, 'wrong-state-prompt.md');
     await writeFile(promptPath, 'wrong state');
     const turn = await fixture.service.send(task.taskId, promptPath, []);
@@ -1085,6 +1211,7 @@ class FakeBrowser implements CollabBrowser {
   readonly responseArtifacts: Array<{ readonly sourceUrl: string; readonly label: string }> = [];
   readonly downloadedArtifacts: string[] = [];
   nextDownloadFailureSourceUrl: string | null = null;
+  nextStartFailureCode: string | null = null;
   sessionAvailabilityResult: 'available' | 'missing' | 'unknown' = 'available';
   nextNotSubmittedFailureTaskId: string | null = null;
   observedOperations = 0;
@@ -1176,10 +1303,18 @@ class FakeBrowser implements CollabBrowser {
   startTask(taskId: string, _sessionName: string, _seedStatePath: string) {
     this.startCount += 1;
     this.sessionAvailabilityResult = 'available';
+    if (this.nextStartFailureCode !== null) {
+      const code = this.nextStartFailureCode;
+      this.nextStartFailureCode = null;
+      return Promise.reject(new BrowserError(code, 'start task', `injected ${code} failure`));
+    }
     return Promise.resolve({
       pid: 10_000 + this.startCount,
-      url: 'https://chatgpt.com/',
+      url: 'https://chatgpt.com/g/g-p-123/project',
       contextMarker: `context-${taskId}`,
+      projectId: 'g-p-123',
+      modelConfirmed: true,
+      modeConfirmed: true,
       persistent: false as const,
     });
   }
@@ -1650,5 +1785,13 @@ async function serviceFixture() {
       return `id-${id}`;
     },
   );
-  return { root, paths, browser, service };
+  return {
+    root,
+    paths,
+    browser,
+    service,
+    start() {
+      return service.start(randomUUID());
+    },
+  };
 }

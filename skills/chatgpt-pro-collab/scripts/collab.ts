@@ -4,6 +4,7 @@ import { basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  BrowserError,
   PlaywrightBrowser,
   type BrowserArtifactDownload,
   type BrowserAvailability,
@@ -20,7 +21,6 @@ import {
   collabPaths,
   discardArtifactTemporary,
   ensureCollabDirectories,
-  ensureTaskDirectories,
   prepareInputs,
   publishOrVerifyArtifact,
   publishOrVerifyResponse,
@@ -291,32 +291,137 @@ export class CollabService {
   }
 
   /**
-   * Allocates and starts one independent active task.
+   * Starts one independent task from a caller-provided canonical UUID v4 identity.
    *
+   * The task is only reserved as `starting` together with its start operation before any
+   * browser command. Repeats resume the same starting task or an active task that has not
+   * bound a conversation; other lifecycle states conflict before browser side effects.
+   *
+   * @param taskId Caller-provided canonical lowercase UUID v4.
    * @returns Task identity plus observed browser evidence.
-   * @throws {Error} If setup is missing, state cannot be reserved, or the browser cannot start.
+   * @throws {CollabError} If the identity is invalid, the state conflicts, or the fixed
+   *   Project or model/mode context cannot be confirmed.
+   * @throws {Error} If setup is missing or the browser cannot start.
    */
-  async start(): Promise<StartResult> {
+  async start(taskId: string): Promise<StartResult> {
+    requireCanonicalTaskId(taskId);
     await ensureCollabDirectories(this.#paths);
     return this.#withStore(async (store) => {
-      const seedStatePath = await requireSeedState(this.#paths);
-      const taskId = this.#idGenerator();
+      const existing = store.getTask(taskId);
+      if (
+        existing !== null &&
+        existing.status !== 'starting' &&
+        !(existing.status === 'active' && existing.conversationId === null)
+      ) {
+        throw new CollabError('TASK_CONFLICT', `task is ${existing.status}: ${taskId}`);
+      }
       const sessionName = `chatgpt-pro-collab-${taskId}`;
-      await ensureTaskDirectories(this.#paths, taskId);
-      store.createTask(taskId, sessionName);
-      try {
-        const browser = await this.#browser.startTask(taskId, sessionName, seedStatePath);
-        return {
-          taskId,
-          browserPid: browser.pid,
-          contextMarker: browser.contextMarker,
-          sessionDirectory: resolve(this.#paths.sessionsDirectory, taskId),
-        };
-      } catch (error) {
-        store.failTask(taskId);
-        throw error;
+      if (existing === null) {
+        store.createStartingTask(taskId, sessionName, this.#idGenerator());
+      }
+      while (true) {
+        const token = randomUUID();
+        try {
+          store.acquireTaskOperation(taskId, 'start', token);
+          return await this.#withAcquiredTaskOperation(store, taskId, token, async () => {
+            return this.#startTaskUnderLease(store, taskId, sessionName);
+          });
+        } catch (error) {
+          if (!(error instanceof StateError) || error.code !== 'TASK_OPERATION_IN_PROGRESS') {
+            throw error;
+          }
+          const operation = store.getTaskOperation(taskId);
+          if (operation !== null && operation !== 'start') {
+            throw error;
+          }
+          await yieldTaskOperation();
+        }
       }
     });
+  }
+
+  /**
+   * Runs or resumes the fixed Project and model/mode start context under the task lease.
+   *
+   * @param store Current process-local state connection.
+   * @param taskId Task identifier.
+   * @param sessionName Stable session identity of the task.
+   * @param observer Task-lease child-process observer.
+   * @returns Task identity plus observed browser evidence.
+   * @throws {CollabError} If the fixed context cannot be confirmed or the start conflicts.
+   * @throws {Error} If setup is missing or the browser cannot start.
+   */
+  async #startTaskUnderLease(store: StateStore, taskId: string, sessionName: string): Promise<StartResult> {
+    const seedStatePath = await requireSeedState(this.#paths);
+    const task = store.requireTask(taskId);
+    const operation = store.getUncommittedTaskOperation(taskId);
+    if (operation === null || operation.kind !== 'start') {
+      if (task.status === 'active' && task.conversationId === null) {
+        const resumed = await this.#browser.startTask(taskId, task.playwrightSession, seedStatePath, true);
+        return {
+          taskId,
+          browserPid: resumed.pid,
+          contextMarker: resumed.contextMarker,
+          sessionDirectory: resolve(this.#paths.sessionsDirectory, taskId),
+        };
+      }
+      throw new CollabError('TASK_CONFLICT', `start is not the active operation: ${taskId}`);
+    }
+    let effectOperation = operation;
+    if (effectOperation.phase === 'prepared') {
+      effectOperation = store.markOperationEffectUnknown(effectOperation.id, {
+        observedAt: new Date().toISOString(),
+        sessionName,
+        postcondition: 'start browser commands released',
+      });
+    }
+    try {
+      const resumed = task.status === 'active' && task.conversationId === null;
+      const browser = await this.#browser.startTask(taskId, task.playwrightSession, seedStatePath, resumed);
+      const project = store.advanceOperationStep(effectOperation.id, 'project', {
+        observedAt: new Date().toISOString(),
+        sessionName,
+        pageUrl: browser.url,
+        postcondition: 'fixed Project and blank composer verified',
+      });
+      store.advanceOperationStep(project.id, 'configuration', {
+        observedAt: new Date().toISOString(),
+        sessionName,
+        pageUrl: browser.url,
+        postcondition: 'unique GPT-5.6 Sol and Pro menuitemradios read back aria-checked=true',
+        projectIdentity: browser.projectId,
+        modelConfirmed: browser.modelConfirmed,
+        modeConfirmed: browser.modeConfirmed,
+      });
+      store.commitOperation(effectOperation.id, 'automatic', {
+        observedAt: new Date().toISOString(),
+        sessionName,
+        pageUrl: browser.url,
+        postcondition: 'fixed start context confirmed',
+        projectIdentity: browser.projectId,
+        modelConfirmed: browser.modelConfirmed,
+        modeConfirmed: browser.modeConfirmed,
+      });
+      if (task.status === 'starting') {
+        store.activateTask(taskId);
+      }
+      return {
+        taskId,
+        browserPid: browser.pid,
+        contextMarker: browser.contextMarker,
+        sessionDirectory: resolve(this.#paths.sessionsDirectory, taskId),
+      };
+    } catch (error) {
+      if (isDefiniteStartFailure(error)) {
+        try {
+          store.failTask(taskId);
+          store.commitOperation(effectOperation.id, 'automatic', undefined, errorMessage(error));
+        } catch {
+          // Preserve the original start failure when the failure commit itself fails.
+        }
+      }
+      throw error;
+    }
   }
 
   /**
@@ -1171,6 +1276,39 @@ async function yieldTaskOperation(): Promise<void> {
 }
 
 /**
+ * Validates the caller-provided canonical lowercase UUID v4 task identity before any side effect.
+ *
+ * @param taskId Task identity supplied by the host.
+ * @returns Nothing for a canonical UUID v4.
+ * @throws {CollabError} If the identity violates the canonical lowercase UUID v4 grammar.
+ */
+function requireCanonicalTaskId(taskId: string): void {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(taskId)) {
+    throw new CollabError('USAGE', 'taskId must be a canonical lowercase UUID v4');
+  }
+}
+
+/**
+ * Classifies a start failure whose page postcondition was deterministically violated.
+ *
+ * @param error Unknown value thrown by the browser boundary.
+ * @returns `true` only for typed start-context failures that must mark the task failed.
+ * @throws {Error} This classifier does not throw for ordinary values.
+ */
+function isDefiniteStartFailure(error: unknown): boolean {
+  return (
+    error instanceof BrowserError &&
+    [
+      'PROJECT_NOT_FOUND',
+      'PROJECT_NOT_UNIQUE',
+      'FIXED_TARGET_UNAVAILABLE',
+      'SELECTION_UNCONFIRMED',
+      'PAGE_CONTRACT_DRIFT',
+    ].includes(error.code)
+  );
+}
+
+/**
  * Reads the immutable prompt copy published before the send side effect.
  *
  * @param paths Resolved Collab paths.
@@ -1293,8 +1431,8 @@ export async function runCli(
         io.writeOutput(jsonLine({ ok: true, command, ...(await service.setup()) }));
         return 0;
       case 'start':
-        requireParameterCount(command, parameters, 0);
-        io.writeOutput(jsonLine({ ok: true, command, ...(await service.start()) }));
+        requireParameterCount(command, parameters, 1);
+        io.writeOutput(jsonLine({ ok: true, command, ...(await service.start(required(parameters[0]))) }));
         return 0;
       case 'send': {
         if (parameters.length < 2) {
