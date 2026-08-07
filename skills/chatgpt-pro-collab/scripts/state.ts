@@ -1333,11 +1333,14 @@ export class StateStore {
   /**
    * Lists one task's journal rows in creation order for audit.
    *
-   * @param taskId Task whose journal is queried.
-   * @returns All operation rows, or all rows when the task does not exist.
+   * @param taskId Task whose journal is queried; omit to list all journal rows.
+   * @returns All operation rows matching the filter.
    * @throws {Error} If SQLite cannot execute or decode the query.
    */
-  listOperations(taskId: string): readonly OperationRecord[] {
+  listOperations(taskId?: string): readonly OperationRecord[] {
+    if (taskId === undefined) {
+      return this.#database.prepare('SELECT * FROM operation ORDER BY created_at, rowid').all().map(decodeOperation);
+    }
     return this.#database
       .prepare('SELECT * FROM operation WHERE task_id = ? ORDER BY created_at, rowid')
       .all(taskId)

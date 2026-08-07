@@ -29,6 +29,7 @@ import {
   requireSeedState,
   responsePath,
   savePromptCopy,
+  seedStateValid,
   type CollabPaths,
 } from './session.ts';
 import { StateError, StateStore, type StatusRecord } from './state.ts';
@@ -37,6 +38,9 @@ const CAPTURE_ABORT_SETTLE_MS = 250;
 
 export interface CollabBrowser {
   setup(): Promise<string>;
+  setupOpen(sessionName: string): Promise<void>;
+  setupSaveSeed(sessionName: string, seedStatePath: string): Promise<{ readonly seedValidated: boolean }>;
+  setupClose(sessionName: string): Promise<{ readonly sessionClosed: boolean }>;
   startTask(taskId: string, sessionName: string, seedStatePath: string, rebuild?: boolean): Promise<BrowserSessionInfo>;
   sessionAvailability(sessionName: string): Promise<BrowserAvailability>;
   recoverConversation(
@@ -188,15 +192,102 @@ export class CollabService {
   }
 
   /**
-   * Completes the interactive setup flow and verifies its resulting seed.
+   * Completes the interactive setup flow and reconciles any interrupted setup journal.
+   *
+   * The shared seed is never deleted; an already validated seed skips the login and only
+   * finishes the recorded setup-session cleanup before committing the setup operation.
    *
    * @returns The shared authentication seed path.
    * @throws {Error} If the browser flow, seed write, or cleanup fails.
    */
   async setup(): Promise<{ readonly seedPath: string }> {
     await ensureCollabDirectories(this.#paths);
-    await this.#browser.setup();
-    return { seedPath: await requireSeedState(this.#paths) };
+    return this.#withStore(async (store) => {
+      const existing = store.getUncommittedSetupOperation();
+      const sessionName = existing?.sessionName ?? `chatgpt-pro-collab-setup-${this.#idGenerator()}`;
+      let operation =
+        existing ??
+        store.createOperation({
+          id: this.#idGenerator(),
+          kind: 'setup',
+          step: 'login',
+          taskId: null,
+          turnId: null,
+          sessionName,
+        });
+      const seedPath = this.#paths.seedState;
+      const now = (): string => {
+        return new Date().toISOString();
+      };
+
+      if (operation.step === 'login') {
+        const seedValid = await seedStateValid(this.#paths);
+        if (seedValid) {
+          operation = store.advanceOperationStep(operation.id, 'seed', {
+            observedAt: now(),
+            sessionName,
+            postcondition: 'seed was already valid; skipping repeated login',
+            seedValidated: true,
+          });
+        } else {
+          if (operation.phase === 'prepared') {
+            operation = store.markOperationEffectUnknown(operation.id, {
+              observedAt: now(),
+              sessionName,
+              postcondition: 'setup browser command released',
+            });
+          }
+          await this.#browser.setupOpen(sessionName);
+          operation = store.advanceOperationStep(operation.id, 'seed', {
+            observedAt: now(),
+            sessionName,
+            postcondition: 'interactive login observed',
+          });
+        }
+      }
+
+      if (operation.step === 'seed') {
+        const seedValid = await seedStateValid(this.#paths);
+        if (!seedValid) {
+          if (operation.phase === 'prepared') {
+            operation = store.markOperationEffectUnknown(operation.id, {
+              observedAt: now(),
+              sessionName,
+              postcondition: 'state-save command released',
+            });
+            await this.#browser.setupSaveSeed(sessionName, seedPath);
+          } else {
+            await this.#browser.setupOpen(sessionName);
+            await this.#browser.setupSaveSeed(sessionName, seedPath);
+          }
+        }
+        operation = store.advanceOperationStep(operation.id, 'cleanup', {
+          observedAt: now(),
+          sessionName,
+          postcondition: 'authentication seed saved and validated',
+          seedValidated: true,
+        });
+      }
+
+      if (operation.step === 'cleanup') {
+        if (operation.phase === 'prepared') {
+          operation = store.markOperationEffectUnknown(operation.id, {
+            observedAt: now(),
+            sessionName,
+            postcondition: 'setup close command released',
+          });
+        }
+        const closed = await this.#browser.setupClose(sessionName);
+        operation = store.commitOperation(operation.id, 'automatic', {
+          observedAt: now(),
+          sessionName,
+          postcondition: 'setup session closed after verified seed',
+          seedValidated: true,
+          sessionClosed: closed.sessionClosed,
+        });
+      }
+      return { seedPath: await requireSeedState(this.#paths) };
+    });
   }
 
   /**

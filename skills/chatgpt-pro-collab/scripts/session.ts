@@ -118,6 +118,22 @@ export async function requireSeedState(paths: CollabPaths): Promise<string> {
 }
 
 /**
+ * Reports whether setup produced a currently readable authentication seed.
+ *
+ * @param paths Resolved Collab paths.
+ * @returns `true` only when the seed is a readable regular file.
+ * @throws {Error} This probe does not throw for ordinary absence.
+ */
+export async function seedStateValid(paths: CollabPaths): Promise<boolean> {
+  try {
+    await requireSeedState(paths);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Publishes an immutable prompt copy for a new turn.
  *
  * @param paths Resolved Collab paths.

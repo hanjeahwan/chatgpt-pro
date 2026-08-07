@@ -724,6 +724,97 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
   });
 });
 
+describe('BEH-001 setup journal and interruption recovery', () => {
+  it('commits a fresh setup with seed and session-closed evidence', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const store = new StateStore(fixture.paths.database);
+    const operations = store.listOperations();
+    expect(operations).toHaveLength(1);
+    expect(operations[0]).toMatchObject({
+      kind: 'setup',
+      step: 'cleanup',
+      phase: 'committed',
+      resolutionSource: 'automatic',
+      evidence: { seedValidated: true, sessionClosed: true },
+    });
+    store.close();
+    expect(fixture.browser.setupSessions).toHaveLength(1);
+    expect(fixture.browser.setupClosedSessions).toEqual(fixture.browser.setupSessions);
+  });
+
+  it('re-enters the login flow after an interruption before the seed was saved', async () => {
+    const fixture = await serviceFixture();
+    const store = new StateStore(fixture.paths.database);
+    store.createOperation({
+      id: 'setup-login-prepared',
+      kind: 'setup',
+      step: 'login',
+      taskId: null,
+      turnId: null,
+      sessionName: 'chatgpt-pro-collab-setup-interrupted',
+    });
+    store.close();
+
+    await fixture.service.setup();
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireOperation('setup-login-prepared')).toMatchObject({ phase: 'committed' });
+    reopened.close();
+    expect(fixture.browser.setupSessions).toEqual(['chatgpt-pro-collab-setup-interrupted']);
+  });
+
+  it('skips repeated login and only finishes cleanup when the seed is already valid', async () => {
+    const fixture = await serviceFixture();
+    await writeFile(fixture.paths.seedState, '{}');
+    const store = new StateStore(fixture.paths.database);
+    store.createOperation({
+      id: 'setup-login-effect-unknown',
+      kind: 'setup',
+      step: 'login',
+      taskId: null,
+      turnId: null,
+      sessionName: 'chatgpt-pro-collab-setup-halfway',
+    });
+    store.markOperationEffectUnknown('setup-login-effect-unknown');
+    store.close();
+
+    await fixture.service.setup();
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireOperation('setup-login-effect-unknown')).toMatchObject({
+      phase: 'committed',
+      evidence: { seedValidated: true, sessionClosed: true },
+    });
+    reopened.close();
+    expect(fixture.browser.setupSessions).toEqual([]);
+    expect(fixture.browser.setupClosedSessions).toEqual(['chatgpt-pro-collab-setup-halfway']);
+  });
+
+  it('finishes an interrupted cleanup step without repeating login or state save', async () => {
+    const fixture = await serviceFixture();
+    await writeFile(fixture.paths.seedState, '{}');
+    const store = new StateStore(fixture.paths.database);
+    store.createOperation({
+      id: 'setup-cleanup-prepared',
+      kind: 'setup',
+      step: 'cleanup',
+      taskId: null,
+      turnId: null,
+      sessionName: 'chatgpt-pro-collab-setup-cleaning',
+    });
+    store.close();
+
+    await fixture.service.setup();
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireOperation('setup-cleanup-prepared')).toMatchObject({
+      phase: 'committed',
+      evidence: { sessionClosed: true },
+    });
+    reopened.close();
+    expect(fixture.browser.setupSessions).toEqual([]);
+    expect(fixture.browser.setupClosedSessions).toEqual(['chatgpt-pro-collab-setup-cleaning']);
+  });
+});
+
 describe('BEH-013 status, recover, and resolve-submission', () => {
   it('returns a read-only status with browser availability and the safe next action', async () => {
     const fixture = await serviceFixture();
@@ -987,6 +1078,8 @@ class FakeBrowser implements CollabBrowser {
   readonly recoveredConversations: string[] = [];
   readonly resolvedSubmissions: string[] = [];
   readonly safeComposersVerified: string[] = [];
+  readonly setupSessions: string[] = [];
+  readonly setupClosedSessions: string[] = [];
   readonly expectedConversationIds: Array<string | null> = [];
   readonly expectedAssistantTurnIds: Array<string | null> = [];
   readonly responseArtifacts: Array<{ readonly sourceUrl: string; readonly label: string }> = [];
@@ -1033,6 +1126,42 @@ class FakeBrowser implements CollabBrowser {
   async setup(): Promise<string> {
     await writeFile(this.paths.seedState, '{}');
     return this.paths.seedState;
+  }
+
+  /**
+   * Records one fake setup login observation.
+   *
+   * @param sessionName Recorded setup session name.
+   * @returns Nothing after the fake login wait.
+   * @throws {Error} This fake setup open does not throw.
+   */
+  async setupOpen(sessionName: string): Promise<void> {
+    this.setupSessions.push(sessionName);
+  }
+
+  /**
+   * Writes the fake seed and reports its validation.
+   *
+   * @param sessionName Recorded setup session name.
+   * @param seedStatePath Fake authentication seed path.
+   * @returns The validated seed flag.
+   * @throws {Error} If the test file cannot be written.
+   */
+  async setupSaveSeed(sessionName: string, seedStatePath: string): Promise<{ readonly seedValidated: boolean }> {
+    await writeFile(seedStatePath, '{}');
+    return { seedValidated: true };
+  }
+
+  /**
+   * Reports the fake setup session as closed.
+   *
+   * @param sessionName Recorded setup session name.
+   * @returns The closed session flag.
+   * @throws {Error} This fake setup close does not throw.
+   */
+  async setupClose(sessionName: string): Promise<{ readonly sessionClosed: boolean }> {
+    this.setupClosedSessions.push(sessionName);
+    return { sessionClosed: true };
   }
 
   /**

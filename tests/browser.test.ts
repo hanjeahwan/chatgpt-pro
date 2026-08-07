@@ -34,10 +34,12 @@ class CommandNotSpawnedError extends Error {}
 describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
   it('saves the shared authentication seed before closing the one-time setup session', async () => {
     const fixture = await browserFixture([
+      output('  (no browsers)'),
       output('setup opened'),
       output('login observed'),
       output('state saved'),
       output('setup closed'),
+      output('  (no browsers)'),
     ]);
 
     await expect(fixture.browser.setup()).resolves.toBe(fixture.paths.seedState);
@@ -47,13 +49,15 @@ describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
         return invocation.arguments.slice(4);
       }),
     ).toEqual([
+      [],
       ['open', 'https://chatgpt.com/', '--browser=chrome', '--headed'],
       ['run-code', '--filename', expect.any(String)],
       ['state-save', fixture.paths.seedState],
       ['close'],
+      [],
     ]);
-    const sessions = fixture.invocations.map((invocation) => {
-      return invocation.arguments[2];
+    const sessions = fixture.invocations.flatMap((invocation) => {
+      return invocation.arguments[2]?.startsWith('-s=') ? [invocation.arguments[2]] : [];
     });
     expect(new Set(sessions).size).toBe(1);
   });

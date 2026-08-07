@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { existsSync, statSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
@@ -257,26 +258,14 @@ export class PlaywrightBrowser {
     let primaryFailure: unknown;
 
     try {
-      await this.#invoke(
-        sessionName,
-        setupId,
-        ['open', CHATGPT_URL, '--browser=chrome', '--headed'],
-        'open setup browser',
-      );
-      await this.#runCodeWithoutResult(
-        sessionName,
-        setupId,
-        'await-login',
-        loginWaitScript(),
-        'wait for interactive login',
-      );
-      await this.#invoke(sessionName, setupId, ['state-save', this.#paths.seedState], 'save authentication state');
+      await this.setupOpen(sessionName);
+      await this.setupSaveSeed(sessionName, this.#paths.seedState);
     } catch (error) {
       primaryFailure = error;
     }
 
     try {
-      await this.#invoke(sessionName, setupId, ['close'], 'close setup browser');
+      await this.setupClose(sessionName);
     } catch (closeError) {
       if (primaryFailure !== undefined) {
         throw new BrowserError(
@@ -292,6 +281,62 @@ export class PlaywrightBrowser {
       throw primaryFailure;
     }
     return this.#paths.seedState;
+  }
+
+  /**
+   * Opens the interactive setup session when absent and waits for the human login.
+   *
+   * @param sessionName Recorded setup session name.
+   * @returns Nothing after the authenticated ChatGPT page is observed.
+   * @throws {BrowserError} If the login page contract cannot be satisfied.
+   * @throws {Error} If a local Playwright artifact cannot be written.
+   */
+  async setupOpen(sessionName: string): Promise<void> {
+    const setupId = sessionName.replace(/^chatgpt-pro-collab-/u, '');
+    await ensureTaskDirectories(this.#paths, setupId);
+    if ((await this.sessionAvailability(sessionName)) === 'missing') {
+      await this.#invoke(
+        sessionName,
+        setupId,
+        ['open', CHATGPT_URL, '--browser=chrome', '--headed'],
+        'open setup browser',
+      );
+    }
+    await this.#runCodeWithoutResult(
+      sessionName,
+      setupId,
+      'await-login',
+      loginWaitScript(),
+      'wait for interactive login',
+    );
+  }
+
+  /**
+   * Saves the shared storage state and re-verifies the readable seed file.
+   *
+   * @param sessionName Recorded setup session name.
+   * @param seedStatePath Absolute authentication seed path.
+   * @returns Whether the saved seed is a readable regular file.
+   * @throws {BrowserError} If the state-save command fails.
+   * @throws {Error} If a local Playwright artifact cannot be written.
+   */
+  async setupSaveSeed(sessionName: string, seedStatePath: string): Promise<{ readonly seedValidated: boolean }> {
+    const setupId = sessionName.replace(/^chatgpt-pro-collab-/u, '');
+    await this.#invoke(sessionName, setupId, ['state-save', seedStatePath], 'save authentication state');
+    return { seedValidated: await isReadableFile(seedStatePath) };
+  }
+
+  /**
+   * Closes the recorded setup session and verifies the session is gone.
+   *
+   * @param sessionName Recorded setup session name.
+   * @returns Whether the session is no longer available.
+   * @throws {BrowserError} If the close command itself fails.
+   */
+  async setupClose(sessionName: string): Promise<{ readonly sessionClosed: boolean }> {
+    const setupId = sessionName.replace(/^chatgpt-pro-collab-/u, '');
+    await this.#invoke(sessionName, setupId, ['close'], 'close setup browser');
+    return { sessionClosed: (await this.sessionAvailability(sessionName)) === 'missing' };
   }
 
   /**
@@ -2947,6 +2992,17 @@ function archiveScript(canonicalUrl: string, expectedConversationId: string): st
     }
     return JSON.stringify({ protocol: '${PROTOCOL}', kind: 'archive', conversationId });
   }`;
+}
+
+/**
+ * Checks a completed transcript path without following non-file directory entries.
+ *
+ * @param path Absolute path that must be a readable regular file.
+ * @returns True only for an existing regular file.
+ * @throws {Error} This probe does not throw for ordinary absence.
+ */
+function isReadableFile(path: string): boolean {
+  return existsSync(path) && statSync(path).isFile();
 }
 
 /**
