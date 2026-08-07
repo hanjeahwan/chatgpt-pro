@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import {
   BrowserError,
   PlaywrightBrowser,
+  type BrowserArchiveState,
   type BrowserArtifactDownload,
   type BrowserAvailability,
   type BrowserCaptureResult,
@@ -32,7 +33,7 @@ import {
   seedStateValid,
   type CollabPaths,
 } from './session.ts';
-import { StateError, StateStore, type StatusRecord } from './state.ts';
+import { StateError, StateStore, type OperationRecord, type StatusRecord } from './state.ts';
 
 const CAPTURE_ABORT_SETTLE_MS = 250;
 
@@ -125,6 +126,13 @@ export interface CollabBrowser {
     attachmentFileNames: readonly string[],
     observer?: BrowserOperationObserver,
   ): Promise<void>;
+  observeArchiveState(
+    taskId: string,
+    sessionName: string,
+    conversationUrl: string,
+    conversationId: string,
+    observer?: BrowserOperationObserver,
+  ): Promise<BrowserArchiveState>;
 }
 
 export interface StartResult {
@@ -769,6 +777,9 @@ export class CollabService {
   /**
    * Terminates one task browser and records idempotent local closure.
    *
+   * The close intent is persisted as `closing` before any browser termination side effect;
+   * an interrupted close stays `closing` and a repeated call continues the cleanup.
+   *
    * @param taskId Task identifier.
    * @returns Whether this call observed an open browser and whether the task was already closed.
    * @throws {Error} If the task is unknown or browser cleanup fails.
@@ -785,6 +796,7 @@ export class CollabService {
           }
           return await this.#withAcquiredTaskOperation(store, taskId, token, async (observer) => {
             const task = store.requireTask(taskId);
+            store.markTaskClosing(taskId);
             const result = await this.#browser.closeTask(taskId, task.playwrightSession, observer);
             store.closeTask(taskId);
             return { taskId, wasOpen: result.wasOpen, alreadyClosed: false };
@@ -806,6 +818,9 @@ export class CollabService {
   /**
    * Archives the active task's bound Web conversation without changing local lifecycle state.
    *
+   * The canonical identity is journaled as a prepared archive operation before the click;
+   * an interrupted archive is reconciled by observing the actual Web archive state first.
+   *
    * @param taskId Active task identifier.
    * @returns The confirmed archived conversation identity.
    * @throws {CollabError} If no conversation has been established.
@@ -820,6 +835,30 @@ export class CollabService {
         }
         const conversationId = task.conversationId;
         const conversationUrl = task.conversationUrl ?? `https://chatgpt.com/c/${conversationId}`;
+        const existingOperation = store.getUncommittedTaskOperation(taskId);
+        if (existingOperation !== null && existingOperation.kind === 'archive') {
+          return this.#recoverArchive(store, taskId, existingOperation, conversationId, conversationUrl, observer);
+        }
+        const operation = store.createOperation({
+          id: this.#idGenerator(),
+          kind: 'archive',
+          step: 'archive',
+          taskId,
+          turnId: null,
+          sessionName: task.playwrightSession,
+          evidence: {
+            observedAt: new Date().toISOString(),
+            sessionName: task.playwrightSession,
+            conversationId,
+            postcondition: 'target canonical identity recorded before the Archive command',
+          },
+        });
+        store.markOperationEffectUnknown(operation.id, {
+          observedAt: new Date().toISOString(),
+          sessionName: task.playwrightSession,
+          conversationId,
+          postcondition: 'Archive command released',
+        });
         const result = await this.#browser.archive(
           taskId,
           task.playwrightSession,
@@ -827,9 +866,112 @@ export class CollabService {
           conversationUrl,
           observer,
         );
+        store.commitOperation(operation.id, 'automatic', {
+          observedAt: new Date().toISOString(),
+          sessionName: task.playwrightSession,
+          pageUrl: conversationUrl,
+          postcondition: 'conversation archived and canonical binding restored',
+          conversationId,
+          archived: true,
+          bindingRestored: true,
+        });
         return { taskId, conversationId: result.conversationId };
       });
     });
+  }
+
+  /**
+   * Reconciles an interrupted archive operation by observing the real Web state first.
+   *
+   * @param store Current process-local state connection.
+   * @param taskId Task identifier.
+   * @param operation Uncommitted archive operation.
+   * @param conversationId Database-bound canonical identity.
+   * @param conversationUrl Recorded canonical conversation URL.
+   * @param observer Task-lease child-process observer.
+   * @returns The confirmed archived conversation identity.
+   * @throws {CollabError} If the archive state cannot be proven and no retry is allowed.
+   * @throws {Error} If state or browser operations fail.
+   */
+  async #recoverArchive(
+    store: StateStore,
+    taskId: string,
+    operation: OperationRecord,
+    conversationId: string,
+    conversationUrl: string,
+    observer: BrowserOperationObserver,
+  ): Promise<{ readonly taskId: string; readonly conversationId: string }> {
+    const task = store.requireTask(taskId);
+    if (operation.phase === 'prepared') {
+      store.markOperationEffectUnknown(operation.id, {
+        observedAt: new Date().toISOString(),
+        sessionName: task.playwrightSession,
+        conversationId,
+        postcondition: 'Archive command released',
+      });
+      const result = await this.#browser.archive(
+        taskId,
+        task.playwrightSession,
+        conversationId,
+        conversationUrl,
+        observer,
+      );
+      store.commitOperation(operation.id, 'automatic', {
+        observedAt: new Date().toISOString(),
+        sessionName: task.playwrightSession,
+        conversationId,
+        archived: true,
+        bindingRestored: true,
+      });
+      return { taskId, conversationId: result.conversationId };
+    }
+    const observed = await this.#browser.observeArchiveState(
+      taskId,
+      task.playwrightSession,
+      conversationUrl,
+      conversationId,
+      observer,
+    );
+    if (observed.status === 'archived') {
+      await this.#browser.recoverConversation(
+        taskId,
+        task.playwrightSession,
+        conversationUrl,
+        conversationId,
+        observer,
+      );
+      store.commitOperation(operation.id, 'automatic', {
+        observedAt: new Date().toISOString(),
+        sessionName: task.playwrightSession,
+        pageUrl: conversationUrl,
+        postcondition: 'already archived; canonical binding restored without a second click',
+        conversationId,
+        archived: true,
+        bindingRestored: true,
+      });
+      return { taskId, conversationId };
+    }
+    if (observed.status === 'not-archived') {
+      const result = await this.#browser.archive(
+        taskId,
+        task.playwrightSession,
+        conversationId,
+        conversationUrl,
+        observer,
+      );
+      store.commitOperation(operation.id, 'automatic', {
+        observedAt: new Date().toISOString(),
+        sessionName: task.playwrightSession,
+        conversationId,
+        archived: true,
+        bindingRestored: true,
+      });
+      return { taskId, conversationId: result.conversationId };
+    }
+    throw new CollabError(
+      'ARCHIVE_STATE_UNKNOWN',
+      `archive state could not be proven; no Archive click was repeated: ${observed.error}`,
+    );
   }
 
   /**
@@ -937,7 +1079,16 @@ export class CollabService {
       return { ...store.getStatus(taskId, after), nextAction: 'send' };
     }
     if (operation !== null && operation.kind === 'archive') {
-      return before;
+      const task = store.requireTask(taskId);
+      if (task.conversationId === null || task.conversationUrl === null) {
+        throw new CollabError(
+          'CONVERSATION_NOT_ESTABLISHED',
+          `archive recovery needs a recorded canonical conversation: ${taskId}`,
+        );
+      }
+      await this.#recoverArchive(store, taskId, operation, task.conversationId, task.conversationUrl, observer);
+      const after = await this.#browser.sessionAvailability(task.playwrightSession);
+      return store.getStatus(taskId, after);
     }
     if (task.status === 'starting' || operation?.kind === 'start') {
       const seedStatePath = await requireSeedState(this.#paths);

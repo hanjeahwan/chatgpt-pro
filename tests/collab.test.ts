@@ -1052,6 +1052,149 @@ describe('BEH-002 caller-provided task start', () => {
   });
 });
 
+describe('BEH-008 local close and BEH-009 archive journal', () => {
+  it('persists closing before terminating the browser and completes on a repeated close', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const store = new StateStore(fixture.paths.database);
+    store.markTaskClosing(task.taskId);
+    store.close();
+
+    const status = await fixture.service.status(task.taskId);
+    expect(status).toMatchObject({ taskStatus: 'closing', nextAction: 'close' });
+    expect(fixture.browser.closed).toEqual([]);
+    await expect(fixture.service.close(task.taskId)).resolves.toMatchObject({ alreadyClosed: false });
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireTask(task.taskId)).toMatchObject({ status: 'closed' });
+    reopened.close();
+    expect(fixture.browser.closed).toEqual([task.taskId]);
+  });
+
+  it('journals the archive click with canonical identity evidence', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const promptPath = join(fixture.root, 'archive-journal.md');
+    await writeFile(promptPath, 'archive journal');
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+    await fixture.service.wait(task.taskId, turn.turnId, 20_000, 20_000);
+
+    await fixture.service.archive(task.taskId);
+    const store = new StateStore(fixture.paths.database);
+    const archiveOperation = store.listOperations(task.taskId).find((operation) => {
+      return operation.kind === 'archive';
+    });
+    expect(archiveOperation).toMatchObject({
+      phase: 'committed',
+      resolutionSource: 'automatic',
+      evidence: {
+        conversationId: `conversation-${task.taskId}`,
+        archived: true,
+        bindingRestored: true,
+      },
+    });
+    expect(store.requireTask(task.taskId)).toMatchObject({ status: 'active' });
+    store.close();
+    expect(fixture.browser.archived).toEqual([task.taskId]);
+  });
+
+  it('restores the binding without a second Archive click when the Web conversation is already archived', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const promptPath = join(fixture.root, 'already-archived.md');
+    await writeFile(promptPath, 'already archived');
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+    await fixture.service.wait(task.taskId, turn.turnId, 20_000, 20_000);
+    const store = new StateStore(fixture.paths.database);
+    store.createOperation({
+      id: 'archive-op',
+      kind: 'archive',
+      step: 'archive',
+      taskId: task.taskId,
+      turnId: null,
+      sessionName: `chatgpt-pro-collab-${task.taskId}`,
+    });
+    store.markOperationEffectUnknown('archive-op', {
+      observedAt: new Date().toISOString(),
+      sessionName: `chatgpt-pro-collab-${task.taskId}`,
+      conversationId: `conversation-${task.taskId}`,
+    });
+    store.close();
+
+    await fixture.service.archive(task.taskId);
+    expect(fixture.browser.archived).toEqual([]);
+    expect(fixture.browser.archiveObservations).toEqual([task.taskId]);
+    expect(fixture.browser.recoveredConversations).toEqual([task.taskId]);
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireOperation('archive-op')).toMatchObject({
+      phase: 'committed',
+      evidence: { archived: true, bindingRestored: true },
+    });
+    reopened.close();
+  });
+
+  it('retries the archive exactly once when the Web state provably was not archived', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const promptPath = join(fixture.root, 'not-archived.md');
+    await writeFile(promptPath, 'not archived');
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+    await fixture.service.wait(task.taskId, turn.turnId, 20_000, 20_000);
+    fixture.browser.nextArchiveState = 'not-archived';
+    const store = new StateStore(fixture.paths.database);
+    store.createOperation({
+      id: 'archive-op',
+      kind: 'archive',
+      step: 'archive',
+      taskId: task.taskId,
+      turnId: null,
+      sessionName: `chatgpt-pro-collab-${task.taskId}`,
+    });
+    store.markOperationEffectUnknown('archive-op');
+    store.close();
+
+    await fixture.service.archive(task.taskId);
+    expect(fixture.browser.archived).toEqual([task.taskId]);
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireOperation('archive-op')).toMatchObject({
+      phase: 'committed',
+      evidence: { archived: true, bindingRestored: true },
+    });
+    reopened.close();
+  });
+
+  it('never repeats an Archive click when the Web state cannot be proven', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const promptPath = join(fixture.root, 'unknown-archive.md');
+    await writeFile(promptPath, 'unknown archive');
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+    await fixture.service.wait(task.taskId, turn.turnId, 20_000, 20_000);
+    fixture.browser.nextArchiveStateUnknown = task.taskId;
+    const store = new StateStore(fixture.paths.database);
+    store.createOperation({
+      id: 'archive-op',
+      kind: 'archive',
+      step: 'archive',
+      taskId: task.taskId,
+      turnId: null,
+      sessionName: `chatgpt-pro-collab-${task.taskId}`,
+    });
+    store.markOperationEffectUnknown('archive-op');
+    store.close();
+
+    await expect(fixture.service.archive(task.taskId)).rejects.toMatchObject({ code: 'ARCHIVE_STATE_UNKNOWN' });
+    expect(fixture.browser.archived).toEqual([]);
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireOperation('archive-op')).toMatchObject({ phase: 'effect-unknown' });
+    reopened.close();
+  });
+});
+
 describe('BEH-005 and BEH-006 multi-turn and cross-task concurrency', () => {
   it('keeps one conversation across turns with independent turn files', async () => {
     const fixture = await serviceFixture();
@@ -1466,6 +1609,9 @@ class FakeBrowser implements CollabBrowser {
   readonly setupSessions: string[] = [];
   readonly setupClosedSessions: string[] = [];
   readonly cleanedComposers: string[] = [];
+  readonly archiveObservations: string[] = [];
+  nextArchiveState: 'archived' | 'not-archived' = 'archived';
+  nextArchiveStateUnknown: string | null = null;
   readonly expectedConversationIds: Array<string | null> = [];
   readonly expectedAssistantTurnIds: Array<string | null> = [];
   readonly responseArtifacts: Array<{ readonly sourceUrl: string; readonly label: string }> = [];
@@ -1661,6 +1807,36 @@ class FakeBrowser implements CollabBrowser {
     this.observe(observer);
     this.recoveredConversations.push(taskId);
     return Promise.resolve({ conversationId, conversationUrl });
+  }
+
+  /**
+   * Records one fake archive-state observation.
+   *
+   * @param taskId Task identifier.
+   * @param _sessionName Unused named session.
+   * @param _conversationUrl Unused canonical URL.
+   * @param _conversationId Unused identity.
+   * @param observer Task-lease child-process observer.
+   * @returns The configured archive state.
+   * @throws {Error} This fake observation does not throw.
+   */
+  async observeArchiveState(
+    taskId: string,
+    _sessionName: string,
+    _conversationUrl: string,
+    _conversationId: string,
+    observer?: BrowserOperationObserver,
+  ) {
+    this.observe(observer);
+    this.archiveObservations.push(taskId);
+    if (this.nextArchiveStateUnknown === taskId) {
+      this.nextArchiveStateUnknown = null;
+      return { status: 'unknown' as const, error: 'injected unverifiable archive state' };
+    }
+    if (this.nextArchiveState === 'archived') {
+      return { status: 'archived' as const };
+    }
+    return { status: 'not-archived' as const };
   }
 
   /**

@@ -204,11 +204,22 @@ interface ResolveNotSubmittedProtocolResult extends ProtocolResult {
   readonly kind: 'resolve-not-submitted';
 }
 
+interface ObserveArchiveProtocolResult extends ProtocolResult {
+  readonly kind: 'observe-archive';
+  readonly status: 'archived' | 'not-archived' | 'unknown';
+  readonly error?: string;
+}
+
 export interface BrowserResolveSubmittedResult {
   readonly conversationId: string;
   readonly conversationUrl: string;
   readonly userTurnIdentity: string;
 }
+
+export type BrowserArchiveState =
+  | { readonly status: 'archived' }
+  | { readonly status: 'not-archived' }
+  | { readonly status: 'unknown'; readonly error: string };
 
 export class BrowserError extends Error {
   readonly code: string;
@@ -894,6 +905,40 @@ export class PlaywrightBrowser {
       observer,
     );
     return { conversationId: result.conversationId };
+  }
+
+  /**
+   * Observes whether the target conversation is currently archived without clicking Archive.
+   *
+   * @param taskId Owning task identifier.
+   * @param sessionName Owning Playwright named session.
+   * @param conversationUrl Recorded canonical conversation URL.
+   * @param conversationId Database-bound canonical identity.
+   * @param observer Task-lease child-process observer.
+   * @returns Archived, provably not archived, or unknown with a real cause.
+   * @throws {BrowserError} If the page cannot be observed at all.
+   * @throws {Error} If a local Playwright artifact cannot be written.
+   */
+  async observeArchiveState(
+    taskId: string,
+    sessionName: string,
+    conversationUrl: string,
+    conversationId: string,
+    observer?: BrowserOperationObserver,
+  ): Promise<BrowserArchiveState> {
+    const result = await this.#runCode<ObserveArchiveProtocolResult>(
+      sessionName,
+      taskId,
+      'observe-archive',
+      observeArchiveScript(conversationUrl, conversationId),
+      'observe archive state',
+      'observe-archive',
+      observer,
+    );
+    if (result.status === 'archived' || result.status === 'not-archived') {
+      return { status: result.status };
+    }
+    return { status: 'unknown', error: result.error ?? 'archive state could not be verified' };
   }
 
   /**
@@ -2811,6 +2856,53 @@ function recoverConversationScript(canonicalUrl: string, expectedConversationId:
       kind: 'recover-conversation',
       conversationId,
       conversationUrl: url.origin + url.pathname,
+    });
+  }`;
+}
+
+/**
+ * Builds the read-only archive-state observation for the target conversation.
+ *
+ * @param canonicalUrl Recorded canonical conversation URL.
+ * @param expectedConversationId Database-bound canonical identity.
+ * @returns A Playwright page function source.
+ * @throws {Error} This pure source builder does not throw.
+ */
+function observeArchiveScript(canonicalUrl: string, expectedConversationId: string): string {
+  return `async (page) => {
+    const conversationId = ${JSON.stringify(expectedConversationId)};
+    const canonicalUrl = ${JSON.stringify(canonicalUrl)};
+    const conversationIdOf = (pathname) => {
+      const match = /\\/c\\/([^/?#]+)\\/?$/.exec(pathname);
+      return match === null || match[1].startsWith('WEB:') ? null : match[1];
+    };
+    try {
+      await page.goto(canonicalUrl, { waitUntil: 'domcontentloaded' });
+      await page.waitForFunction((id) => {
+        const match = /\\/c\\/([^/?#]+)\\/?$/.exec(location.pathname);
+        return location.hostname === 'chatgpt.com' &&
+          match !== null && !match[1].startsWith('WEB:') && match[1] === id;
+      }, conversationId, { timeout: 60000, polling: 100 });
+    } catch {
+      return JSON.stringify({
+        protocol: '${PROTOCOL}',
+        kind: 'observe-archive',
+        status: 'unknown',
+        error: 'the target conversation page could not be re-observed',
+      });
+    }
+    const sidebarLink = await page.locator('a[href="/c/' + conversationId + '"]').count();
+    if (sidebarLink === 1) {
+      return JSON.stringify({ protocol: '${PROTOCOL}', kind: 'observe-archive', status: 'not-archived' });
+    }
+    if (sidebarLink === 0) {
+      return JSON.stringify({ protocol: '${PROTOCOL}', kind: 'observe-archive', status: 'archived' });
+    }
+    return JSON.stringify({
+      protocol: '${PROTOCOL}',
+      kind: 'observe-archive',
+      status: 'unknown',
+      error: 'the sidebar archive link is not unique',
     });
   }`;
 }
