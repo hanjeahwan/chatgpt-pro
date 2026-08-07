@@ -48,7 +48,8 @@
           "pnpm typecheck",
           "pnpm test (181 passed)",
           "VER-001 live 最终轮：scratch HOME 下 SIGKILL 中断 setup login wait → 无 seed、无 committed setup op（login/effect-unknown 保留）、无成功输出，setup 浏览器残留会话随后由 resume 关闭；将生产 seed 复制入 scratch auth 后重跑 setup → 跳过重新登录、关闭记录 session、自动 commit（evidence: seedValidated/sessionClosed true）；生产 seed sha256 前后一致（3e4b106c…）未被改写",
-          "VER-001 两任务同 seed：9958178a/e7e820ec 并发 start 均 ok，seed 未改写（IMP-009 证据保留）"
+          "VER-001 两任务同 seed：9958178a/e7e820ec 并发 start 均 ok，seed 未改写（IMP-009 证据保留）",
+          "同步复验（HEAD d59e91b = main 27e6d90 + 原 15 提交 rebase）：实现代码与 30ad028 逐字节一致（skills/tests/specs/execution diff 为空），同步仅引入 workflow/skill 文档；pnpm format:check/lint/typecheck/test(181) 全部通过，live 证据沿用最终轮"
         ],
         "reviews": []
       }
@@ -67,7 +68,8 @@
           "pnpm lint",
           "pnpm typecheck",
           "pnpm test (181 passed)",
-          "tests/audit.test.ts: text/artifact order and paths after close + process restart, host prompt rewrite keeps saved copy, automatic vs human resolution evidence, task journal readability after close"
+          "tests/audit.test.ts: text/artifact order and paths after close + process restart, host prompt rewrite keeps saved copy, automatic vs human resolution evidence, task journal readability after close",
+          "同步复验（HEAD d59e91b = main 27e6d90 + 原 15 提交 rebase）：实现代码与 30ad028 逐字节一致（skills/tests/specs/execution diff 为空），同步仅引入 workflow/skill 文档；pnpm format:check/lint/typecheck/test(181) 全部通过，live 证据沿用最终轮"
         ],
         "reviews": []
       }
@@ -88,7 +90,8 @@
           "pnpm test (181 passed)",
           "VER-003 live 最终轮：任务 977eff11 上传附件后提交放行前 SIGKILL → recover 走 auto-verify（真实页面），turn 进入 needs-decision/unknown-submission，未产生 user turn；resolve-submission not-submitted 页面验证安全 composer 后 turn 置 failed；随后显式 send 才产生新 user turn（conversation-turn-7）并 completed；composer 无残留附件",
           "修复 autoVerifySubmissionScript/resolveNotSubmittedScript 中 page.evaluate/waitForFunction 回调引用外部 visible 的闭包 bug（live recover 暴露 ReferenceError），修复后 recover/resolve 全链路 live 重验通过；181 测试全绿",
-          "VER-013 live：977eff11 tar.gz（108 普通文件、marker/checksum 与本地一致）+ 115b43c3 zip（108 普通文件、marker 一致）forward test 均 completed；上传菜单竞态修复（3 次重试 + Escape）live 验证通过"
+          "VER-013 live：977eff11 tar.gz（108 普通文件、marker/checksum 与本地一致）+ 115b43c3 zip（108 普通文件、marker 一致）forward test 均 completed；上传菜单竞态修复（3 次重试 + Escape）live 验证通过",
+          "同步复验（HEAD d59e91b = main 27e6d90 + 原 15 提交 rebase）：实现代码与 30ad028 逐字节一致（skills/tests/specs/execution diff 为空），同步仅引入 workflow/skill 文档；pnpm format:check/lint/typecheck/test(181) 全部通过，live 证据沿用最终轮"
         ],
         "reviews": []
       }
@@ -108,7 +111,8 @@
           "pnpm typecheck",
           "pnpm test (181 passed)",
           "VER-004 live：任务 e67a20a8 长文本+代码 turn（ea10fa9b Rust 所有权、82884ab1 cgroup v2，response.md 24510 bytes）completed，artifactPaths 空；页面刷新后按同一 user turn identity（conversation-turn-11）重判 completed，重复 wait 返回同一 responsePath 且旧 response 未被覆盖",
-          "VER-014 live：1ms observation-expiry→pending 单次 wait 返回单一 terminal JSON、stderr 空、无中间输出；捕获超时/真实错误由确定性夹具覆盖"
+          "VER-014 live：1ms observation-expiry→pending 单次 wait 返回单一 terminal JSON、stderr 空、无中间输出；捕获超时/真实错误由确定性夹具覆盖",
+          "同步复验（HEAD d59e91b = main 27e6d90 + 原 15 提交 rebase）：实现代码与 30ad028 逐字节一致（skills/tests/specs/execution diff 为空），同步仅引入 workflow/skill 文档；pnpm format:check/lint/typecheck/test(181) 全部通过，live 证据沿用最终轮"
         ],
         "reviews": []
       }
@@ -127,7 +131,8 @@
           "pnpm lint",
           "pnpm typecheck",
           "pnpm test (181 passed)",
-          "VER-015 live：任务 eab98061 turn 84eb8272 返回 report.html/archive.zip/image.png/main.py/readme.txt/readme(1).txt 六个 sandbox 文件按序落盘，同名 readme.txt 以逻辑 URL 区分且本地不覆盖；artifact 行与本地文件齐全"
+          "VER-015 live：任务 eab98061 turn 84eb8272 返回 report.html/archive.zip/image.png/main.py/readme.txt/readme(1).txt 六个 sandbox 文件按序落盘，同名 readme.txt 以逻辑 URL 区分且本地不覆盖；artifact 行与本地文件齐全",
+          "同步复验（HEAD d59e91b = main 27e6d90 + 原 15 提交 rebase）：实现代码与 30ad028 逐字节一致（skills/tests/specs/execution diff 为空），同步仅引入 workflow/skill 文档；pnpm format:check/lint/typecheck/test(181) 全部通过，live 证据沿用最终轮"
         ],
         "reviews": []
       }
@@ -147,7 +152,8 @@
           "pnpm typecheck",
           "pnpm test (181 passed)",
           "VER-005 live：e67a20a8 同一 conversation（6a759c72）内 7 个 completed turn，第二 turn 引用上轮状态转换表并续写，turn 文件独立",
-          "VER-006 live：e67a20a8 与 977eff11 两个 named session 并发 send + 并发 wait，两 wait 窗口重叠（首个 120s 窗口双双 pending 到期），随后各自 completed，transcript 分别归属正确任务"
+          "VER-006 live：e67a20a8 与 977eff11 两个 named session 并发 send + 并发 wait，两 wait 窗口重叠（首个 120s 窗口双双 pending 到期），随后各自 completed，transcript 分别归属正确任务",
+          "同步复验（HEAD d59e91b = main 27e6d90 + 原 15 提交 rebase）：实现代码与 30ad028 逐字节一致（skills/tests/specs/execution diff 为空），同步仅引入 workflow/skill 文档；pnpm format:check/lint/typecheck/test(181) 全部通过，live 证据沿用最终轮"
         ],
         "reviews": []
       }
@@ -167,7 +173,8 @@
           "pnpm typecheck",
           "pnpm test (181 passed)",
           "VER-008 live：close SIGKILL 中断后任务保持 closing（op close 保留），status.nextAction=close，recover 不重建 session，并发 close 只完成一次 closed，重复 close alreadyClosed；named session 与浏览器进程消失",
-          "VER-009 live：115b43c3 archive 提交（evidence archived:true bindingRestored:true），页面回到 canonical 绑定，随后 send/wait 使用相同 conversation 标识（6a75a971）并 completed；close 不归档 Web（e67a20a8 close 后 conversation 仍在）"
+          "VER-009 live：115b43c3 archive 提交（evidence archived:true bindingRestored:true），页面回到 canonical 绑定，随后 send/wait 使用相同 conversation 标识（6a75a971）并 completed；close 不归档 Web（e67a20a8 close 后 conversation 仍在）",
+          "同步复验（HEAD d59e91b = main 27e6d90 + 原 15 提交 rebase）：实现代码与 30ad028 逐字节一致（skills/tests/specs/execution diff 为空），同步仅引入 workflow/skill 文档；pnpm format:check/lint/typecheck/test(181) 全部通过，live 证据沿用最终轮"
         ],
         "reviews": []
       }
@@ -190,7 +197,8 @@
           "VER-010：format:check/lint/typecheck/test(181)/pnpm collab help/Skill 绝对路径 help（无 package.json 临时目录）均 exit 0",
           "VER-011：确定性并发与故障注入测试套件全绿（state-concurrency 11、browser 63、collab 69）",
           "VER-012：node v22.19.0 与 v25.9.0 node:sqlite DatabaseSync 内存 smoke 均 exit 0；最小 .ts 入口 smoke exit 0；playwright-cli help/raw list 均 exit 0",
-          "VER-016 live：submitted 裁决两例（human）已绑定唯一 user turn；not-submitted 裁决 live 验证安全 composer 后 turn failed；浏览器被杀后 recover 重建唯一 named session 并恢复 canonical conversation（977eff11）；closing 任务 recover 不重建"
+          "VER-016 live：submitted 裁决两例（human）已绑定唯一 user turn；not-submitted 裁决 live 验证安全 composer 后 turn failed；浏览器被杀后 recover 重建唯一 named session 并恢复 canonical conversation（977eff11）；closing 任务 recover 不重建",
+          "同步复验（HEAD d59e91b = main 27e6d90 + 原 15 提交 rebase）：实现代码与 30ad028 逐字节一致（skills/tests/specs/execution diff 为空），同步仅引入 workflow/skill 文档；pnpm format:check/lint/typecheck/test(181) 全部通过，live 证据沿用最终轮"
         ],
         "reviews": []
       }
@@ -210,7 +218,8 @@
           "pnpm typecheck",
           "pnpm test (181 passed)",
           "VER-002 live 最终轮：start SIGKILL 中断（session 打开后）→ 同 taskId 重试恢复同一任务并 ok（54f13238，starting→active）；绑定前并发重复 start 同一 taskId 只产生一条 task 记录、一个 named session、一个 committed start op（1224e89e）；已绑定任务再次 start 返回 TASK_CONFLICT 且无浏览器副作用（e67a20a8）；两个全新 UUID 并发 start 均 ok、独立 session/pid/context/dir（9958178a/e7e820ec，IMP-009 前轮证据保留）",
-          "live 首次发送：e67a20a8（含 ws+ext 附件）与 eab98061（prompt-F）首次 send 均提交并绑定 conversation，user turn identity 记录"
+          "live 首次发送：e67a20a8（含 ws+ext 附件）与 eab98061（prompt-F）首次 send 均提交并绑定 conversation，user turn identity 记录",
+          "同步复验（HEAD d59e91b = main 27e6d90 + 原 15 提交 rebase）：实现代码与 30ad028 逐字节一致（skills/tests/specs/execution diff 为空），同步仅引入 workflow/skill 文档；pnpm format:check/lint/typecheck/test(181) 全部通过，live 证据沿用最终轮"
         ],
         "reviews": []
       }
@@ -231,7 +240,8 @@
           "pnpm test (139 passed)",
           "tests/state.test.ts: operation journal CRUD, uncommitted constraints, status snapshot, nextAction",
           "tests/collab.test.ts: status read-only, recover routing (closing/wait/rebuild/start resume), resolve-submission submitted/not-submitted, canonical URL rejection",
-          "tests/browser.test.ts: session list classification, rebuild startTask, recoverConversation, resolve-submission scripts"
+          "tests/browser.test.ts: session list classification, rebuild startTask, recoverConversation, resolve-submission scripts",
+          "同步复验（HEAD d59e91b = main 27e6d90 + 原 15 提交 rebase）：实现代码与 30ad028 逐字节一致（skills/tests/specs/execution diff 为空），同步仅引入 workflow/skill 文档；pnpm format:check/lint/typecheck/test(181) 全部通过，live 证据沿用最终轮"
         ],
         "reviews": []
       }
