@@ -1,6 +1,6 @@
 # WORKFLOW
 
-本文件是仓库唯一的开发流程合同：以 Orca Workspace、`orca-cli` 与 Orca Orchestrator 为核心的标准流程。标准和高风险变更必须按第 3 至 8 节执行；低风险小型变更按第 4 节简化，但不得省略 Start 与 Merge 条件。Orca 操作命令以本机 `orca-cli` 与 `orchestration` Skill 为准，本文件不复制其手册。
+本文件是仓库唯一的开发流程合同：以 Orca Workspace、`orca-cli` 与 Orca Orchestrator 为核心。标准和高风险变更执行本文件完整路径，其中第 3 至 8 节是实施主线；低风险小型变更可按第 4 节简化，但不得省略适用的角色与权威边界、Start 条件和 Merge 条件。Orca 操作命令以本机 `orca-cli` 与 `orchestration` Skill 为准，本文件不复制其手册。
 
 ```mermaid
 flowchart TD
