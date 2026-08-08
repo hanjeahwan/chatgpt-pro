@@ -722,12 +722,21 @@ export class CollabService {
         );
         const observedAt = new Date().toISOString();
         if (browserResult.status === 'unsafe-not-submitted') {
+          await this.#recoverDraftComposer(
+            taskId,
+            task.playwrightSession,
+            task.conversationId,
+            task.conversationUrl,
+            input.attachmentPaths.map((attachmentPath) => {
+              return basename(attachmentPath);
+            }),
+            observer,
+          );
           store.failSubmissionAndCommit(taskId, turnId, operationId, browserResult.error, {
             observedAt,
             sessionName: task.playwrightSession,
-            postcondition: 'attachment draft could not be cleared safely',
+            postcondition: 'target composer verified safe after draft recovery',
           });
-          store.failTask(taskId);
           throw new CollabError('SUBMISSION_FAILED', browserResult.error);
         }
         if (browserResult.status === 'not-submitted') {
@@ -1248,6 +1257,46 @@ export class CollabService {
   }
 
   /**
+   * Restores a verified safe composer for a known-unsubmitted send draft.
+   *
+   * Attempts the in-page cleanup first; when the page cannot be proven safe (for
+   * example a residual file chooser blocks the fixed CLI's modal guard), closes
+   * the same-name session, rebuilds it from the shared seed with the same task
+   * identity, restores the exact canonical conversation when bound, and verifies
+   * the composer again. Never resends messages or migrates conversations.
+   *
+   * @param taskId Task whose composer is restored.
+   * @param sessionName Task's stable Playwright named session.
+   * @param conversationId Bound conversation identity, or null before binding.
+   * @param conversationUrl Bound canonical URL, or null before binding.
+   * @param attachmentNames Basenames that must disappear from the composer.
+   * @param observer Task-lease child-process observer.
+   * @throws {Error} If cleanup, close, rebuild, identity recovery, or re-verification fails.
+   */
+  async #recoverDraftComposer(
+    taskId: string,
+    sessionName: string,
+    conversationId: string | null,
+    conversationUrl: string | null,
+    attachmentNames: readonly string[],
+    observer: BrowserOperationObserver,
+  ): Promise<void> {
+    try {
+      await this.#browser.cleanSendComposer(taskId, sessionName, conversationId, attachmentNames, observer);
+      return;
+    } catch {
+      // The composer cannot be proven safe in-page; continue with the close-and-rebuild path.
+    }
+    const seedStatePath = await requireSeedState(this.#paths);
+    await this.#browser.closeTask(taskId, sessionName, observer);
+    await this.#browser.startTask(taskId, sessionName, seedStatePath, true, observer);
+    if (conversationId !== null && conversationUrl !== null) {
+      await this.#browser.recoverConversation(taskId, sessionName, conversationUrl, conversationId, observer);
+    }
+    await this.#browser.cleanSendComposer(taskId, sessionName, conversationId, attachmentNames, observer);
+  }
+
+  /**
    * Applies the unique recovery path implied by the current persistent state.
    *
    * @param store Current process-local state connection.
@@ -1317,10 +1366,11 @@ export class CollabService {
     if (operation !== null && operation.kind === 'send' && operation.step === 'draft') {
       const task = store.requireTask(taskId);
       const sendingTurn = pendingTurn;
-      await this.#browser.cleanSendComposer(
+      await this.#recoverDraftComposer(
         taskId,
         task.playwrightSession,
         task.conversationId,
+        task.conversationUrl,
         sendingTurn === undefined
           ? []
           : sendingTurn.attachmentPaths.map((attachmentPath) => {
@@ -1333,7 +1383,7 @@ export class CollabService {
           taskId,
           sendingTurn.id,
           operation.id,
-          'send interrupted before submission; composer cleaned to a safe state',
+          'send interrupted before submission; composer cleaned or rebuilt to a safe state',
           {
             observedAt: new Date().toISOString(),
             sessionName: task.playwrightSession,

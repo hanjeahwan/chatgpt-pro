@@ -109,23 +109,37 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     });
   });
 
-  it('fails the task when an unsubmitted attachment draft cannot be cleared safely', async () => {
+  it('recovers an unsafe-not-submitted draft via clean-or-rebuild and keeps the task active', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
     const task = await fixture.start();
     const promptPath = join(fixture.root, 'prompt.md');
     await writeFile(promptPath, 'unsafe cleanup');
     fixture.browser.nextSendStatus = 'unsafe-not-submitted';
+    fixture.browser.cleanSendComposerFailuresRemaining = 1;
 
     await expect(fixture.service.send(task.taskId, promptPath, [])).rejects.toMatchObject({
       code: 'SUBMISSION_FAILED',
     });
     const store = new StateStore(fixture.paths.database);
-    expect(store.requireTask(task.taskId).status).toBe('failed');
+    expect(store.requireTask(task.taskId).status).toBe('active');
+    expect(store.listTurns(task.taskId)).toMatchObject([{ status: 'failed' }]);
+    expect(
+      store.listOperations(task.taskId).find((operation) => {
+        return operation.kind === 'send';
+      }),
+    ).toMatchObject({ kind: 'send', step: 'draft', phase: 'committed', resolutionSource: 'automatic' });
     store.close();
-    await expect(fixture.service.send(task.taskId, promptPath, [])).rejects.toMatchObject({
-      code: 'TASK_NOT_ACTIVE',
-    });
+    expect(fixture.browser.closed).toEqual([task.taskId]);
+    expect(fixture.browser.cleanedComposers).toEqual([task.taskId]);
+    expect(fixture.browser.cleanSendComposerFailuresRemaining).toBe(0);
+    expect(fixture.browser.recoveredConversations).toEqual([]);
+
+    const resent = await fixture.service.send(task.taskId, promptPath, []);
+    expect(resent.turnId).toBeTruthy();
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireTask(task.taskId).status).toBe('active');
+    reopened.close();
   });
 
   it('fails a known pre-submission error without creating submission ambiguity', async () => {
@@ -1014,6 +1028,8 @@ describe('BEH-003 send journal and archive attachments', () => {
     const status = await fixture.service.recover(task.taskId);
     expect(status).toMatchObject({ nextAction: 'send', turnStatus: null });
     expect(fixture.browser.cleanedComposers).toEqual([task.taskId]);
+    expect(fixture.browser.closed).toEqual([]);
+    expect(fixture.browser.startCount).toBe(1);
     const reopened = new StateStore(fixture.paths.database);
     expect(reopened.requireTurn(task.taskId, 'draft-turn')).toMatchObject({
       status: 'failed',
@@ -1021,6 +1037,119 @@ describe('BEH-003 send journal and archive attachments', () => {
     });
     expect(reopened.requireOperation('draft-op')).toMatchObject({ phase: 'committed' });
     reopened.close();
+  });
+
+  it('rebuilds an unbound interrupted draft from seed when in-page cleanup fails', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const promptPath = join(fixture.root, 'draft-prompt.md');
+    await writeFile(promptPath, 'draft');
+    const store = new StateStore(fixture.paths.database);
+    const turn = store.beginSendTurn(task.taskId, 'draft-turn', promptPath, [join(fixture.root, 'a.txt')], 'draft-op');
+    await savePromptCopy(fixture.paths, task.taskId, turn.turn.id, Buffer.from('draft'));
+    store.close();
+    fixture.browser.cleanSendComposerFailuresRemaining = 1;
+
+    const status = await fixture.service.recover(task.taskId);
+    expect(status).toMatchObject({ nextAction: 'send', turnStatus: null });
+    expect(fixture.browser.cleanedComposers).toEqual([task.taskId]);
+    expect(fixture.browser.cleanSendComposerFailuresRemaining).toBe(0);
+    expect(fixture.browser.closed).toEqual([task.taskId]);
+    expect(fixture.browser.recoveredConversations).toEqual([]);
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireTurn(task.taskId, 'draft-turn')).toMatchObject({
+      status: 'failed',
+      error: expect.stringContaining('cleaned or rebuilt'),
+    });
+    expect(reopened.requireOperation('draft-op')).toMatchObject({ phase: 'committed' });
+    reopened.close();
+  });
+
+  it('rebuilds a bound interrupted draft to its exact canonical conversation', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const promptPath = join(fixture.root, 'prompt.md');
+    await writeFile(promptPath, 'bound draft');
+    const first = await fixture.service.send(task.taskId, promptPath, []);
+    await fixture.service.wait(task.taskId, first.turnId, 20_000, 20_000);
+    const store = new StateStore(fixture.paths.database);
+    const bound = store.requireTask(task.taskId);
+    expect(bound.conversationId).toBe(`conversation-${task.taskId}`);
+    const turn = store.beginSendTurn(
+      task.taskId,
+      'draft-turn-2',
+      promptPath,
+      [join(fixture.root, 'a.txt')],
+      'draft-op-2',
+    );
+    await savePromptCopy(fixture.paths, task.taskId, turn.turn.id, Buffer.from('bound draft'));
+    store.close();
+    fixture.browser.cleanSendComposerFailuresRemaining = 1;
+
+    const status = await fixture.service.recover(task.taskId);
+    expect(status).toMatchObject({ nextAction: 'send', turnStatus: null });
+    expect(fixture.browser.closed).toEqual([task.taskId]);
+    expect(fixture.browser.recoveredConversations).toEqual([task.taskId]);
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireTask(task.taskId).conversationId).toBe(`conversation-${task.taskId}`);
+    expect(reopened.requireTurn(task.taskId, 'draft-turn-2')).toMatchObject({ status: 'failed' });
+    expect(reopened.requireOperation('draft-op-2')).toMatchObject({ phase: 'committed' });
+    reopened.close();
+  });
+
+  it('keeps an unprovable draft recoverable when the rebuild fallback fails', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const promptPath = join(fixture.root, 'draft-prompt.md');
+    await writeFile(promptPath, 'draft');
+    const store = new StateStore(fixture.paths.database);
+    const turn = store.beginSendTurn(task.taskId, 'draft-turn', promptPath, [join(fixture.root, 'a.txt')], 'draft-op');
+    await savePromptCopy(fixture.paths, task.taskId, turn.turn.id, Buffer.from('draft'));
+    store.close();
+    fixture.browser.cleanSendComposerFailuresRemaining = 100;
+
+    await expect(fixture.service.recover(task.taskId)).rejects.toThrow('injected composer cleanup failure');
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireTask(task.taskId).status).toBe('active');
+    expect(reopened.requireTurn(task.taskId, 'draft-turn')).toMatchObject({ status: 'sending' });
+    expect(reopened.requireOperation('draft-op')).toMatchObject({ kind: 'send', step: 'draft', phase: 'prepared' });
+    expect(reopened.getStatus(task.taskId, 'available').nextAction).toBe('recover');
+    reopened.close();
+
+    fixture.browser.cleanSendComposerFailuresRemaining = 1;
+    const status = await fixture.service.recover(task.taskId);
+    expect(status).toMatchObject({ nextAction: 'send', turnStatus: null });
+    const settled = new StateStore(fixture.paths.database);
+    expect(settled.requireTurn(task.taskId, 'draft-turn')).toMatchObject({ status: 'failed' });
+    expect(settled.requireOperation('draft-op')).toMatchObject({ phase: 'committed' });
+    settled.close();
+  });
+
+  it('keeps an unsafe send recoverable without failing the task when the rebuild fallback fails', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const promptPath = join(fixture.root, 'prompt.md');
+    await writeFile(promptPath, 'unsafe cleanup');
+    fixture.browser.nextSendStatus = 'unsafe-not-submitted';
+    fixture.browser.cleanSendComposerFailuresRemaining = 100;
+
+    await expect(fixture.service.send(task.taskId, promptPath, [])).rejects.toThrow(
+      'injected composer cleanup failure',
+    );
+    const store = new StateStore(fixture.paths.database);
+    expect(store.requireTask(task.taskId).status).toBe('active');
+    expect(store.listTurns(task.taskId)).toMatchObject([{ status: 'sending' }]);
+    expect(
+      store.listOperations(task.taskId).find((operation) => {
+        return operation.kind === 'send';
+      }),
+    ).toMatchObject({ kind: 'send', step: 'draft', phase: 'prepared' });
+    expect(store.getStatus(task.taskId, 'available').nextAction).toBe('recover');
+    store.close();
   });
 
   it('treats a single archive attachment as one opaque upload item', async () => {
@@ -2074,6 +2203,7 @@ class FakeBrowser implements CollabBrowser {
   nextVerifySafeComposerFailureTaskId: string | null = null;
   observedOperations = 0;
   nextSendStatus: 'submitted' | 'not-submitted' | 'unknown-submission' | 'unsafe-not-submitted' = 'submitted';
+  cleanSendComposerFailuresRemaining = 0;
   pendingWaitPolls = 0;
   waitPollDelayMs = 0;
   captureDelayMs = 0;
@@ -2375,7 +2505,7 @@ class FakeBrowser implements CollabBrowser {
   }
 
   /**
-   * Records one fake composer cleanup.
+   * Records one fake composer cleanup, with an optional injected failure.
    *
    * @param taskId Task identifier.
    * @param _sessionName Unused named session.
@@ -2383,7 +2513,7 @@ class FakeBrowser implements CollabBrowser {
    * @param _attachmentFileNames Unused attachment basenames.
    * @param observer Task-lease child-process observer.
    * @returns Nothing after the fake cleanup.
-   * @throws {Error} This fake cleanup does not throw.
+   * @throws {Error} While an injected cleanup failure is armed.
    */
   async cleanSendComposer(
     taskId: string,
@@ -2393,6 +2523,10 @@ class FakeBrowser implements CollabBrowser {
     observer?: BrowserOperationObserver,
   ) {
     this.observe(observer);
+    if (this.cleanSendComposerFailuresRemaining > 0) {
+      this.cleanSendComposerFailuresRemaining -= 1;
+      throw new Error('injected composer cleanup failure');
+    }
     this.cleanedComposers.push(taskId);
   }
 
