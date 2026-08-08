@@ -74,6 +74,14 @@ node "<skill-directory>/scripts/collab.ts" wait <taskId> <turnId> <observationWi
 
 每个观察窗口只调用一次 `wait`，不要在调用尚未返回时另行轮询浏览器。结果为 `pending` 时，远端生成与本地任务保持活动；需要继续观察时，再由宿主显式发起一个新窗口。结果为 `completed` 时读取原始 `response.md` 和 `artifactPaths`，由宿主决定如何解释、验证或使用；不要让 Collab 自动执行回复内容。捕获超时会返回错误，后续 `wait` 使用新的 `captureTimeoutMs` 继续同一 turn。前一轮完成后，可在同一 `taskId` 再次 send/wait 以保留 conversation 上下文。
 
+只有用户明确说明该 Pro response 已失败或终止时，才裁决原 turn：
+
+```sh
+node "<skill-directory>/scripts/collab.ts" resolve-turn <taskId> <turnId> failed
+```
+
+不要从 `pending`、超时、reload 或内容稳定自行推断失败。命令验证原 conversation、目标 user turn 与可继续的 composer；若目标 response 仍显示 `Stop answering`，只在该命令内结束它，然后把原 turn 标为 `failed`。成功后，由宿主准备针对中断点的具体 continuation prompt，再显式执行新的 `send`/`wait`；不要自动发送泛化的“继续”。
+
 ## 5. 检查与恢复中断状态
 
 任务异常、进程中断或结果不明时，先运行只读检查：
@@ -116,6 +124,7 @@ node "<skill-directory>/scripts/collab.ts" close <taskId>
 - 把附件视为不透明文件；不要因 dirty worktree、symlink、仓库外路径或旧任务增加 Collab 安全门。
 - 不要求归档使用 manifest、固定目录结构或固定协作协议；Pro 在沙盒中自行解压，Collab 不发送额外解压消息。
 - `unknown-submission` 表示无法证明消息是否已提交；不要自动重发，先执行 `status`，按 `resolve-submission` 分支向用户报告并请求裁决。
+- `pending` 不因超时或页面异常自动变为 `failed`；只有用户明确提供 response 已失败或终止的事实时，才执行第 4 节的 `resolve-turn`。
 - 浏览器、页面 selector、写入或状态不一致时，报告真实错误；不要重启、迁移 conversation、删除 transcript 或伪造成功。
 
 ## 8. 结束前检查
@@ -126,6 +135,7 @@ node "<skill-directory>/scripts/collab.ts" close <taskId>
 - [ ] 是否保存了每次成功返回的 `taskId`、`turnId`、`responsePath` 和 `artifactPaths`？
 - [ ] 是否在读取原始回复后由宿主独立验证，而未让 Collab 自动执行？
 - [ ] 中断或结果不明时，是否先执行 `status` 并按 `nextAction` 继续，而不是盲目重发或重启？
+- [ ] 裁决失败 response 时，是否已有用户明确事实，并在成功后另行显式发送具体 continuation？
 - [ ] 是否只在用户明确要求时归档 conversation？
 - [ ] 暂时不需要浏览器的活动任务是否已显式关闭，并保留 `taskId` 供后续 feedback 恢复？
 
