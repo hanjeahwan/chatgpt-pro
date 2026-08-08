@@ -787,6 +787,52 @@ describe('BEH-003 first send stays inside the fixed Project composer', () => {
   });
 });
 
+describe('BEH-003 and BEH-013 unbound draft cleanup re-proves the fixed Project identity', () => {
+  it('clears an unbound draft only after re-proving the fixed Project blank composer', async () => {
+    const fixture = await executableProjectSendFixture({ initialPathname: '/g/g-p-123/project' });
+
+    await expect(fixture.browser.cleanSendComposer('task-a', 'session-a', null, [])).resolves.toBeUndefined();
+
+    const cleanupSource = await lastScript(fixture.invocations);
+    expect(cleanupSource).toContain('page.waitForFunction((target) => {');
+    expect(cleanupSource).toContain('element.textContent.trim() === target');
+    expect(cleanupSource).toContain("'chatgpt-pro-collab'");
+    expect(cleanupSource).toContain("kind: 'draft-cleared'");
+  });
+
+  it('rejects unbound cleanup when the page drifted to another Project blank composer', async () => {
+    const fixture = await executableProjectSendFixture({
+      initialPathname: '/g/g-p-123/project',
+      beforeCleanup: (pageFixture) => {
+        pageFixture.setPathname('/g/g-p-999-other-project/project');
+        pageFixture.setProjectTitle('other-project');
+      },
+    });
+
+    await expect(fixture.browser.cleanSendComposer('task-a', 'session-a', null, [])).rejects.toMatchObject({
+      code: 'PLAYWRIGHT_CONTRACT_DRIFT',
+      message: expect.stringContaining('fixture waitForFunction deadline exceeded'),
+    });
+  });
+
+  it('clears a bound draft without re-proving the Project title', async () => {
+    const fixture = await executableProjectSendFixture({
+      initialPathname: '/c/conversation-a',
+      beforeCleanup: (pageFixture) => {
+        pageFixture.setProjectTitle('other-project');
+      },
+    });
+
+    await expect(
+      fixture.browser.cleanSendComposer('task-a', 'session-a', 'conversation-a', []),
+    ).resolves.toBeUndefined();
+
+    const cleanupSource = await lastScript(fixture.invocations);
+    expect(cleanupSource).toContain('const expectedConversationId = "conversation-a"');
+    expect(cleanupSource).toContain("kind: 'draft-cleared'");
+  });
+});
+
 describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
   it('uploads explicit attachments in order before returning a confirmed conversation', async () => {
     const fixture = await browserFixture([
@@ -2438,12 +2484,17 @@ function expectNoProjectModifyEvents(events: readonly string[]): void {
  * Creates a browser runner that executes the generated send boundary scripts against a
  * mutable Project composer fixture, allowing interleaved drift between commands.
  *
- * @param options Initial pathname and optional state mutation before the submit script runs.
+ * The wrapped page adds the `reload` and filtered composer `form` surface used by the
+ * generated `clear-upload-draft` script on top of the shared Project composer fixture,
+ * so draft cleanup executes against the same mutable identity state as the send boundary.
+ *
+ * @param options Initial pathname and optional state mutation hooks before each script family.
  * @returns Browser, fixture state mutators, captured invocations, and ordered page events.
  * @throws {Error} If the fixture directory or generated script cannot be read.
  */
 async function executableProjectSendFixture(options: {
   readonly initialPathname: string;
+  readonly beforeCleanup?: (pageFixture: ReturnType<typeof projectSendPageFixture>) => void;
   readonly beforeSubmit?: (pageFixture: ReturnType<typeof projectSendPageFixture>) => void;
   readonly beforePrepareUpload?: (pageFixture: ReturnType<typeof projectSendPageFixture>) => void;
 }) {
@@ -2452,11 +2503,56 @@ async function executableProjectSendFixture(options: {
   await ensureCollabDirectories(paths);
   const invocations: BrowserCommandInvocation[] = [];
   const pageFixture = projectSendPageFixture(options.initialPathname);
+  const originalLocator = (pageFixture.page as { readonly locator: (selector: string) => object }).locator;
+  const composerForm = {
+    async count() {
+      return 1;
+    },
+    filter(_options: { readonly has: object }) {
+      return composerForm;
+    },
+    locator(selector: string) {
+      if (selector === 'input[type="file"]') {
+        return {
+          evaluateAll(callback: unknown) {
+            if (typeof callback !== 'function') {
+              return Promise.reject(new TypeError('fixture file-input callback is not a function'));
+            }
+            return Promise.resolve(Reflect.apply(callback, undefined, [[]]));
+          },
+        };
+      }
+      return originalLocator(selector);
+    },
+    getByText(_text: string, _options: { readonly exact?: boolean }) {
+      return {
+        evaluateAll(callback: unknown) {
+          if (typeof callback !== 'function') {
+            return Promise.reject(new TypeError('fixture composer text callback is not a function'));
+          }
+          return Promise.resolve(Reflect.apply(callback, undefined, [[]]));
+        },
+      };
+    },
+  };
+  const page = {
+    ...pageFixture.page,
+    async reload() {},
+    locator(selector: string) {
+      if (selector === 'form') {
+        return composerForm;
+      }
+      return originalLocator(selector);
+    },
+  };
   const browser = new PlaywrightBrowser(paths, root, async (invocation) => {
     invocations.push(invocation);
     try {
       if (invocation.arguments.includes('run-code')) {
         const scriptPath = invocation.arguments[invocation.arguments.indexOf('--filename') + 1] ?? '';
+        if (basename(scriptPath).startsWith('clear-upload-draft')) {
+          options.beforeCleanup?.(pageFixture);
+        }
         if (basename(scriptPath).startsWith('prepare-upload')) {
           options.beforePrepareUpload?.(pageFixture);
         }
@@ -2465,7 +2561,7 @@ async function executableProjectSendFixture(options: {
         }
         const source = await scriptForInvocation(invocation);
         const runPageFunction = new Function(`return (${source})`)() as (page: object) => Promise<unknown>;
-        const result = await runPageFunction(pageFixture.page);
+        const result = await runPageFunction(page);
         return output(`### Ran Playwright code\n${JSON.stringify(result)}\n`);
       }
       return output('ok');

@@ -2481,6 +2481,10 @@ function sendTargetVerificationScript(expectedConversationId: string | null): st
 /**
  * Builds a reload-based cleanup for any attachment chooser or draft changed before submission.
  *
+ * When the expected conversation is not yet bound, cleanup only reports `draft-cleared` after
+ * re-proving the fixed `chatgpt-pro-collab` Project blank-composer identity, so a drifted page
+ * on another Project's empty composer fails instead of passing cleanup.
+ *
  * @param expectedConversationId Existing bound conversation, or null for a new task.
  * @param attachmentFileNames Basenames that must disappear from the composer after reload.
  * @returns A Playwright page function source.
@@ -2514,6 +2518,8 @@ function clearUploadDraftScript(expectedConversationId: string | null, attachmen
     });
     if (url.hostname !== 'chatgpt.com' || !sendTargetOk(url.pathname)) {
       throw new Error('conversation identity changed while clearing attachment draft');
+    }
+    if (expectedConversationId === null) {${projectComposerIdentityWait(60000)}
     }
     return JSON.stringify({ protocol: '${PROTOCOL}', kind: 'draft-cleared' });
   }`;
