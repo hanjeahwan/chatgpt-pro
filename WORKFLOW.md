@@ -119,9 +119,9 @@ Review 与 remediation lane 的派发、事件接收和 idle 行为遵循第 6 �
 ## 9. Checkpoint 与清理
 
 - 优先用 Orca worktree comment 保存一行进度；需要更多恢复上下文时，在当前 worktree 使用 `.orca-tmp/session-handoff.md`（该目录已被根 `.gitignore` 忽略）。规则落地前只使用 worktree comment。
-- checkpoint 只保存恢复摘要：Objective；Worktree / branch / target；Last stable HEAD；Review base SHA / reviewed HEAD；Requirement source / 适用 Spec；Run / active Task / Dispatch；Current write owner and scope；Decisions and constraints；Last completed action；Next action；Blockers / unverified items。派发 child 后进入 idle 前刷新的最小 checkpoint 只包含：Objective；Worktree / branch / target；Last stable HEAD；Active Task / Dispatch；Current writer and scope；Last completed action；Next action；Decisions / blockers / unverified items。
+- checkpoint 只保存 8 个字段：Objective；Worktree / branch / target；Last stable HEAD；Active Task / Dispatch；Current writer and scope；Last completed action；Next action；Decisions / blockers / unverified items。
 - 不保存 heartbeat、等待时长、Message 镜像、terminal transcript、runtime task graph、自定义任务状态、逐任务 evidence 或 finding 状态表；checkpoint 不是 Task ledger 镜像。与现场冲突时，以 Orca runtime、Git、requirement source 和适用 Spec 为准。child worktree 不继承父 worktree 的 ignored 文件，跨 worktree 上下文通过 Orca Task spec 或消息传递。
-- 只在 context compact 前、ownership 交接前、关键决策、阻塞或重规划时，以及恢复并完成现场校准后更新；派发 child 后、回复 child 后、修订 Dispatch 后或仍有 active child 而再次进入 idle 前，刷新最小 checkpoint。恢复顺序：读取 handoff 与当前 worktree checkpoint → 读取 Git 与 Orca runtime → 读取 requirement source 与适用 Spec → 修正过期摘要 → 从 Next action 继续。
+- 只在 context compact 前、ownership 交接前、关键决策、阻塞或重规划时，以及恢复并完成现场校准后更新；派发 child 后、回复 child 后、修订 Dispatch 后或仍有 active child 而再次进入 idle 前，刷新 checkpoint。恢复顺序：读取 handoff 与当前 worktree checkpoint → 读取 Git 与 Orca runtime → 读取 requirement source 与适用 Spec → 修正过期摘要 → 从 Next action 继续。
 - 任务结束且不再需要恢复后，删除 `.orca-tmp/session-handoff.md`；`git clean -fdX` 前确认不再需要 checkpoint。
 
 ## 10. 最终报告
