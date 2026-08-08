@@ -34,7 +34,7 @@
 根据用户请求匹配任务场景：
 
 - **监督式协作**：例如“把任务拆成 A、B、C，交给多个 Agent。”使用 `orchestration`
-  Skill。你负责监督，并在 child 通过 Orca 发送正式事件后处理结果和最终汇总。监督不表示持续等待、轮询 terminal 或周期读取运行状态。派发 supervised child worker 并记录 checkpoint 后，Coordinator terminal 保持打开并进入 idle。Child 独立执行，只在真正阻塞、需要升级或完成时通过 Orca 联系 parent；正式事件写入 Run inbox 后，child 通过 Orca terminal delivery 对同一个 Coordinator terminal 发送一次性 wake signal。Coordinator session 自动继续并处理当前 inbox。
+  Skill。你负责监督，并在 child 通过 Orca 发送正式事件后处理结果和最终汇总。监督不表示持续等待、轮询 terminal 或周期读取运行状态。派发 supervised child worker 并记录 checkpoint（含 Run / active Task / Dispatch 与运行期确认的 parent terminal handle）后，Coordinator terminal 保持打开并进入 idle，从派发到 Run 结算或清理前只绑定这一个 active Run。Child 独立执行，只在真正阻塞、需要升级或完成时通过 Orca 联系 parent；正式事件写入 Run inbox 后，child 通过 Orca terminal delivery 对 Dispatch 契约携带的同一个运行期确认 parent terminal handle 发送一次性、无业务 payload 的 wake signal；heartbeat 只作存活信号，不唤醒 parent。Coordinator session 自动继续并处理当前 inbox。
 - **完整任务交接**：例如“把这个任务交给另一个 Agent 完成，你不需要继续跟踪。”使用 `orca-cli` Skill。
 - **普通 Orca 操作**：例如“创建一个 Worktree”“在当前 Worktree 启动新 Agent”或“读取指定 Terminal 的输出。”使用 `orca-cli` Skill。
 - **边界不明确**：用户仅要求“交给另一个 Agent 或 Worktree”，但没有要求监督、等待或汇总结果时，按完整任务交接处理。
