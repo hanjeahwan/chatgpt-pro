@@ -16,6 +16,7 @@
 - Coordinator 从当前 target branch 创建一个专用 Orca task worktree。该 worktree 的 task branch 承载本次实现、commits、验证、Review 和 remediation。
 - Coordinator 在写入前确认 task worktree clean，target branch 与起点 SHA 可由 Git 定位。
 - Coordinator 将每个 atomic task 创建为 Orca Task，明确目标、write scope、验收条件、必要检查和前置依赖。这些内容保留在 Orca Task，不另建流程账本。
+- Coordinator 派发前必须确认 Task 使用的用户请求、Issue、Spec 或其他 requirement source 已包含在 Task/Run 消息中，或位于该 task worktree 内且可读；target worktree 的未跟踪文件不能只以路径引用。
 - Coordinator 保持单一 writer ownership。Implementation 或 remediation Dispatch 活动时，只有对应 Implementation writer 可以修改业务内容。
 - Implementation writer 交还 ownership 后，Coordinator 可以同步 target branch。同步需要改变业务内容时，Coordinator 创建 remediation Task 并重新派发 Implementation writer。
 
