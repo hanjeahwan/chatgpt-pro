@@ -10,10 +10,8 @@ flowchart TD
     D1 --> D2[targeted checks、commit、同步 target、最终 HEAD 验证]
     D2 --> Q1{按风险分级需要 independent Review?}
     Q1 -- 否 --> M0[满足 Start 与 Merge 条件后集成并报告]
-    Q1 -- 是 --> D3[reviewer 默认 pi: 独立 Review 最终 diff 或修复 delta]
-    D3 --> Q2{有阻塞 finding?}
-    Q2 -- 是 --> D1
-    Q2 -- 否 --> M0
+    Q1 -- 是 --> U1[Coordinator: 升级到 supervised 路径]
+    U1 --> C5[复核 requirement source 与适用 Spec，记录 Review SHA、创建 Review Task 并确认 clean]
     Q0 -- 否 --> C2[Coordinator: 建立或继续 Run]
     C2 --> T0[Coordinator: 创建或选择当前正式 Task]
     T0 --> S0{派发前 Task source、Spec references 与共享合同仍有效?}
@@ -82,7 +80,7 @@ Implementation 和 Review 是被调度的 worker lane，无需另行启动固定
 - 只有受产品 Spec 管辖的 Task 才使用带文件路径的 `spec_refs`（如 `docs/specs/<file>.md#BEH-001`）；非产品行为 Task 保持 `spec_refs` 为空，不得为追踪方便伪造 `BEH-*` 或 `VER-*`。`BEH-*` 与 `VER-*` 只在所属 Spec 内定位，不是仓库全局裸 ID。
 - Implementation Task spec 至少包含：`role`、`objective`、`planning_base_sha`、`source_refs`、`spec_refs`、`acceptance`、`write_scope`、`depends_on` 与 `required_checks`。Review Task 使用 `role: review`，引用 `review_base_sha`、`reviewed_head_sha` 和要检查的验收条件。
 - 这些字段属于 Orca Task spec，不写入仓库账本，也不复制到 checkpoint 形成第二套任务图。`objective` 与 `acceptance` 是当前 Task 的语义快照；`planning_base_sha` 只锚定 Git 已跟踪内容；requirement source 未被 Git 跟踪时，直接比较当前 source 内容与该语义快照。
-- 风险分级：标准和高风险变更走完整 implementation + Review 路径；明确的低风险小型变更可由单一 Agent 完成，省略 dispatched writer 或 independent reviewer，但不得省略 Start 与 Merge 条件，也不得跳过适用的验证要求。
+- 风险分级：标准和高风险变更走完整 implementation + Review 路径；明确的低风险小型变更可由单一 Agent 完成，省略 dispatched writer 或 independent reviewer，但不得省略 Start 与 Merge 条件，也不得跳过适用的验证要求；按风险分级需要独立 Review 时，升级到 supervised 路径（第 6、7 节），由 Coordinator 进入原生等待循环。
 
 ## 5. Spec 增量处理
 
@@ -160,7 +158,7 @@ Review 与 remediation lane 的派发、事件接收和 worker 处置遵循第 6
 - [ ] worktree clean，或已有修改的负责人和用途已明确。
 - [ ] Task 的 requirement source、适用 Spec references、write scope、required checks 和 dependencies 已明确。
 - [ ] 没有两个 writer 修改同一文件或共享状态范围。
-- [ ] 低风险直接路径：当前 local agent 拥有唯一 write ownership，不要求 implementation Run/Dispatch，也不进入等待循环；实施仍满足提交、验证、target 同步与适用的 Review 要求。
+- [ ] 低风险直接路径：当前 local agent 拥有唯一 write ownership，不派发 worker、不进入等待循环；实施仍满足提交、验证与 target 同步要求。按风险分级需要独立 Review 时，升级到 supervised 路径（第 7 节），创建或绑定 Run 并进入原生等待循环。
 - [ ] supervised 路径：Run/Task/Dispatch 可定位，Coordinator 将在当前模型回合执行有界滚动 `check --wait`，直至 expected Dispatch 全部结算。
 - [ ] 高风险变化已识别必要的 Spec、manual/live verification 和 Review。
 
