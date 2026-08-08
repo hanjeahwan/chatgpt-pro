@@ -1329,6 +1329,22 @@ export class CollabService {
     if (task.status === 'closing') {
       return before;
     }
+    if (task.status === 'closed') {
+      const seedStatePath = await requireSeedState(this.#paths);
+      await this.#browser.startTask(taskId, task.playwrightSession, seedStatePath, true, observer);
+      if (task.conversationId !== null && task.conversationUrl !== null) {
+        await this.#browser.recoverConversation(
+          taskId,
+          task.playwrightSession,
+          task.conversationUrl,
+          task.conversationId,
+          observer,
+        );
+      }
+      store.reactivateClosedTask(taskId);
+      const after = await this.#browser.sessionAvailability(task.playwrightSession);
+      return store.getStatus(taskId, after);
+    }
     const pageWorkPending =
       browserStatus === 'missing' && task.status !== 'starting' && (pendingTurn !== undefined || operation !== null);
     if (pageWorkPending) {

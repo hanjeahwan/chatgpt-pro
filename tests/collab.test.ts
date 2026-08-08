@@ -1769,6 +1769,139 @@ describe('BEH-008 local close and BEH-009 archive journal', () => {
   });
 });
 
+describe('BEH-008 closed task recovery to the same conversation', () => {
+  it('resumes a closed task with a completed turn on the same canonical conversation for feedback', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const promptPath = join(fixture.root, 'closed-round-one.md');
+    await writeFile(promptPath, 'round one');
+    const firstTurn = await fixture.service.send(task.taskId, promptPath, []);
+    await fixture.service.wait(task.taskId, firstTurn.turnId, 20_000, 20_000);
+    const beforeClose = new StateStore(fixture.paths.database);
+    const beforeCloseTask = beforeClose.requireTask(task.taskId);
+    expect(beforeCloseTask.conversationId).toBe(`conversation-${task.taskId}`);
+    expect(beforeCloseTask.conversationUrl).toBe(`https://chatgpt.com/c/conversation-${task.taskId}`);
+    beforeClose.close();
+
+    await expect(fixture.service.close(task.taskId)).resolves.toMatchObject({ alreadyClosed: false });
+    fixture.browser.sessionAvailabilityResult = 'missing';
+    const closedStatus = await fixture.service.status(task.taskId);
+    expect(closedStatus).toMatchObject({ taskStatus: 'closed', nextAction: 'recover' });
+
+    const recovered = await fixture.service.recover(task.taskId);
+    expect(recovered).toMatchObject({ taskStatus: 'active', browserStatus: 'available', nextAction: 'none' });
+    expect(fixture.browser.recoveredConversations).toEqual([task.taskId]);
+    const afterRecover = new StateStore(fixture.paths.database);
+    const afterRecoverTask = afterRecover.requireTask(task.taskId);
+    expect(afterRecoverTask).toMatchObject({
+      status: 'active',
+      closedAt: null,
+      conversationId: `conversation-${task.taskId}`,
+      conversationUrl: `https://chatgpt.com/c/conversation-${task.taskId}`,
+    });
+    expect(afterRecoverTask.playwrightSession).toBe(beforeCloseTask.playwrightSession);
+    afterRecover.close();
+
+    await writeFile(promptPath, 'round two feedback');
+    const feedbackTurn = await fixture.service.send(task.taskId, promptPath, []);
+    await fixture.service.wait(task.taskId, feedbackTurn.turnId, 20_000, 20_000);
+    const finalStore = new StateStore(fixture.paths.database);
+    expect(finalStore.requireTask(task.taskId).conversationId).toBe(`conversation-${task.taskId}`);
+    expect(finalStore.listTurns(task.taskId)).toHaveLength(2);
+    finalStore.close();
+    expect(fixture.browser.expectedConversationIds).toEqual([null, `conversation-${task.taskId}`]);
+  });
+
+  it('recovers a closed task with a pending turn back to wait without resending', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const promptPath = join(fixture.root, 'closed-pending.md');
+    await writeFile(promptPath, 'pending close');
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+    await fixture.service.close(task.taskId);
+    fixture.browser.sessionAvailabilityResult = 'missing';
+
+    expect(await fixture.service.status(task.taskId)).toMatchObject({ taskStatus: 'closed', nextAction: 'recover' });
+    const recovered = await fixture.service.recover(task.taskId);
+    expect(recovered).toMatchObject({ taskStatus: 'active', turnStatus: 'pending', nextAction: 'wait' });
+    expect(fixture.browser.recoveredConversations).toEqual([task.taskId]);
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 20_000, 20_000)).resolves.toMatchObject({
+      status: 'completed',
+    });
+    const store = new StateStore(fixture.paths.database);
+    expect(store.requireTurn(task.taskId, turn.turnId).status).toBe('completed');
+    store.close();
+  });
+
+  it('recovers an unbound closed task to the fixed Project blank composer', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    await fixture.service.close(task.taskId);
+    fixture.browser.sessionAvailabilityResult = 'missing';
+
+    const recovered = await fixture.service.recover(task.taskId);
+    expect(recovered).toMatchObject({ taskStatus: 'active', browserStatus: 'available', nextAction: 'none' });
+    expect(fixture.browser.recoveredConversations).toEqual([]);
+    const store = new StateStore(fixture.paths.database);
+    expect(store.requireTask(task.taskId)).toMatchObject({ status: 'active', conversationId: null, closedAt: null });
+    store.close();
+  });
+
+  it('keeps a closed task closed when the session rebuild fails and recovers on a later retry', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const promptPath = join(fixture.root, 'closed-rebuild-fails.md');
+    await writeFile(promptPath, 'rebuild fails');
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+    await fixture.service.wait(task.taskId, turn.turnId, 20_000, 20_000);
+    await fixture.service.close(task.taskId);
+    fixture.browser.sessionAvailabilityResult = 'missing';
+    fixture.browser.nextStartFailureCode = 'BROWSER_COMMAND_FAILED';
+
+    await expect(fixture.service.recover(task.taskId)).rejects.toMatchObject({ code: 'BROWSER_COMMAND_FAILED' });
+    const store = new StateStore(fixture.paths.database);
+    expect(store.requireTask(task.taskId)).toMatchObject({ status: 'closed' });
+    store.close();
+    expect(fixture.browser.recoveredConversations).toEqual([]);
+
+    fixture.browser.nextStartFailureCode = null;
+    const recovered = await fixture.service.recover(task.taskId);
+    expect(recovered).toMatchObject({ taskStatus: 'active', browserStatus: 'available', nextAction: 'none' });
+    expect(fixture.browser.recoveredConversations).toEqual([task.taskId]);
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireTask(task.taskId).status).toBe('active');
+    reopened.close();
+  });
+
+  it('creates only one named session and one conversation recovery for concurrent closed-task recovers', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const promptPath = join(fixture.root, 'closed-concurrent.md');
+    await writeFile(promptPath, 'concurrent closed');
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+    await fixture.service.wait(task.taskId, turn.turnId, 20_000, 20_000);
+    await fixture.service.close(task.taskId);
+    fixture.browser.sessionAvailabilityResult = 'missing';
+
+    const [first, second] = await Promise.all([
+      fixture.service.recover(task.taskId),
+      fixture.service.recover(task.taskId),
+    ]);
+    expect(first).toMatchObject({ taskStatus: 'active', browserStatus: 'available', nextAction: 'none' });
+    expect(second).toMatchObject({ taskStatus: 'active', browserStatus: 'available', nextAction: 'none' });
+    expect(fixture.browser.startCount).toBe(2);
+    expect(fixture.browser.recoveredConversations).toEqual([task.taskId]);
+    const store = new StateStore(fixture.paths.database);
+    expect(store.requireTask(task.taskId).status).toBe('active');
+    store.close();
+  });
+});
+
 describe('BEH-005 and BEH-006 multi-turn and cross-task concurrency', () => {
   it('keeps one conversation across turns with independent turn files', async () => {
     const fixture = await serviceFixture();
@@ -1934,12 +2067,17 @@ describe('BEH-013 status, recover, and resolve-submission', () => {
       turnId: turn.turnId,
       turnStatus: 'pending',
       browserStatus: 'missing',
-      nextAction: 'wait',
+      nextAction: 'recover',
     });
     const store = new StateStore(fixture.paths.database);
     expect(store.requireTurn(task.taskId, turn.turnId).status).toBe('pending');
     store.close();
     expect(fixture.browser.startCount).toBe(1);
+
+    const recovered = await fixture.service.recover(task.taskId);
+    expect(recovered).toMatchObject({ taskStatus: 'active', browserStatus: 'available', nextAction: 'wait' });
+    expect(fixture.browser.startCount).toBe(2);
+    expect(fixture.browser.recoveredConversations).toEqual([task.taskId]);
   });
 
   it('returns nextAction close for a closing task without touching the browser', async () => {

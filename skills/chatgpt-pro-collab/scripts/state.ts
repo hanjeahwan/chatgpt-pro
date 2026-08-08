@@ -1379,6 +1379,29 @@ export class StateStore {
   }
 
   /**
+   * Reactivates a closed task after its named session and canonical conversation
+   * identity have been verified, clearing the resumable paused state.
+   *
+   * @param taskId Task identifier.
+   * @returns The active task record with a null `closedAt`.
+   * @throws {StateError} If the task is not currently closed.
+   * @throws {Error} If SQLite cannot commit the transition.
+   */
+  reactivateClosedTask(taskId: string): TaskRecord {
+    return this.#transaction(() => {
+      const task = this.requireTask(taskId);
+      if (task.status !== 'closed') {
+        throw new StateError('TASK_STATE_CONFLICT', `task is ${task.status}, expected closed: ${taskId}`);
+      }
+      const now = new Date().toISOString();
+      this.#database
+        .prepare("UPDATE task SET status = 'active', closed_at = NULL, updated_at = ? WHERE id = ?")
+        .run(now, taskId);
+      return this.requireTask(taskId);
+    });
+  }
+
+  /**
    * Inserts one operation journal row and enforces the uncommitted constraints.
    *
    * @param insert Kind, step, optional task and turn, session, and initial evidence.
@@ -2289,6 +2312,10 @@ function nullableResolutionSource(value: SQLInputValue | undefined): ResolutionS
 /**
  * Computes the single safe next action that continues or unblocks the persistent workflow.
  *
+ * `closed` is a resumable paused state: only `recover` may reactivate it. For an active
+ * task the missing-browser route precedes the pending turn route, because `wait` never
+ * rebuilds a session while `recover` does.
+ *
  * @param task Current task row.
  * @param turn Latest unfinished turn, or null.
  * @param operation Uncommitted operation of the task, or null.
@@ -2305,10 +2332,13 @@ function computeNextAction(
   if (task.status === 'closing') {
     return 'close';
   }
+  if (task.status === 'closed') {
+    return 'recover';
+  }
   if (task.status === 'starting') {
     return 'recover';
   }
-  if (task.status === 'closed' || task.status === 'failed') {
+  if (task.status === 'failed') {
     return 'none';
   }
   if (operation !== null) {
@@ -2333,11 +2363,11 @@ function computeNextAction(
   if (turn !== null && turn.status === 'unknown-submission') {
     return 'resolve-submission';
   }
-  if (turn !== null && (turn.status === 'pending' || turn.status === 'capturing')) {
-    return 'wait';
-  }
   if (browserStatus === 'missing') {
     return 'recover';
+  }
+  if (turn !== null && (turn.status === 'pending' || turn.status === 'capturing')) {
+    return 'wait';
   }
   return 'none';
 }

@@ -286,7 +286,7 @@ describe('BEH-002, BEH-005, BEH-007, and BEH-008 state gates', () => {
     store.close();
   });
 
-  it('computes closing and pending next actions from the status snapshot', async () => {
+  it('computes closing, closed, and missing-browser next actions from the status snapshot', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collab-next-action-'));
     const store = new StateStore(join(root, 'state.sqlite'));
     store.createTask('task-a', 'session-a');
@@ -295,6 +295,47 @@ describe('BEH-002, BEH-005, BEH-007, and BEH-008 state gates', () => {
 
     store.markTaskClosing('task-a');
     expect(store.getStatus('task-a', 'missing')).toMatchObject({ taskStatus: 'closing', nextAction: 'close' });
+    store.closeTask('task-a');
+    expect(store.getStatus('task-a', 'missing')).toMatchObject({ taskStatus: 'closed', nextAction: 'recover' });
+    expect(store.requireTask('task-a').closedAt).not.toBeNull();
+    const reactivated = store.reactivateClosedTask('task-a');
+    expect(reactivated).toMatchObject({ status: 'active', closedAt: null });
+    expect(store.getStatus('task-a', 'available').nextAction).toBe('none');
+    store.close();
+  });
+
+  it('routes a missing browser ahead of a pending turn and keeps wait for an available one', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-next-action-route-'));
+    const store = new StateStore(join(root, 'state.sqlite'));
+    store.createTask('task-a', 'session-a');
+    store.beginTurn('task-a', 'turn-a', '/prompt.md', []);
+    store.markSubmissionAttempting('task-a', 'turn-a');
+    store.markTurnPending('task-a', 'turn-a', 'conversation-a', 'https://chatgpt.com/c/conversation-a', 'user-turn-a');
+    expect(store.getStatus('task-a', 'missing').nextAction).toBe('recover');
+    expect(store.getStatus('task-a', 'available').nextAction).toBe('wait');
+    store.close();
+  });
+
+  it('returns recover for a closed task with a pending turn and rejects reactivating a non-closed task', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-closed-recover-'));
+    const store = new StateStore(join(root, 'state.sqlite'));
+    store.createTask('task-a', 'session-a');
+    store.beginTurn('task-a', 'turn-a', '/prompt.md', []);
+    store.markSubmissionAttempting('task-a', 'turn-a');
+    store.markTurnPending('task-a', 'turn-a', 'conversation-a', 'https://chatgpt.com/c/conversation-a', 'user-turn-a');
+    store.closeTask('task-a');
+    expect(store.getStatus('task-a', 'available').nextAction).toBe('recover');
+    expect(store.getStatus('task-a', 'missing').nextAction).toBe('recover');
+
+    store.createTask('task-b', 'session-b');
+    store.failTask('task-b');
+    expect(store.requireTask('task-b').status).toBe('failed');
+    expect(store.getStatus('task-b', 'missing').nextAction).toBe('none');
+    expect(() => {
+      return store.reactivateClosedTask('task-b');
+    }).toThrowError(/expected closed/);
+    expect(store.requireTask('task-a').status).toBe('closed');
+    expect(store.reactivateClosedTask('task-a')).toMatchObject({ status: 'active', closedAt: null });
     store.close();
   });
 });
