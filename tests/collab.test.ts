@@ -2367,6 +2367,7 @@ describe('BEH-013 resolve-turn failed response resolution', () => {
     fixture: Awaited<ReturnType<typeof serviceFixture>>,
     taskId: string,
     turnId: string,
+    conversationUrl: string = `https://chatgpt.com/c/conversation-${taskId}`,
   ): Promise<void> => {
     const promptPath = join(fixture.root, `${turnId}.md`);
     await Promise.all([writeFile(promptPath, 'pending'), writeFile(fixture.paths.seedState, validSeedText())]);
@@ -2374,13 +2375,7 @@ describe('BEH-013 resolve-turn failed response resolution', () => {
     store.createTask(taskId, `chatgpt-pro-collab-${taskId}`);
     store.beginTurn(taskId, turnId, promptPath, []);
     store.markSubmissionAttempting(taskId, turnId);
-    store.markTurnPending(
-      taskId,
-      turnId,
-      `conversation-${taskId}`,
-      `https://chatgpt.com/c/conversation-${taskId}`,
-      `user-turn-${taskId}`,
-    );
+    store.markTurnPending(taskId, turnId, `conversation-${taskId}`, conversationUrl, `user-turn-${taskId}`);
     store.close();
   };
 
@@ -2405,7 +2400,26 @@ describe('BEH-013 resolve-turn failed response resolution', () => {
     expect(reopened.requireTask(taskId).status).toBe('active');
     reopened.close();
     expect(fixture.browser.resolvedFailedTurns).toEqual([taskId]);
+    expect(fixture.browser.resolvedFailedTurnUrls).toEqual([`https://chatgpt.com/c/conversation-${taskId}`]);
     expect(fixture.browser.expectedConversationIds).toEqual([]);
+  });
+
+  it('passes the exact recorded canonical conversation URL into the browser resolver', async () => {
+    const fixture = await serviceFixture();
+    const taskId = randomUUID();
+    const turnId = 'url-turn';
+    const projectScopedUrl = `https://chatgpt.com/g/g-p-123-chatgpt-pro-collab/c/conversation-${taskId}`;
+    await seedPendingBoundTurn(fixture, taskId, turnId, projectScopedUrl);
+
+    await fixture.service.resolveTurn(taskId, turnId, 'failed');
+
+    expect(fixture.browser.resolvedFailedTurnUrls).toEqual([projectScopedUrl]);
+    const reopened = new StateStore(fixture.paths.database);
+    expect(JSON.parse(reopened.requireTurn(taskId, turnId).error ?? '{}')).toMatchObject({
+      pageUrl: projectScopedUrl,
+      adjudication: 'failed',
+    });
+    reopened.close();
   });
 
   it('records the controlled Stop outcome when the exact Stop answering was visible', async () => {
@@ -2671,6 +2685,7 @@ class FakeBrowser implements CollabBrowser {
   sessionAvailabilityResult: 'available' | 'missing' | 'unknown' = 'available';
   nextVerifySafeComposerFailureTaskId: string | null = null;
   readonly resolvedFailedTurns: string[] = [];
+  readonly resolvedFailedTurnUrls: string[] = [];
   nextResolveFailedTurnFailureTaskId: string | null = null;
   nextResolveFailedTurnStop: 'absent' | 'stopped' = 'absent';
   resolveFailedTurnGate: Promise<void> | null = null;
@@ -3086,6 +3101,7 @@ class FakeBrowser implements CollabBrowser {
    * @param _sessionName Unused named session.
    * @param expectedConversationId Database-bound identity.
    * @param expectedUserTurnId Persisted target user turn identity.
+   * @param conversationUrl Recorded exact canonical conversation URL.
    * @param observer Task-lease child-process observer.
    * @returns The verified conversation, user turn, and configured Stop outcome.
    * @throws {BrowserError} While the injected identity-drift failure is armed.
@@ -3095,6 +3111,7 @@ class FakeBrowser implements CollabBrowser {
     _sessionName: string,
     expectedConversationId: string,
     expectedUserTurnId: string,
+    conversationUrl: string,
     observer?: BrowserOperationObserver,
   ) {
     this.observe(observer);
@@ -3110,9 +3127,10 @@ class FakeBrowser implements CollabBrowser {
       );
     }
     this.resolvedFailedTurns.push(taskId);
+    this.resolvedFailedTurnUrls.push(conversationUrl);
     return {
       conversationId: expectedConversationId,
-      conversationUrl: `https://chatgpt.com/c/${expectedConversationId}`,
+      conversationUrl,
       userTurnIdentity: expectedUserTurnId,
       stop: this.nextResolveFailedTurnStop,
     };

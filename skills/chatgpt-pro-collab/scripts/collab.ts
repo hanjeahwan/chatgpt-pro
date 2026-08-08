@@ -135,6 +135,7 @@ export interface CollabBrowser {
     sessionName: string,
     expectedConversationId: string,
     expectedUserTurnId: string,
+    conversationUrl: string,
     observer?: BrowserOperationObserver,
   ): Promise<BrowserResolveFailedTurnResult>;
   cleanSendComposer(
@@ -1617,13 +1618,13 @@ export class CollabService {
    *
    * The user's failure fact is authoritative and never inferred. Under the task lease
    * the command rebuilds the same named browser and canonical conversation when
-   * missing, verifies the canonical conversation, the unique persisted target user
-   * turn, the absence of any later user turn, and a safe empty composer, stops an
-   * exact visible `Stop answering` at most once, and only then atomically fails the
-   * pending turn while recording the human adjudication, page identity, target user
-   * turn, and Stop outcome in the turn error. A repeated call after the recorded
-   * resolution is idempotent without browser actions; every proof failure preserves
-   * the pending state and never creates a user turn.
+   * missing, verifies the exact recorded canonical conversation URL and identity, the
+   * unique persisted target user turn, the absence of any later user turn, and a safe
+   * empty composer, stops an exact visible `Stop answering` at most once, and only
+   * then atomically fails the pending turn while recording the human adjudication,
+   * page identity, target user turn, and Stop outcome in the turn error. A repeated
+   * call after the recorded resolution is idempotent without browser actions; every
+   * proof failure preserves the pending state and never creates a user turn.
    *
    * @param taskId Active task identifier.
    * @param turnId Pending turn whose Pro response the user confirmed failed.
@@ -1675,6 +1676,7 @@ export class CollabService {
           sessionName,
           task.conversationId,
           turn.userTurnIdentity,
+          task.conversationUrl,
           observer,
         );
         assertConversation(taskId, task.conversationId, task.conversationUrl, verified);

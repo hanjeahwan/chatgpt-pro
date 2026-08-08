@@ -1249,13 +1249,20 @@ export class PlaywrightBrowser {
   }
 
   /**
-   * Verifies the canonical conversation, unique target user turn, absence of later
-   * user turns, and safe empty composer, then stops the target response at most once.
+   * Verifies the exact recorded canonical conversation, unique target user turn,
+   * absence of later user turns, and safe empty composer, then stops the target
+   * response at most once.
+   *
+   * The recorded canonical URL is proven exactly (origin + pathname) both before
+   * any mutating page action and again after Stop, in addition to the canonical
+   * conversation identity, so a different plain or project path that happens to
+   * contain the same conversation id fails before Stop.
    *
    * @param taskId Owning task identifier.
    * @param sessionName Owning Playwright named session.
    * @param expectedConversationId Database-bound canonical identity.
    * @param expectedUserTurnId Persisted exact identity of the failed-response user turn.
+   * @param conversationUrl Recorded exact canonical conversation URL.
    * @param observer Task-lease child-process observer.
    * @returns The verified conversation, exact user turn, and Stop outcome.
    * @throws {BrowserError} If the conversation, user turn, later-turn, composer, or
@@ -1267,13 +1274,14 @@ export class PlaywrightBrowser {
     sessionName: string,
     expectedConversationId: string,
     expectedUserTurnId: string,
+    conversationUrl: string,
     observer?: BrowserOperationObserver,
   ): Promise<BrowserResolveFailedTurnResult> {
     const result = await this.#runCode<ResolveFailedTurnProtocolResult>(
       sessionName,
       taskId,
       'resolve-failed-turn',
-      resolveFailedTurnScript(expectedConversationId, expectedUserTurnId),
+      resolveFailedTurnScript(expectedConversationId, expectedUserTurnId, conversationUrl),
       'verify failed response turn',
       'resolve-failed-turn',
       observer,
@@ -3893,21 +3901,30 @@ function resolveNotSubmittedScript(
 /**
  * Builds the failed-response adjudication verification for a pending bound turn.
  *
- * The page function proves the canonical conversation, the unique persisted target
- * user turn, the absence of any later user turn, and a safe empty composer. When the
- * exact `Stop answering` control is still visible it is clicked exactly once and the
- * function only succeeds after the control disappears; otherwise it is reported as
- * absent. Every failure keeps the pending turn untouched.
+ * The page function first proves the exact recorded canonical conversation URL
+ * (origin + pathname) together with the expected conversation identity, then the
+ * unique persisted target user turn, the absence of any later user turn, and a
+ * safe empty composer. When the exact `Stop answering` control is still visible
+ * it is clicked exactly once and the function only succeeds after the control
+ * disappears and the same exact canonical URL is still proven; otherwise it is
+ * reported as absent. Every failure keeps the pending turn untouched and happens
+ * before any Stop click or other mutating page action.
  *
  * @param expectedConversationId Database-bound canonical identity.
  * @param expectedUserTurnId Persisted exact identity of the target user turn.
+ * @param conversationUrl Recorded exact canonical conversation URL.
  * @returns A Playwright page function source.
  * @throws {Error} This pure source builder does not throw.
  */
-function resolveFailedTurnScript(expectedConversationId: string, expectedUserTurnId: string): string {
+function resolveFailedTurnScript(
+  expectedConversationId: string,
+  expectedUserTurnId: string,
+  conversationUrl: string,
+): string {
   return `async (page) => {
     const expectedConversationId = ${JSON.stringify(expectedConversationId)};
     const expectedUserTurnId = ${JSON.stringify(expectedUserTurnId)};
+    const canonicalConversationUrl = ${JSON.stringify(conversationUrl)};
     const conversationIdOf = (pathname) => {
       const match = /\\/c\\/([^/?#]+)\\/?$/.exec(pathname);
       return match === null || match[1].startsWith('WEB:') ? null : match[1];
@@ -3922,6 +3939,9 @@ function resolveFailedTurnScript(expectedConversationId: string, expectedUserTur
     });
     if (url.hostname !== 'chatgpt.com' || conversationIdOf(url.pathname) !== expectedConversationId) {
       throw new Error('conversation identity does not match the failed-response turn');
+    }
+    if (url.origin + url.pathname !== canonicalConversationUrl) {
+      throw new Error('current page is not the recorded canonical conversation URL');
     }
     await page.waitForFunction((targetId) => {
       const visible = (element) => {
@@ -4028,7 +4048,11 @@ function resolveFailedTurnScript(expectedConversationId: string, expectedUserTur
     const finalUrl = await page.evaluate(() => {
       return { hostname: location.hostname, pathname: location.pathname, origin: location.origin };
     });
-    if (finalUrl.hostname !== 'chatgpt.com' || conversationIdOf(finalUrl.pathname) !== expectedConversationId) {
+    if (
+      finalUrl.hostname !== 'chatgpt.com' ||
+      finalUrl.origin + finalUrl.pathname !== canonicalConversationUrl ||
+      conversationIdOf(finalUrl.pathname) !== expectedConversationId
+    ) {
       throw new Error('conversation identity changed while resolving the failed response');
     }
     return JSON.stringify({

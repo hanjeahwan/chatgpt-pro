@@ -350,6 +350,7 @@ export class SkillFixtureBrowser implements CollabBrowser {
     _sessionName: string,
     _expectedConversationId: string,
     _expectedUserTurnId: string,
+    _conversationUrl: string,
     observer?: BrowserOperationObserver,
   ): Promise<{
     readonly conversationId: string;

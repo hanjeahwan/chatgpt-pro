@@ -1947,6 +1947,7 @@ describe('BEH-013 browser boundary support', () => {
       'session-a',
       'conversation-a',
       'conversation-turn-2',
+      'https://chatgpt.com/c/conversation-a',
     );
 
     expect(result).toEqual({
@@ -1959,6 +1960,8 @@ describe('BEH-013 browser boundary support', () => {
     expect(source).toContain('resolve-failed-turn');
     expect(source).toContain('conversation-a');
     expect(source).toContain('conversation-turn-2');
+    expect(source).toContain('https://chatgpt.com/c/conversation-a');
+    expect(source).toContain('current page is not the recorded canonical conversation URL');
     expect(source).toContain("name: 'Stop answering', exact: true");
     expect(source).toContain('target user turn is absent or not unique');
     expect(source).toContain('a later user turn exists after the target');
@@ -1981,12 +1984,24 @@ describe('BEH-013 browser boundary support', () => {
       }),
     ]);
     await expect(
-      driftFixture.browser.resolveFailedTurn('task-a', 'session-a', 'conversation-a', 'conversation-turn-2'),
+      driftFixture.browser.resolveFailedTurn(
+        'task-a',
+        'session-a',
+        'conversation-a',
+        'conversation-turn-2',
+        'https://chatgpt.com/c/conversation-a',
+      ),
     ).rejects.toMatchObject({ code: 'BROWSER_PROTOCOL_ERROR' });
 
     const missingFixture = await browserFixture([pageResult({ protocol, kind: 'resolve-failed-turn' })]);
     await expect(
-      missingFixture.browser.resolveFailedTurn('task-a', 'session-a', 'conversation-a', 'conversation-turn-2'),
+      missingFixture.browser.resolveFailedTurn(
+        'task-a',
+        'session-a',
+        'conversation-a',
+        'conversation-turn-2',
+        'https://chatgpt.com/c/conversation-a',
+      ),
     ).rejects.toMatchObject({ code: 'BROWSER_PROTOCOL_ERROR' });
   });
 
@@ -2002,7 +2017,13 @@ describe('BEH-013 browser boundary support', () => {
     });
 
     await expect(
-      fixture.browser.resolveFailedTurn('task-a', 'session-a', 'conversation-a', 'conversation-turn-user'),
+      fixture.browser.resolveFailedTurn(
+        'task-a',
+        'session-a',
+        'conversation-a',
+        'conversation-turn-user',
+        'https://chatgpt.com/c/conversation-a',
+      ),
     ).resolves.toEqual({
       conversationId: 'conversation-a',
       conversationUrl: 'https://chatgpt.com/c/conversation-a',
@@ -2026,7 +2047,13 @@ describe('BEH-013 browser boundary support', () => {
     });
 
     await expect(
-      fixture.browser.resolveFailedTurn('task-a', 'session-a', 'conversation-a', 'conversation-turn-user'),
+      fixture.browser.resolveFailedTurn(
+        'task-a',
+        'session-a',
+        'conversation-a',
+        'conversation-turn-user',
+        'https://chatgpt.com/c/conversation-a',
+      ),
     ).resolves.toEqual({
       conversationId: 'conversation-a',
       conversationUrl: 'https://chatgpt.com/c/conversation-a',
@@ -2053,7 +2080,13 @@ describe('BEH-013 browser boundary support', () => {
     });
 
     await expect(
-      fixture.browser.resolveFailedTurn('task-a', 'session-a', 'conversation-a', 'conversation-turn-user'),
+      fixture.browser.resolveFailedTurn(
+        'task-a',
+        'session-a',
+        'conversation-a',
+        'conversation-turn-user',
+        'https://chatgpt.com/c/conversation-a',
+      ),
     ).rejects.toThrow(/Stop answering did not disappear after one click/);
     expect(
       fixture.events.filter((event) => {
@@ -2075,7 +2108,13 @@ describe('BEH-013 browser boundary support', () => {
     });
 
     await expect(
-      fixture.browser.resolveFailedTurn('task-a', 'session-a', 'conversation-a', 'conversation-turn-user'),
+      fixture.browser.resolveFailedTurn(
+        'task-a',
+        'session-a',
+        'conversation-a',
+        'conversation-turn-user',
+        'https://chatgpt.com/c/conversation-a',
+      ),
     ).rejects.toThrow(/Stop answering is not unique/);
     expect(fixture.events).not.toContain('stop:click');
   });
@@ -2092,7 +2131,13 @@ describe('BEH-013 browser boundary support', () => {
     });
 
     await expect(
-      fixture.browser.resolveFailedTurn('task-a', 'session-a', 'conversation-a', 'conversation-turn-user'),
+      fixture.browser.resolveFailedTurn(
+        'task-a',
+        'session-a',
+        'conversation-a',
+        'conversation-turn-user',
+        'https://chatgpt.com/c/conversation-a',
+      ),
     ).rejects.toThrow(/a later user turn exists after the target/);
   });
 
@@ -2106,7 +2151,13 @@ describe('BEH-013 browser boundary support', () => {
       ],
     });
     await expect(
-      absent.browser.resolveFailedTurn('task-a', 'session-a', 'conversation-a', 'conversation-turn-missing'),
+      absent.browser.resolveFailedTurn(
+        'task-a',
+        'session-a',
+        'conversation-a',
+        'conversation-turn-missing',
+        'https://chatgpt.com/c/conversation-a',
+      ),
     ).rejects.toMatchObject({ code: 'PLAYWRIGHT_CONTRACT_DRIFT' });
 
     const duplicated = await executableResolveTurnFixture({
@@ -2119,7 +2170,13 @@ describe('BEH-013 browser boundary support', () => {
       ],
     });
     await expect(
-      duplicated.browser.resolveFailedTurn('task-a', 'session-a', 'conversation-a', 'conversation-turn-user'),
+      duplicated.browser.resolveFailedTurn(
+        'task-a',
+        'session-a',
+        'conversation-a',
+        'conversation-turn-user',
+        'https://chatgpt.com/c/conversation-a',
+      ),
     ).rejects.toThrow(/target user turn is absent or not unique/);
   });
 
@@ -2134,7 +2191,13 @@ describe('BEH-013 browser boundary support', () => {
       composerText: 'stale draft',
     });
     await expect(
-      draft.browser.resolveFailedTurn('task-a', 'session-a', 'conversation-a', 'conversation-turn-user'),
+      draft.browser.resolveFailedTurn(
+        'task-a',
+        'session-a',
+        'conversation-a',
+        'conversation-turn-user',
+        'https://chatgpt.com/c/conversation-a',
+      ),
     ).rejects.toThrow(/composer still contains draft text/);
 
     const stagedFile = await executableResolveTurnFixture({
@@ -2147,7 +2210,13 @@ describe('BEH-013 browser boundary support', () => {
       populatedFileInputCount: 1,
     });
     await expect(
-      stagedFile.browser.resolveFailedTurn('task-a', 'session-a', 'conversation-a', 'conversation-turn-user'),
+      stagedFile.browser.resolveFailedTurn(
+        'task-a',
+        'session-a',
+        'conversation-a',
+        'conversation-turn-user',
+        'https://chatgpt.com/c/conversation-a',
+      ),
     ).rejects.toThrow(/populated file input/);
 
     const stagedChip = await executableResolveTurnFixture({
@@ -2160,7 +2229,13 @@ describe('BEH-013 browser boundary support', () => {
       attachmentControlCount: 1,
     });
     await expect(
-      stagedChip.browser.resolveFailedTurn('task-a', 'session-a', 'conversation-a', 'conversation-turn-user'),
+      stagedChip.browser.resolveFailedTurn(
+        'task-a',
+        'session-a',
+        'conversation-a',
+        'conversation-turn-user',
+        'https://chatgpt.com/c/conversation-a',
+      ),
     ).rejects.toThrow(/staged attachment chips/);
   });
 
@@ -2175,9 +2250,58 @@ describe('BEH-013 browser boundary support', () => {
     });
 
     await expect(
-      fixture.browser.resolveFailedTurn('task-a', 'session-a', 'conversation-a', 'conversation-turn-user'),
+      fixture.browser.resolveFailedTurn(
+        'task-a',
+        'session-a',
+        'conversation-a',
+        'conversation-turn-user',
+        'https://chatgpt.com/c/conversation-a',
+      ),
     ).rejects.toThrow(/conversation identity does not match the failed-response turn/);
     expect(fixture.events).not.toContain('stop:click');
+  });
+
+  it('rejects a wrong plain or project path with the same conversation id before any Stop click', async () => {
+    const wrongProjectPath = await executableResolveTurnFixture({
+      pathname: '/g/g-p-other/c/conversation-a',
+      targetUserTurnId: 'conversation-turn-user',
+      turns: [
+        { testId: 'conversation-turn-user', turn: 'user' },
+        { testId: 'conversation-turn-assistant', turn: 'assistant' },
+      ],
+      stopVisible: true,
+    });
+    await expect(
+      wrongProjectPath.browser.resolveFailedTurn(
+        'task-a',
+        'session-a',
+        'conversation-a',
+        'conversation-turn-user',
+        'https://chatgpt.com/c/conversation-a',
+      ),
+    ).rejects.toThrow(/current page is not the recorded canonical conversation URL/);
+    expect(wrongProjectPath.events).not.toContain('stop:click');
+    expect(wrongProjectPath.events).not.toContain('composer-text');
+
+    const wrongPlainPath = await executableResolveTurnFixture({
+      pathname: '/c/conversation-a',
+      targetUserTurnId: 'conversation-turn-user',
+      turns: [
+        { testId: 'conversation-turn-user', turn: 'user' },
+        { testId: 'conversation-turn-assistant', turn: 'assistant' },
+      ],
+      stopVisible: true,
+    });
+    await expect(
+      wrongPlainPath.browser.resolveFailedTurn(
+        'task-a',
+        'session-a',
+        'conversation-a',
+        'conversation-turn-user',
+        'https://chatgpt.com/g/g-p-123-chatgpt-pro-collab/c/conversation-a',
+      ),
+    ).rejects.toThrow(/current page is not the recorded canonical conversation URL/);
+    expect(wrongPlainPath.events).not.toContain('stop:click');
   });
 });
 
