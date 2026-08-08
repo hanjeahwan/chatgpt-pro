@@ -22,7 +22,7 @@
 
 ## 开发流程角色
 
-- **Coordinator**：local parent session；使用 Orca Orchestrator 建立并监督 Run、Task 与 Dispatch，维护 writer ownership，处理 Spec 变化、target branch 同步、验证、Review 调度与集成。
+- **Coordinator**：local coordinating session；使用 Orca Orchestrator 建立并监督 Run、Task 与 Dispatch，维护 writer ownership，处理 Spec 变化、target branch 同步、验证、Review 调度与集成。
 - **Implementation writer**：Orca supervised worker，默认 Agent 为 `opencode`，只写入 Task 声明的 write scope。
 - **Independent reviewer**：Orca supervised worker，默认 Agent 为 `pi`，Review 指定 SHA 区间并返回 findings。
 - **Orca Orchestrator**：提供 Run、Task、Dispatch、Message 与可选 decision gate 的运行时生命周期和任务状态。
@@ -34,14 +34,14 @@
 根据用户请求匹配任务场景：
 
 - **监督式协作**：例如“把任务拆成 A、B、C，交给多个 Agent。”使用 `orchestration`
-  Skill。你负责监督，并在 child 通过 Orca 发送正式事件后处理结果和最终汇总。监督不表示持续等待、轮询 terminal 或周期读取运行状态。派发 supervised child worker 并记录 checkpoint（含 Run / active Task / Dispatch 与运行期确认的 parent terminal handle）后，Coordinator terminal 保持打开并进入 idle，从派发到 Run 结算或清理前只绑定这一个 active Run。Child 独立执行，只在真正阻塞、需要升级或完成时通过 Orca 联系 parent；正式事件写入 Run inbox 后，child 通过 Orca terminal delivery 对 Dispatch 契约携带的同一个运行期确认 parent terminal handle 发送一次性、无业务 payload 的 wake signal；heartbeat 只作存活信号，不唤醒 parent。Coordinator session 自动继续并处理当前 inbox。
+  Skill。你负责监督并做最终汇总：建立或绑定 Run、创建 Task、派发 supervised worker；派发成功后保持当前模型回合，滚动执行版本匹配的有界 `check --wait` 消费 Run inbox 的 FIFO Delivery，直到 expected Dispatch 全部结算。每个 Delivery 的全部 Message 处理完、正式副作用完成后最后 ack，然后继续等待或按退出条件结束；timeout、空结果或 heartbeat 不是完成或失败。不得以 terminal monitoring、terminal input、terminal delivery 或 child signal 代替 Orchestration Delivery。Child 独立执行，只在真正阻塞、需要升级或完成时通过 Orca 联系 parent。Coordinator 中断后只能显式从 Orca runtime 与未 ack Delivery 恢复，不承诺自动继续。循环的完整约束见 WORKFLOW.md 第 6 节。
 - **完整任务交接**：例如“把这个任务交给另一个 Agent 完成，你不需要继续跟踪。”使用 `orca-cli` Skill。
 - **普通 Orca 操作**：例如“创建一个 Worktree”“在当前 Worktree 启动新 Agent”或“读取指定 Terminal 的输出。”使用 `orca-cli` Skill。
 - **边界不明确**：用户仅要求“交给另一个 Agent 或 Worktree”，但没有要求监督、等待或汇总结果时，按完整任务交接处理。
 
 核心判断：任务转交后，当前 Agent 是否继续对执行过程和最终结果负责；继续负责时使用 `orchestration`，转移所有权或仅操作 Orca 资源时使用 `orca-cli`。
 
-parent/child 指 Coordinator 与 supervised worker，不是 Git branch 关系。Use Orca parent/child messages plus a one-shot parent wake for coordination. Do not replace event-driven collaboration with live terminal monitoring or polling.
+Coordinator 与 supervised worker 的关系不是 Git branch 关系。正式事件经 Run inbox 的 FIFO Delivery 投递，消费方式见 WORKFLOW.md 第 6 节；不以 terminal 轮询或读取代替 Delivery 等待。
 
 ## Git 与提交
 
