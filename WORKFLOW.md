@@ -97,7 +97,19 @@ Implementation、remediation 与 review 三条 worker lane 共用同一套 paren
 3. 正式事件先通过 Orca 写入 Run inbox，再通过 Orca terminal delivery 对 parent 发送一次性 wake；wake 只发送给 Dispatch 契约携带的运行期确认 parent terminal handle，不从命名、branch 或本地上下文推断 target，也不得对非 terminal 对象 ID 发送。发送 terminal wake 前，child 先用 runtime 确认的 queued-input 能力，或执行一次原生 tui-idle 等待（terminal 输入同步，不是 Coordinator 轮询）。wake 命令报告 stale handle 时：child 从 Orca runtime 重新获取一次 Coordinator terminal handle 并重试一次 wake，把替换后的 handle 记录到 active Orchestration context 或 durable message，不直接编辑 Coordinator worktree 的 ignored checkpoint；第二次失败按 runtime failure 处理并升级。Coordinator 恢复后，先以 Orca runtime 校准并刷新自己的 checkpoint，再继续处理。durable Run inbox 事件始终是权威事实，重试不得复制事件。question 使用版本匹配的 Orca parent-addressed ask；正式 question 持久化后必须产生恰好一次 parent wake，ask 已内建 wake 时不得重复发送。
 4. wake signal 不复制结果内容，Run inbox 是事件事实源；同一个 Coordinator session 自动继续并处理当前 Deliveries，每个 Delivery 的全部 Message 处理后再确认。wake 处理幂等：没有可处理的未确认 Delivery 时，Coordinator 直接回到 idle，不做状态叙述、terminal 读取或 runtime 刷新。
 5. Coordinator 接受结果、回复、重规划或继续主流程；每次回复 child、修订 Dispatch 或仍有 active child 而再次进入 idle 前，都刷新最小 checkpoint（第 9 节）。
-6. Before the first production supervised Dispatch of a Run, the Coordinator must establish or reuse a valid event-wake capability record. When no valid record exists, create one dedicated wake-preflight Task and supervised Dispatch. This preflight Dispatch is the bootstrap exception to the preflight requirement and must be settled before any production implementation, remediation, or review Dispatch is started. preflight 不逐 Task 重复（不为每个 implementation/review Task 派发 minimal child）：preflight Dispatch 验证三项——(a) worker_done/escalation：持久化正式事件后产生恰好一次、无业务 payload 的 parent wake；(b) question：验证版本匹配的 ask 是否内建唤醒 parent；不内建时，验证官方支持的非阻塞 question-persist-then-wake 路径（先持久化 question，再在 tui-idle 后发送恰好一次固定 wake）；(c) heartbeat：不产生 parent wake。当前 Orca runtime 版本无法证明 (b) 时，在第一个生产 supervised Dispatch 前停止，不在 Merge 时才发现。复用条件（Orca runtime 版本、Coordinator terminal、terminal 路由能力、事件/唤醒通信合同均未变化）满足时沿用记录，仅在 Orca 重启、runtime 版本变化、Coordinator terminal 更换或 wake 投递失败后重做；结果存入 Orca Run result、worktree comment 或 checkpoint 的 'Decisions / blockers / unverified items'。
+6. 在每个 Run 的第一个正式 supervised Dispatch 之前，Coordinator 必须建立或复用一份有效的事件唤醒能力记录。若不存在有效记录，则创建一个专用的 `wake-preflight` Task 和 supervised Dispatch。该 preflight Dispatch 是前置验证要求的引导例外；必须在启动任何正式的 implementation、remediation 或 review Dispatch 之前完成并结算。
+
+   preflight 不按 Task 重复执行，也不为每个 implementation 或 review Task 额外派发 minimal child。preflight Dispatch 必须验证：
+
+   - `worker_done` / `escalation`：持久化正式事件后，产生恰好一次且不携带业务 payload 的 parent wake；
+   - `question`：验证当前版本匹配的 `ask` 是否内建 parent wake；若未内建，则验证 Orca 官方支持的非阻塞 `question-persist-then-wake` 路径，即先持久化 question，再在 parent terminal 进入 `tui-idle` 后发送恰好一次固定 wake；
+   - `heartbeat`：不得产生 parent wake。
+
+   如果当前 Orca runtime 无法证明 `question` 路径可用，则必须在第一个正式 supervised Dispatch 前停止，不得等到 Merge 阶段才发现。
+
+   当 Orca runtime 版本、Coordinator terminal、terminal 路由能力和事件唤醒通信合同均未变化时，可以复用已有记录。发生 Orca 重启、runtime 版本变化、Coordinator terminal 更换或 wake 投递失败后，必须重新执行 preflight。
+
+   preflight 结果记录在 Orca Run result、worktree comment，或 checkpoint 的 `Decisions / blockers / unverified items` 字段中。
 
 规则：
 
