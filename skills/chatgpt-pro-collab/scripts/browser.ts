@@ -660,22 +660,21 @@ export class PlaywrightBrowser {
     try {
       for (const attachmentPath of attachmentPaths) {
         attachmentPreparationStarted = true;
-        await this.#runCode<UploadReadyProtocolResult>(
-          sessionName,
-          taskId,
-          'prepare-upload',
-          uploadPreparationScript(expectedConversationId),
-          'open attachment file chooser',
-          'upload-ready',
-          observer,
-        );
-        await this.#invoke(
+        await this.#prepareUpload(sessionName, taskId, expectedConversationId, observer);
+        const uploadOutput = await this.#invoke(
           sessionName,
           taskId,
           ['upload', attachmentPath],
           `upload attachment ${attachmentPath}`,
           observer,
         );
+        const uploadError = parseFixedCliToolError(uploadOutput.stdout);
+        if (uploadError !== undefined) {
+          throw new Error(uploadError);
+        }
+        if (uploadOutput.stdout.trim() === '') {
+          throw new Error('upload command produced no result; attachment readiness unproven');
+        }
       }
     } catch (error) {
       if (attachmentPreparationStarted) {
@@ -1374,6 +1373,50 @@ export class PlaywrightBrowser {
     const scriptPath = await savePlaywrightScript(this.#paths, taskId, action, source);
     await this.#invoke(sessionName, taskId, ['run-code', '--filename', scriptPath], operation);
   }
+
+  /**
+   * Runs the upload-preparation page function, accepting the pinned CLI's modal-handoff
+   * empty result as a provisional state that only the immediately following upload command
+   * may prove.
+   *
+   * The pinned CLI races the page function against modal states: clicking `Add photos & files`
+   * can emit a fileChooser modal before the function resolves, making the tool return without
+   * its result and leaving `--raw` stdout empty. That empty result is neither success nor
+   * failure; the upload command that consumes the chooser is the only proof of readiness.
+   * Non-empty output that is not the valid envelope remains a page-contract drift.
+   *
+   * @param sessionName Playwright named session.
+   * @param taskId Local task or setup directory identifier.
+   * @param expectedConversationId Existing bound conversation, or null for a first turn.
+   * @param observer Task-lease child-process observer.
+   * @returns Nothing; readiness is proven only by the following upload command.
+   * @throws {BrowserError} If the command or a non-empty non-envelope result fails.
+   * @throws {Error} If the script file cannot be written.
+   */
+  async #prepareUpload(
+    sessionName: string,
+    taskId: string,
+    expectedConversationId: string | null,
+    observer?: BrowserOperationObserver,
+  ): Promise<void> {
+    const scriptPath = await savePlaywrightScript(
+      this.#paths,
+      taskId,
+      'prepare-upload',
+      uploadPreparationScript(expectedConversationId),
+    );
+    const output = await this.#invoke(
+      sessionName,
+      taskId,
+      ['run-code', '--filename', scriptPath],
+      'open attachment file chooser',
+      observer,
+    );
+    if (output.stdout.trim() === '') {
+      return;
+    }
+    parseProtocolResult<UploadReadyProtocolResult>(output.stdout, 'upload-ready');
+  }
 }
 
 /**
@@ -1812,6 +1855,29 @@ function suggestedFilenameMatchesSource(sourceUrl: string, suggestedFilename: st
 }
 
 /**
+ * Detects an explicit fixed-CLI tool error in raw `--raw` stdout.
+ *
+ * The pinned CLI reports tool failures as plain stdout text while still exiting zero:
+ * handler errors arrive as a `### Error` block, and `--raw` strips section headings
+ * for errors emitted as sections, leaving a bare `Error:` line. Either form must fail
+ * the pre-submit path while preserving the bounded concrete message.
+ *
+ * @param stdout Complete raw `--raw` stdout.
+ * @returns The bounded concrete error text, or undefined when no explicit tool error is present.
+ */
+function parseFixedCliToolError(stdout: string): string | undefined {
+  const trimmed = stdout.trim();
+  if (trimmed.startsWith('### Error')) {
+    const detail = trimmed.slice('### Error'.length).trim();
+    return (detail === '' ? trimmed : detail).slice(0, 2000);
+  }
+  if (trimmed.startsWith('Error:')) {
+    return trimmed.slice(0, 2000);
+  }
+  return undefined;
+}
+
+/**
  * Preserves the fixed CLI's page-script error without returning unrelated snapshots.
  *
  * @param stdout Complete `run-code` output whose envelope was absent.
@@ -1821,7 +1887,11 @@ function suggestedFilenameMatchesSource(sourceUrl: string, suggestedFilename: st
 function protocolFailureDetail(stdout: string): string {
   const marker = stdout.lastIndexOf('### Error');
   if (marker < 0) {
-    return 'protocol envelope was not present';
+    const trimmed = stdout.trim();
+    if (trimmed === '') {
+      return 'protocol envelope was not present';
+    }
+    return `protocol envelope was not present; ${trimmed.slice(0, 2000)}`;
   }
   return `protocol envelope was not present; ${stdout.slice(marker).trim().slice(0, 2000)}`;
 }

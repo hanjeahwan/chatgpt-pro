@@ -912,6 +912,143 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     expectPageFunctionSyntax(cleanupSource);
   });
 
+  it('accepts an empty upload-preparation handoff when the following upload succeeds and submits exactly once', async () => {
+    const fixture = await browserFixture([
+      pageResult({ protocol, kind: 'send-ready' }),
+      output(''),
+      output('first uploaded'),
+      pageResult({
+        protocol,
+        kind: 'send',
+        status: 'submitted',
+        conversationId: 'conversation-a',
+        conversationUrl: 'https://chatgpt.com/c/conversation-a',
+        userTurnIdentity: 'conversation-turn-1',
+      }),
+    ]);
+
+    const result = await fixture.browser.send('task-a', 'session-a', 'conversation-a', 'exact prompt', [
+      '/tmp/attachment.txt',
+    ]);
+
+    expect(result).toEqual({
+      status: 'submitted',
+      conversationId: 'conversation-a',
+      conversationUrl: 'https://chatgpt.com/c/conversation-a',
+      userTurnIdentity: 'conversation-turn-1',
+    });
+    const uploads = fixture.invocations.filter((invocation) => {
+      return invocation.arguments.includes('upload');
+    });
+    expect(uploads).toHaveLength(1);
+    const sendSource = await lastScript(fixture.invocations);
+    expect(sendSource).toContain('exact prompt');
+  });
+
+  it('fails the pre-submit path when a handoff upload returns a fixed-CLI tool error', async () => {
+    const fixture = await browserFixture([
+      pageResult({ protocol, kind: 'send-ready' }),
+      output(''),
+      output('### Error\nError: No file chooser visible'),
+      pageResult({ protocol, kind: 'draft-cleared' }),
+    ]);
+
+    await expect(
+      fixture.browser.send('task-a', 'session-a', 'conversation-a', 'exact prompt', ['/tmp/attachment.txt']),
+    ).resolves.toEqual({
+      status: 'not-submitted',
+      error: expect.stringContaining('Error: No file chooser visible'),
+    });
+    const commands = fixture.invocations.map((invocation) => {
+      return invocation.arguments.slice(4);
+    });
+    expect(commands).toEqual([
+      ['run-code', '--filename', expect.any(String)],
+      ['run-code', '--filename', expect.any(String)],
+      ['upload', '/tmp/attachment.txt'],
+      ['run-code', '--filename', expect.any(String)],
+    ]);
+    const cleanupSource = await lastScript(fixture.invocations);
+    expect(cleanupSource).toContain("page.reload({ waitUntil: 'domcontentloaded' })");
+    expect(cleanupSource).toContain('attachment draft remained after reload');
+  });
+
+  it('treats a bare Error: upload result as an explicit fixed-CLI tool error', async () => {
+    const fixture = await browserFixture([
+      pageResult({ protocol, kind: 'send-ready' }),
+      output(''),
+      output('Error: No file chooser visible'),
+      pageResult({ protocol, kind: 'draft-cleared' }),
+    ]);
+
+    await expect(
+      fixture.browser.send('task-a', 'session-a', 'conversation-a', 'exact prompt', ['/tmp/attachment.txt']),
+    ).resolves.toEqual({
+      status: 'not-submitted',
+      error: expect.stringContaining('No file chooser visible'),
+    });
+  });
+
+  it('keeps the upload error and a blocked cleanup error distinguishable', async () => {
+    const fixture = await browserFixture([
+      pageResult({ protocol, kind: 'send-ready' }),
+      output(''),
+      output('### Error\nError: No file chooser visible'),
+      output('### Error\nError: modal guard blocked draft clearing'),
+    ]);
+
+    const result = await fixture.browser.send('task-a', 'session-a', 'conversation-a', 'exact prompt', [
+      '/tmp/attachment.txt',
+    ]);
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        status: 'unsafe-not-submitted',
+        error: expect.stringContaining('Error: No file chooser visible'),
+      }),
+    );
+    if (result.status === 'unsafe-not-submitted') {
+      expect(result.error).toContain('attachment cleanup failed');
+      expect(result.error).toContain('modal guard blocked draft clearing');
+    }
+  });
+
+  it('keeps non-empty malformed preparation output a contract drift with bounded detail', async () => {
+    const fixture = await browserFixture([
+      pageResult({ protocol, kind: 'send-ready' }),
+      output('{"protocol":"chatgpt-pro-collab/v1","kind":"send"}'),
+      pageResult({ protocol, kind: 'draft-cleared' }),
+    ]);
+
+    const result = await fixture.browser.send('task-a', 'session-a', 'conversation-a', 'exact prompt', [
+      '/tmp/attachment.txt',
+    ]);
+
+    expect(result).toEqual({
+      status: 'not-submitted',
+      error: expect.stringContaining('protocol envelope was not present'),
+    });
+    if (result.status === 'not-submitted') {
+      expect(result.error).toContain('"kind":"send"');
+    }
+  });
+
+  it('fails the pre-submit path when a normal upload reports a fixed-CLI tool error', async () => {
+    const fixture = await browserFixture([
+      pageResult({ protocol, kind: 'send-ready' }),
+      pageResult({ protocol, kind: 'upload-ready' }),
+      output('### Error\nError: No file chooser visible'),
+      pageResult({ protocol, kind: 'draft-cleared' }),
+    ]);
+
+    await expect(
+      fixture.browser.send('task-a', 'session-a', 'conversation-a', 'exact prompt', ['/tmp/attachment.txt']),
+    ).resolves.toEqual({
+      status: 'not-submitted',
+      error: expect.stringContaining('No file chooser visible'),
+    });
+  });
+
   it('clears uploaded attachments when a later known pre-submit check fails', async () => {
     const fixture = await browserFixture([
       pageResult({ protocol, kind: 'send-ready' }),
