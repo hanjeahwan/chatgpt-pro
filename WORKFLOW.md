@@ -9,8 +9,9 @@ flowchart TD
     C2 --> W0{存在有效 wake capability 记录?}
     W0 -- 否 --> W1[Coordinator: 创建并执行专用 wake-preflight Task / Dispatch]
     W1 --> W2[Coordinator: 结算 preflight Dispatch 并记录结果]
-    W2 --> S0{派发前 Task source、Spec references 与共享合同仍有效?}
-    W0 -- 是 --> S0
+    W2 --> T0[Coordinator: 创建或选择当前正式 Task]
+    W0 -- 是 --> T0
+    T0 --> S0{派发前 Task source、Spec references 与共享合同仍有效?}
     S0 -- 否 --> P0[Coordinator: 更新规划与 planning_base_sha，创建或修订替代 Task]
     P0 --> S0
     S0 -- 是 --> I1[implementation lane 默认 opencode: implementation 或 remediation]
