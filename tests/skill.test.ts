@@ -29,6 +29,24 @@ function seedText(): string {
   });
 }
 
+describe('BEH-003/BEH-005 first-turn collaboration contract', () => {
+  it('requires one combined first message and keeps later turns on conversation context', async () => {
+    const skill = await readFile(skillPath, 'utf8');
+
+    expect(skill.match(/你现在处于协作模式/gu)).toHaveLength(1);
+    expect(skill).toContain('在尚未绑定 conversation 时，为首条 user message 发起的每次 `send` 都必须');
+    expect(skill).toContain('你作为独立协作者，负责完成“当前任务”声明的有界工作');
+    expect(skill).toContain('对于宿主环境和仓库事实');
+    expect(skill).toContain('可以使用当前 ChatGPT 会话实际提供的工具');
+    expect(skill).toContain('直接处理当前任务，不要只确认协作模式');
+    expect(skill).toContain('采用合理假设继续，并说明假设错误会改变什么');
+    expect(skill).toContain('不要让 `start` 或额外的 `send` 单独提交启动声明');
+    expect(skill).toContain('首次提交前确定失败时，后续显式 `send` 仍须使用完整合同');
+    expect(skill).toContain('conversation 绑定后的后续 prompt 依赖已有上下文，不再重复该合同');
+    expect(skill).toContain('当前任务：');
+  });
+});
+
 describe('BEH-010 host archive guidance', () => {
   it('keeps archive selection with the host and documents metadata-free member checks', async () => {
     const skill = await readFile(skillPath, 'utf8');

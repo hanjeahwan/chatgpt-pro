@@ -37,6 +37,8 @@ pnpm collab -- close <taskId>
 
 `setup` 保存本机共享认证源。每次 `start` 需要调用方提供的稳定 canonical UUID v4 `taskId` 并返回同一个 `taskId`；`send` 提交一轮并立即返回 `turnId`。`wait` 使用有限观察窗口：到期时返回 `pending` 且不停止远端生成；完成时返回原始 `response.md` 与按回复顺序保存的 `artifactPaths`。捕获超时后可用新的 `captureTimeoutMs` 继续同一 turn。`status` 只读返回持久状态与唯一安全的 `nextAction`；`recover` 按持久阶段恢复中断操作；`resolve-submission` 对无法自动判定的提交歧义接受人工裁决。同一任务完成一轮后可以继续 send/wait，多个任务可以同时等待。
 
+每个新 task 的首条 user message 由宿主把 Skill 中的固定协作合同、当前任务和当轮附件作为同一条消息提交；首次提交前失败时，下一次显式 `send` 仍包含完整合同。`start` 仍只建立空白 composer，不单独发送模式声明。conversation 绑定后的后续 turn 沿用已有上下文，不重复该合同。Collab CLI 不隐式改写 prompt，Web 消息与宿主交给 `send` 的 prompt 文件保持一致。
+
 ## 数据
 
 认证源、SQLite 协调状态与逐 turn transcript 保存在 `~/.local/chatgpt-pro-collab/`。附件只从命令明确传入的原路径上传；审计记录保存附件绝对路径，不复制附件正文。回复中的唯一 `sandbox:` 文件保存到各自 turn 的 ordinal 目录；普通 `https:` 链接不下载。
