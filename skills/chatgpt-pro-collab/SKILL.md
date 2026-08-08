@@ -25,7 +25,7 @@ node "<skill-directory>/scripts/collab.ts" setup
 node "<skill-directory>/scripts/collab.ts" start <taskId>
 ```
 
-每个 `start` 都创建独立浏览器进程、context、session 目录和新 conversation；不要因同项目已有任务而复用或拒绝新任务。相同 `taskId` 的重复或并发 `start` 只恢复同一次启动：任务仍在启动中，或已完成启动但尚未绑定 conversation 时，返回同一个 `taskId`；已绑定 conversation、正在关闭、已关闭或失败时返回冲突，不要换用其他身份重试。中断后使用同一 `taskId` 重试即可继续同一次启动。
+每个 `start` 都创建独立浏览器进程、context、session 目录和新 conversation；不要因同项目已有任务而复用或拒绝新任务。相同 `taskId` 的重复或并发 `start` 只恢复同一次启动：任务仍在启动中，或已完成启动但尚未绑定 conversation 时，返回同一个 `taskId`；已绑定 conversation、正在关闭、已关闭或失败时返回冲突。closed task 必须按第 5 节执行 `recover` 继续原 conversation，不要用 `start` 或新 task 替代。启动中断后使用同一 `taskId` 重试即可继续同一次启动。
 
 ## 3. 准备本轮输入
 
@@ -84,9 +84,9 @@ node "<skill-directory>/scripts/collab.ts" status <taskId>
 
 `status` 返回任务、未完成 turn、未完成 operation、浏览器 session 可用性和唯一安全的 `nextAction`。`nextAction` 只可能是 `setup | start | send | wait | recover | resolve-submission | close | none` 之一，按它继续：
 
-- `wait`：对 `pending` 或 `capturing` turn 使用原参数合同再次 `wait`。
+- `wait`：对 browser 可用的 `pending` 或 `capturing` turn 使用原参数合同再次 `wait`。
 - `close`：任务正在关闭，只执行 `close`，不要重建浏览器。
-- `recover`：执行恢复命令，由系统按持久阶段和页面证据继续启动、发送准备、浏览器重建或归档恢复：
+- `recover`：执行恢复命令，由系统按持久阶段和页面证据继续启动、发送准备、browser 缺失重建、closed task 重新激活或归档恢复。closed task 恢复后仍使用原 `taskId` 和 canonical conversation；pending/capturing turn 恢复后再按返回的 `nextAction: wait` 继续：
 
   ```sh
   node "<skill-directory>/scripts/collab.ts" recover <taskId>
@@ -108,7 +108,7 @@ node "<skill-directory>/scripts/collab.ts" archive <taskId>
 node "<skill-directory>/scripts/collab.ts" close <taskId>
 ```
 
-仅在用户明确要求归档 Web conversation 时运行 `archive`；它不会关闭本地任务。任务不再需要浏览器时运行 `close`；它不会归档 Web conversation，也不会删除 transcript 或共享认证源。
+仅在用户明确要求归档 Web conversation 时运行 `archive`；它不会关闭本地任务。任务暂时不需要浏览器时运行 `close`；它把 task 置为可恢复暂停态，不归档 Web conversation，也不删除 transcript、conversation binding 或共享认证源。用户后续提供 feedback 时，先执行 `status`，按 `nextAction: recover` 恢复同一 conversation，再继续 `send/wait`；不要创建新 task 重建上下文。
 
 ## 7. 遵守输入与失败边界
 
@@ -127,6 +127,6 @@ node "<skill-directory>/scripts/collab.ts" close <taskId>
 - [ ] 是否在读取原始回复后由宿主独立验证，而未让 Collab 自动执行？
 - [ ] 中断或结果不明时，是否先执行 `status` 并按 `nextAction` 继续，而不是盲目重发或重启？
 - [ ] 是否只在用户明确要求时归档 conversation？
-- [ ] 不再使用的活动任务是否已显式关闭？
+- [ ] 暂时不需要浏览器的活动任务是否已显式关闭，并保留 `taskId` 供后续 feedback 恢复？
 
 完成条件：目标协作轮次有独立、可审计的 prompt 与 response；浏览器和 Web conversation 生命周期分别按用户意图处理；中断状态可检查、可恢复、可裁决。
