@@ -2362,6 +2362,261 @@ describe('BEH-013 status, recover, and resolve-submission', () => {
   });
 });
 
+describe('BEH-013 resolve-turn failed response resolution', () => {
+  const seedPendingBoundTurn = async (
+    fixture: Awaited<ReturnType<typeof serviceFixture>>,
+    taskId: string,
+    turnId: string,
+  ): Promise<void> => {
+    const promptPath = join(fixture.root, `${turnId}.md`);
+    await Promise.all([writeFile(promptPath, 'pending'), writeFile(fixture.paths.seedState, validSeedText())]);
+    const store = new StateStore(fixture.paths.database);
+    store.createTask(taskId, `chatgpt-pro-collab-${taskId}`);
+    store.beginTurn(taskId, turnId, promptPath, []);
+    store.markSubmissionAttempting(taskId, turnId);
+    store.markTurnPending(
+      taskId,
+      turnId,
+      `conversation-${taskId}`,
+      `https://chatgpt.com/c/conversation-${taskId}`,
+      `user-turn-${taskId}`,
+    );
+    store.close();
+  };
+
+  it('fails a pending turn after page proof and returns nextAction send without a user message', async () => {
+    const fixture = await serviceFixture();
+    const taskId = randomUUID();
+    const turnId = 'pending-turn';
+    await seedPendingBoundTurn(fixture, taskId, turnId);
+
+    const status = await fixture.service.resolveTurn(taskId, turnId, 'failed');
+
+    expect(status).toMatchObject({ turnStatus: null, browserStatus: 'available', nextAction: 'send' });
+    const reopened = new StateStore(fixture.paths.database);
+    const failed = reopened.requireTurn(taskId, turnId);
+    expect(failed.status).toBe('failed');
+    expect(JSON.parse(failed.error ?? '{}')).toMatchObject({
+      adjudication: 'failed',
+      pageUrl: `https://chatgpt.com/c/conversation-${taskId}`,
+      userTurnIdentity: `user-turn-${taskId}`,
+      stop: 'absent',
+    });
+    expect(reopened.requireTask(taskId).status).toBe('active');
+    reopened.close();
+    expect(fixture.browser.resolvedFailedTurns).toEqual([taskId]);
+    expect(fixture.browser.expectedConversationIds).toEqual([]);
+  });
+
+  it('records the controlled Stop outcome when the exact Stop answering was visible', async () => {
+    const fixture = await serviceFixture();
+    const taskId = randomUUID();
+    const turnId = 'stopped-turn';
+    await seedPendingBoundTurn(fixture, taskId, turnId);
+    fixture.browser.nextResolveFailedTurnStop = 'stopped';
+
+    const status = await fixture.service.resolveTurn(taskId, turnId, 'failed');
+
+    expect(status).toMatchObject({ turnStatus: null, nextAction: 'send' });
+    const reopened = new StateStore(fixture.paths.database);
+    expect(JSON.parse(reopened.requireTurn(taskId, turnId).error ?? '{}')).toMatchObject({ stop: 'stopped' });
+    reopened.close();
+  });
+
+  it('rebuilds the same named browser and canonical conversation when the session is missing', async () => {
+    const fixture = await serviceFixture();
+    const taskId = randomUUID();
+    const turnId = 'rebuild-turn';
+    await seedPendingBoundTurn(fixture, taskId, turnId);
+    fixture.browser.sessionAvailabilityResult = 'missing';
+
+    const status = await fixture.service.resolveTurn(taskId, turnId, 'failed');
+
+    expect(status).toMatchObject({ turnStatus: null, browserStatus: 'available', nextAction: 'send' });
+    expect(fixture.browser.startCount).toBe(1);
+    expect(fixture.browser.recoveredConversations).toEqual([taskId]);
+    expect(fixture.browser.resolvedFailedTurns).toEqual([taskId]);
+  });
+
+  it('preserves the pending turn when page verification fails', async () => {
+    const fixture = await serviceFixture();
+    const taskId = randomUUID();
+    const turnId = 'drift-turn';
+    await seedPendingBoundTurn(fixture, taskId, turnId);
+    fixture.browser.nextResolveFailedTurnFailureTaskId = taskId;
+
+    await expect(fixture.service.resolveTurn(taskId, turnId, 'failed')).rejects.toMatchObject({
+      code: 'PLAYWRIGHT_CONTRACT_DRIFT',
+    });
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireTurn(taskId, turnId)).toMatchObject({ status: 'pending', error: null });
+    expect(reopened.getFailedTurnResolution(taskId, turnId)).toBeNull();
+    reopened.close();
+    expect(fixture.browser.resolvedFailedTurns).toEqual([]);
+    expect(fixture.browser.expectedConversationIds).toEqual([]);
+  });
+
+  it('rejects capturing, completed, sending, unknown-submission, and other-failed turns', async () => {
+    const fixture = await serviceFixture();
+    const capturing = new StateStore(fixture.paths.database);
+    capturing.createTask('capturing-task', 'session-capturing');
+    capturing.beginTurn('capturing-task', 'turn-capturing', '/prompt.md', []);
+    capturing.markSubmissionAttempting('capturing-task', 'turn-capturing');
+    capturing.markTurnPending(
+      'capturing-task',
+      'turn-capturing',
+      'conversation-capturing',
+      'https://chatgpt.com/c/conversation-capturing',
+      'user-turn-capturing',
+    );
+    capturing.freezeCapture('capturing-task', 'turn-capturing', join(fixture.root, 'capturing.md'), []);
+    capturing.createTask('completed-task', 'session-completed');
+    capturing.beginTurn('completed-task', 'turn-completed', '/prompt.md', []);
+    capturing.markSubmissionAttempting('completed-task', 'turn-completed');
+    capturing.markTurnPending(
+      'completed-task',
+      'turn-completed',
+      'conversation-completed',
+      'https://chatgpt.com/c/conversation-completed',
+      'user-turn-completed',
+    );
+    capturing.freezeCapture('completed-task', 'turn-completed', join(fixture.root, 'completed.md'), []);
+    await writeFile(join(fixture.root, 'completed.md'), 'done');
+    capturing.completeTurn('completed-task', 'turn-completed', join(fixture.root, 'completed.md'));
+    capturing.createTask('sending-task', 'session-sending');
+    capturing.beginTurn('sending-task', 'turn-sending', '/prompt.md', []);
+    capturing.createTask('unknown-task', 'session-unknown');
+    capturing.beginTurn('unknown-task', 'turn-unknown', '/prompt.md', []);
+    capturing.markSubmissionAttempting('unknown-task', 'turn-unknown');
+    capturing.createTask('other-failed-task', 'session-other-failed');
+    capturing.beginTurn('other-failed-task', 'turn-other-failed', '/prompt.md', []);
+    capturing.failSendingTurn('other-failed-task', 'turn-other-failed', 'pre-submission failure');
+    capturing.close();
+
+    for (const [taskId, turnId] of [
+      ['capturing-task', 'turn-capturing'],
+      ['completed-task', 'turn-completed'],
+      ['sending-task', 'turn-sending'],
+      ['unknown-task', 'turn-unknown'],
+      ['other-failed-task', 'turn-other-failed'],
+    ] as const) {
+      await expect(fixture.service.resolveTurn(taskId, turnId, 'failed')).rejects.toMatchObject({
+        code: 'TURN_NOT_RESOLVABLE',
+      });
+    }
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireTurn('capturing-task', 'turn-capturing').status).toBe('capturing');
+    expect(reopened.requireTurn('other-failed-task', 'turn-other-failed').error).toBe('pre-submission failure');
+    reopened.close();
+    expect(fixture.browser.resolvedFailedTurns).toEqual([]);
+  });
+
+  it('rejects a non-active task and unknown identifiers', async () => {
+    const fixture = await serviceFixture();
+    const taskId = randomUUID();
+    const turnId = 'closed-turn';
+    await seedPendingBoundTurn(fixture, taskId, turnId);
+    const closedStore = new StateStore(fixture.paths.database);
+    closedStore.closeTask(taskId);
+    closedStore.close();
+
+    await expect(fixture.service.resolveTurn(taskId, turnId, 'failed')).rejects.toMatchObject({
+      code: 'TASK_NOT_ACTIVE',
+    });
+    await expect(fixture.service.resolveTurn(randomUUID(), turnId, 'failed')).rejects.toMatchObject({
+      code: 'TASK_NOT_FOUND',
+    });
+    await expect(fixture.service.resolveTurn(taskId, 'missing-turn', 'failed')).rejects.toMatchObject({
+      code: 'TURN_NOT_FOUND',
+    });
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireTurn(taskId, turnId).status).toBe('pending');
+    reopened.close();
+    expect(fixture.browser.resolvedFailedTurns).toEqual([]);
+  });
+
+  it('is idempotent after a recorded resolution without additional browser actions', async () => {
+    const fixture = await serviceFixture();
+    const taskId = randomUUID();
+    const turnId = 'repeat-turn';
+    await seedPendingBoundTurn(fixture, taskId, turnId);
+    const first = await fixture.service.resolveTurn(taskId, turnId, 'failed');
+    expect(first).toMatchObject({ turnStatus: null, nextAction: 'send' });
+    expect(fixture.browser.startCount).toBe(0);
+
+    const repeated = await fixture.service.resolveTurn(taskId, turnId, 'failed');
+    expect(repeated).toMatchObject({ turnStatus: null, nextAction: 'send' });
+    expect(fixture.browser.resolvedFailedTurns).toEqual([taskId]);
+    expect(fixture.browser.startCount).toBe(0);
+    expect(fixture.browser.recoveredConversations).toEqual([]);
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireTurn(taskId, turnId).status).toBe('failed');
+    reopened.close();
+  });
+
+  it('serializes concurrent adjudications through the task lease with one resolution', async () => {
+    const fixture = await serviceFixture();
+    const taskId = randomUUID();
+    const turnId = 'concurrent-turn';
+    await seedPendingBoundTurn(fixture, taskId, turnId);
+    let release: (() => void) | undefined;
+    fixture.browser.resolveFailedTurnGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const first = fixture.service.resolveTurn(taskId, turnId, 'failed');
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 50);
+    });
+    await expect(fixture.service.resolveTurn(taskId, turnId, 'failed')).rejects.toMatchObject({
+      code: 'TASK_OPERATION_IN_PROGRESS',
+    });
+    release?.();
+    await expect(first).resolves.toMatchObject({ turnStatus: null, nextAction: 'send' });
+    expect(fixture.browser.resolvedFailedTurns).toEqual([taskId]);
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireTurn(taskId, turnId).status).toBe('failed');
+    reopened.close();
+  });
+
+  it('resolves a pending turn through the CLI and parses the failed verdict', async () => {
+    const fixture = await serviceFixture();
+    const taskId = randomUUID();
+    const turnId = 'cli-turn';
+    await seedPendingBoundTurn(fixture, taskId, turnId);
+    const output: string[] = [];
+    const errors: string[] = [];
+    const io: CliIo = {
+      writeOutput(value) {
+        output.push(value);
+      },
+      writeError(value) {
+        errors.push(value);
+      },
+    };
+
+    await expect(runCli(['--', 'help'], fixture.service, io)).resolves.toBe(0);
+    expect(output.join('')).toContain(
+      'node "<skill-directory>/scripts/collab.ts" resolve-turn <taskId> <turnId> failed',
+    );
+    output.length = 0;
+    await expect(runCli(['resolve-turn', taskId, turnId, 'failed'], fixture.service, io)).resolves.toBe(0);
+    expect(JSON.parse(output.join(''))).toMatchObject({
+      ok: true,
+      command: 'resolve-turn',
+      turnStatus: null,
+      nextAction: 'send',
+    });
+    await expect(runCli(['resolve-turn', taskId, turnId, 'maybe'], fixture.service, io)).resolves.toBe(1);
+    expect(JSON.parse(errors.at(-1) ?? '{}')).toMatchObject({
+      ok: false,
+      error: { code: 'USAGE', message: expect.stringContaining('verdict must be failed') },
+    });
+    await expect(runCli(['resolve-turn', taskId, turnId], fixture.service, io)).resolves.toBe(1);
+    expect(JSON.parse(errors.at(-1) ?? '{}')).toMatchObject({ ok: false, error: { code: 'USAGE' } });
+  });
+});
+
 class FailTaskAfterArchiveLeaseStore extends StateStore {
   /**
    * Simulates a lifecycle transition committed at the lease-acquisition boundary.
@@ -2415,6 +2670,10 @@ class FakeBrowser implements CollabBrowser {
   nextRecoverConversationIdentityFailureTaskId: string | null = null;
   sessionAvailabilityResult: 'available' | 'missing' | 'unknown' = 'available';
   nextVerifySafeComposerFailureTaskId: string | null = null;
+  readonly resolvedFailedTurns: string[] = [];
+  nextResolveFailedTurnFailureTaskId: string | null = null;
+  nextResolveFailedTurnStop: 'absent' | 'stopped' = 'absent';
+  resolveFailedTurnGate: Promise<void> | null = null;
   observedOperations = 0;
   nextSendStatus: 'submitted' | 'not-submitted' | 'unknown-submission' | 'unsafe-not-submitted' = 'submitted';
   cleanSendComposerFailuresRemaining = 0;
@@ -2818,6 +3077,45 @@ class FakeBrowser implements CollabBrowser {
       throw new Error('injected safe composer verification failure');
     }
     this.safeComposersVerified.push(taskId);
+  }
+
+  /**
+   * Records one fake failed-response adjudication with an optional injected drift.
+   *
+   * @param taskId Task identifier.
+   * @param _sessionName Unused named session.
+   * @param expectedConversationId Database-bound identity.
+   * @param expectedUserTurnId Persisted target user turn identity.
+   * @param observer Task-lease child-process observer.
+   * @returns The verified conversation, user turn, and configured Stop outcome.
+   * @throws {BrowserError} While the injected identity-drift failure is armed.
+   */
+  async resolveFailedTurn(
+    taskId: string,
+    _sessionName: string,
+    expectedConversationId: string,
+    expectedUserTurnId: string,
+    observer?: BrowserOperationObserver,
+  ) {
+    this.observe(observer);
+    if (this.resolveFailedTurnGate !== null) {
+      await this.resolveFailedTurnGate;
+    }
+    if (this.nextResolveFailedTurnFailureTaskId === taskId) {
+      this.nextResolveFailedTurnFailureTaskId = null;
+      throw new BrowserError(
+        'PLAYWRIGHT_CONTRACT_DRIFT',
+        'verify failed response turn',
+        `injected page drift for ${taskId}`,
+      );
+    }
+    this.resolvedFailedTurns.push(taskId);
+    return {
+      conversationId: expectedConversationId,
+      conversationUrl: `https://chatgpt.com/c/${expectedConversationId}`,
+      userTurnIdentity: expectedUserTurnId,
+      stop: this.nextResolveFailedTurnStop,
+    };
   }
 
   /**

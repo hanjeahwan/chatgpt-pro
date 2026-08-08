@@ -21,6 +21,7 @@ import { StateStore } from '../skills/chatgpt-pro-collab/scripts/state.ts';
 import { artifactPageFixture, type ArtifactPageOptions } from './support/artifact-page-fixture.ts';
 import { completionPageFixture, type CompletionPageOptions } from './support/completion-page-fixture.ts';
 import { projectSendPageFixture } from './support/project-send-page-fixture.ts';
+import { resolveTurnPageFixture, type ResolveTurnPageOptions } from './support/resolve-turn-page-fixture.ts';
 import { startPageFixture, type StartPageOptions } from './support/start-page-fixture.ts';
 import { submissionPageFixture } from './support/submission-page-fixture.ts';
 
@@ -1928,6 +1929,256 @@ describe('BEH-013 browser boundary support', () => {
     expect(source).toContain('resolve-not-submitted');
     expectPageFunctionSyntax(source);
   });
+
+  it('generates the failed-response resolution verification for the persisted target turn', async () => {
+    const fixture = await browserFixture([
+      pageResult({
+        protocol,
+        kind: 'resolve-failed-turn',
+        conversationId: 'conversation-a',
+        conversationUrl: 'https://chatgpt.com/c/conversation-a',
+        userTurnIdentity: 'conversation-turn-2',
+        stop: 'absent',
+      }),
+    ]);
+
+    const result = await fixture.browser.resolveFailedTurn(
+      'task-a',
+      'session-a',
+      'conversation-a',
+      'conversation-turn-2',
+    );
+
+    expect(result).toEqual({
+      conversationId: 'conversation-a',
+      conversationUrl: 'https://chatgpt.com/c/conversation-a',
+      userTurnIdentity: 'conversation-turn-2',
+      stop: 'absent',
+    });
+    const source = await lastScript(fixture.invocations);
+    expect(source).toContain('resolve-failed-turn');
+    expect(source).toContain('conversation-a');
+    expect(source).toContain('conversation-turn-2');
+    expect(source).toContain("name: 'Stop answering', exact: true");
+    expect(source).toContain('target user turn is absent or not unique');
+    expect(source).toContain('a later user turn exists after the target');
+    expect(source).toContain('composer still contains draft text before failed-response resolution');
+    expect(source).toContain('composer still has a populated file input before failed-response resolution');
+    expect(source).toContain('composer still shows staged attachment chips before failed-response resolution');
+    expect(source).toContain('Stop answering did not disappear after one click');
+    expectPageFunctionSyntax(source);
+  });
+
+  it('rejects a resolve-failed-turn result whose identity or fields drifted', async () => {
+    const driftFixture = await browserFixture([
+      pageResult({
+        protocol,
+        kind: 'resolve-failed-turn',
+        conversationId: 'conversation-other',
+        conversationUrl: 'https://chatgpt.com/c/conversation-other',
+        userTurnIdentity: 'conversation-turn-2',
+        stop: 'absent',
+      }),
+    ]);
+    await expect(
+      driftFixture.browser.resolveFailedTurn('task-a', 'session-a', 'conversation-a', 'conversation-turn-2'),
+    ).rejects.toMatchObject({ code: 'BROWSER_PROTOCOL_ERROR' });
+
+    const missingFixture = await browserFixture([pageResult({ protocol, kind: 'resolve-failed-turn' })]);
+    await expect(
+      missingFixture.browser.resolveFailedTurn('task-a', 'session-a', 'conversation-a', 'conversation-turn-2'),
+    ).rejects.toMatchObject({ code: 'BROWSER_PROTOCOL_ERROR' });
+  });
+
+  it('executes the failed-response resolution while Stop is absent', async () => {
+    const fixture = await executableResolveTurnFixture({
+      pathname: '/c/conversation-a',
+      targetUserTurnId: 'conversation-turn-user',
+      turns: [
+        { testId: 'conversation-turn-user', turn: 'user' },
+        { testId: 'conversation-turn-assistant', turn: 'assistant' },
+      ],
+      stopVisible: false,
+    });
+
+    await expect(
+      fixture.browser.resolveFailedTurn('task-a', 'session-a', 'conversation-a', 'conversation-turn-user'),
+    ).resolves.toEqual({
+      conversationId: 'conversation-a',
+      conversationUrl: 'https://chatgpt.com/c/conversation-a',
+      userTurnIdentity: 'conversation-turn-user',
+      stop: 'absent',
+    });
+    expect(fixture.events).toContain('stop:count');
+    expect(fixture.events).not.toContain('stop:click');
+  });
+
+  it('clicks a visible Stop answering exactly once and verifies its disappearance', async () => {
+    const fixture = await executableResolveTurnFixture({
+      pathname: '/c/conversation-a',
+      targetUserTurnId: 'conversation-turn-user',
+      turns: [
+        { testId: 'conversation-turn-user', turn: 'user' },
+        { testId: 'conversation-turn-assistant', turn: 'assistant' },
+      ],
+      stopVisible: true,
+      stopDisappears: true,
+    });
+
+    await expect(
+      fixture.browser.resolveFailedTurn('task-a', 'session-a', 'conversation-a', 'conversation-turn-user'),
+    ).resolves.toEqual({
+      conversationId: 'conversation-a',
+      conversationUrl: 'https://chatgpt.com/c/conversation-a',
+      userTurnIdentity: 'conversation-turn-user',
+      stop: 'stopped',
+    });
+    expect(
+      fixture.events.filter((event) => {
+        return event === 'stop:click';
+      }),
+    ).toHaveLength(1);
+  });
+
+  it('keeps the resolution failed when Stop stays visible after one click', async () => {
+    const fixture = await executableResolveTurnFixture({
+      pathname: '/c/conversation-a',
+      targetUserTurnId: 'conversation-turn-user',
+      turns: [
+        { testId: 'conversation-turn-user', turn: 'user' },
+        { testId: 'conversation-turn-assistant', turn: 'assistant' },
+      ],
+      stopVisible: true,
+      stopDisappears: false,
+    });
+
+    await expect(
+      fixture.browser.resolveFailedTurn('task-a', 'session-a', 'conversation-a', 'conversation-turn-user'),
+    ).rejects.toThrow(/Stop answering did not disappear after one click/);
+    expect(
+      fixture.events.filter((event) => {
+        return event === 'stop:click';
+      }),
+    ).toHaveLength(1);
+  });
+
+  it('rejects a non-unique visible Stop answering without clicking', async () => {
+    const fixture = await executableResolveTurnFixture({
+      pathname: '/c/conversation-a',
+      targetUserTurnId: 'conversation-turn-user',
+      turns: [
+        { testId: 'conversation-turn-user', turn: 'user' },
+        { testId: 'conversation-turn-assistant', turn: 'assistant' },
+      ],
+      stopVisible: true,
+      stopCount: 2,
+    });
+
+    await expect(
+      fixture.browser.resolveFailedTurn('task-a', 'session-a', 'conversation-a', 'conversation-turn-user'),
+    ).rejects.toThrow(/Stop answering is not unique/);
+    expect(fixture.events).not.toContain('stop:click');
+  });
+
+  it('rejects a later user turn after the target as identity drift', async () => {
+    const fixture = await executableResolveTurnFixture({
+      pathname: '/c/conversation-a',
+      targetUserTurnId: 'conversation-turn-user',
+      turns: [
+        { testId: 'conversation-turn-user', turn: 'user' },
+        { testId: 'conversation-turn-assistant', turn: 'assistant' },
+        { testId: 'conversation-turn-later', turn: 'user' },
+      ],
+    });
+
+    await expect(
+      fixture.browser.resolveFailedTurn('task-a', 'session-a', 'conversation-a', 'conversation-turn-user'),
+    ).rejects.toThrow(/a later user turn exists after the target/);
+  });
+
+  it('rejects an absent or duplicated target user turn', async () => {
+    const absent = await executableResolveTurnFixture({
+      pathname: '/c/conversation-a',
+      targetUserTurnId: 'conversation-turn-missing',
+      turns: [
+        { testId: 'conversation-turn-other', turn: 'user' },
+        { testId: 'conversation-turn-assistant', turn: 'assistant' },
+      ],
+    });
+    await expect(
+      absent.browser.resolveFailedTurn('task-a', 'session-a', 'conversation-a', 'conversation-turn-missing'),
+    ).rejects.toMatchObject({ code: 'PLAYWRIGHT_CONTRACT_DRIFT' });
+
+    const duplicated = await executableResolveTurnFixture({
+      pathname: '/c/conversation-a',
+      targetUserTurnId: 'conversation-turn-user',
+      turns: [
+        { testId: 'conversation-turn-user', turn: 'user' },
+        { testId: 'conversation-turn-user', turn: 'user' },
+        { testId: 'conversation-turn-assistant', turn: 'assistant' },
+      ],
+    });
+    await expect(
+      duplicated.browser.resolveFailedTurn('task-a', 'session-a', 'conversation-a', 'conversation-turn-user'),
+    ).rejects.toThrow(/target user turn is absent or not unique/);
+  });
+
+  it('rejects a composer with draft text, staged files, or attachment controls', async () => {
+    const draft = await executableResolveTurnFixture({
+      pathname: '/c/conversation-a',
+      targetUserTurnId: 'conversation-turn-user',
+      turns: [
+        { testId: 'conversation-turn-user', turn: 'user' },
+        { testId: 'conversation-turn-assistant', turn: 'assistant' },
+      ],
+      composerText: 'stale draft',
+    });
+    await expect(
+      draft.browser.resolveFailedTurn('task-a', 'session-a', 'conversation-a', 'conversation-turn-user'),
+    ).rejects.toThrow(/composer still contains draft text/);
+
+    const stagedFile = await executableResolveTurnFixture({
+      pathname: '/c/conversation-a',
+      targetUserTurnId: 'conversation-turn-user',
+      turns: [
+        { testId: 'conversation-turn-user', turn: 'user' },
+        { testId: 'conversation-turn-assistant', turn: 'assistant' },
+      ],
+      populatedFileInputCount: 1,
+    });
+    await expect(
+      stagedFile.browser.resolveFailedTurn('task-a', 'session-a', 'conversation-a', 'conversation-turn-user'),
+    ).rejects.toThrow(/populated file input/);
+
+    const stagedChip = await executableResolveTurnFixture({
+      pathname: '/c/conversation-a',
+      targetUserTurnId: 'conversation-turn-user',
+      turns: [
+        { testId: 'conversation-turn-user', turn: 'user' },
+        { testId: 'conversation-turn-assistant', turn: 'assistant' },
+      ],
+      attachmentControlCount: 1,
+    });
+    await expect(
+      stagedChip.browser.resolveFailedTurn('task-a', 'session-a', 'conversation-a', 'conversation-turn-user'),
+    ).rejects.toThrow(/staged attachment chips/);
+  });
+
+  it('rejects a drifted conversation identity before touching the composer', async () => {
+    const fixture = await executableResolveTurnFixture({
+      pathname: '/c/conversation-other',
+      targetUserTurnId: 'conversation-turn-user',
+      turns: [
+        { testId: 'conversation-turn-user', turn: 'user' },
+        { testId: 'conversation-turn-assistant', turn: 'assistant' },
+      ],
+    });
+
+    await expect(
+      fixture.browser.resolveFailedTurn('task-a', 'session-a', 'conversation-a', 'conversation-turn-user'),
+    ).rejects.toThrow(/conversation identity does not match the failed-response turn/);
+    expect(fixture.events).not.toContain('stop:click');
+  });
 });
 
 describe('BEH-003 and BEH-013 submission verification against page evidence', () => {
@@ -2780,6 +3031,36 @@ async function executableCompletionFixture(options: CompletionPageOptions) {
       const source = await scriptForInvocation(invocation);
       const runPageFunction = new Function(`return (${source})`)() as (page: object) => Promise<string>;
       return output(`### Ran Playwright code\n${JSON.stringify(await runPageFunction(pageFixture.page))}\n`);
+    } finally {
+      invocation.onChildExited?.(9000);
+    }
+  });
+  return { browser, events: pageFixture.events };
+}
+
+/**
+ * Creates a browser runner that executes failed-response resolution against a page fixture.
+ *
+ * @param options Conversation path, turns, composer residue, and Stop behavior.
+ * @returns Browser and ordered resolution events.
+ * @throws {Error} If the fixture directory or generated script cannot be read.
+ */
+async function executableResolveTurnFixture(options: ResolveTurnPageOptions) {
+  const root = await mkdtemp(join(tmpdir(), 'collab-resolve-turn-browser-'));
+  const paths = collabPaths(root);
+  await ensureCollabDirectories(paths);
+  const pageFixture = resolveTurnPageFixture(options);
+  const browser = new PlaywrightBrowser(paths, root, async (invocation) => {
+    invocation.beforeCommandRelease?.();
+    invocation.onCommandStarted?.();
+    invocation.onCommandSpawned?.(10_000);
+    invocation.onChildSpawned?.(9000);
+    try {
+      const source = await scriptForInvocation(invocation);
+      const runPageFunction = new Function(`return (${source})`)() as (page: object) => Promise<string>;
+      return output(`### Ran Playwright code\n${JSON.stringify(await runPageFunction(pageFixture.page))}\n`);
+    } catch (error) {
+      return output(`### Error\n${error instanceof Error ? error.message : String(error)}\n`);
     } finally {
       invocation.onChildExited?.(9000);
     }

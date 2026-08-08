@@ -340,6 +340,185 @@ describe('BEH-002, BEH-005, BEH-007, and BEH-008 state gates', () => {
   });
 });
 
+describe('BEH-013 failed-response turn resolution state gate', () => {
+  const pendingTurn = (store: StateStore, taskId: string, turnId: string): void => {
+    store.beginTurn(taskId, turnId, '/prompt.md', []);
+    store.markSubmissionAttempting(taskId, turnId);
+    store.markTurnPending(
+      taskId,
+      turnId,
+      'conversation-a',
+      'https://chatgpt.com/c/conversation-a',
+      `user-turn-${taskId}`,
+    );
+  };
+
+  it('atomically fails a pending turn and records the complete human resolution', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-resolve-turn-'));
+    const store = new StateStore(join(root, 'state.sqlite'));
+    store.createTask('task-a', 'session-a');
+    pendingTurn(store, 'task-a', 'turn-a');
+
+    const failed = store.failPendingTurnWithResolution('task-a', 'turn-a', {
+      adjudication: 'failed',
+      resolvedAt: '2026-08-09T00:00:00.000Z',
+      pageUrl: 'https://chatgpt.com/c/conversation-a',
+      userTurnIdentity: 'user-turn-task-a',
+      stop: 'absent',
+    });
+
+    expect(failed).toMatchObject({ status: 'failed' });
+    expect(JSON.parse(failed.error ?? '{}')).toEqual({
+      adjudication: 'failed',
+      resolvedAt: '2026-08-09T00:00:00.000Z',
+      pageUrl: 'https://chatgpt.com/c/conversation-a',
+      userTurnIdentity: 'user-turn-task-a',
+      stop: 'absent',
+    });
+    expect(store.getFailedTurnResolution('task-a', 'turn-a')).toEqual({
+      adjudication: 'failed',
+      resolvedAt: '2026-08-09T00:00:00.000Z',
+      pageUrl: 'https://chatgpt.com/c/conversation-a',
+      userTurnIdentity: 'user-turn-task-a',
+      stop: 'absent',
+    });
+    expect(store.requireTask('task-a').status).toBe('active');
+    store.beginTurn('task-a', 'turn-b', '/next.md', []);
+    store.close();
+  });
+
+  it('rejects every non-pending turn and a non-active task while preserving state', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-resolve-turn-gates-'));
+    const store = new StateStore(join(root, 'state.sqlite'));
+    store.createTask('task-sending', 'session-sending');
+    pendingTurn(store, 'task-sending', 'turn-a');
+    store.close();
+
+    const sending = new StateStore(join(root, 'state.sqlite'));
+    sending.createTask('task-other', 'session-other');
+    sending.beginTurn('task-other', 'turn-sending', '/prompt.md', []);
+    expect(() => {
+      return sending.failPendingTurnWithResolution('task-other', 'turn-sending', {
+        adjudication: 'failed',
+        resolvedAt: '2026-08-09T00:00:00.000Z',
+        pageUrl: 'https://chatgpt.com/c/conversation-a',
+        userTurnIdentity: 'user-turn-task-other',
+        stop: 'absent',
+      });
+    }).toThrowError(/expected pending/);
+    expect(sending.requireTurn('task-other', 'turn-sending').status).toBe('sending');
+    expect(sending.getFailedTurnResolution('task-other', 'turn-sending')).toBeNull();
+
+    sending.createTask('task-unknown', 'session-unknown');
+    sending.beginTurn('task-unknown', 'turn-unknown', '/prompt.md', []);
+    sending.markSubmissionAttempting('task-unknown', 'turn-unknown');
+    expect(() => {
+      return sending.failPendingTurnWithResolution('task-unknown', 'turn-unknown', {
+        adjudication: 'failed',
+        resolvedAt: '2026-08-09T00:00:00.000Z',
+        pageUrl: 'https://chatgpt.com/c/conversation-a',
+        userTurnIdentity: 'user-turn-task-unknown',
+        stop: 'absent',
+      });
+    }).toThrowError(/expected pending/);
+    expect(sending.requireTurn('task-unknown', 'turn-unknown').status).toBe('unknown-submission');
+
+    sending.createTask('task-completed', 'session-completed');
+    sending.beginTurn('task-completed', 'turn-completed', '/prompt.md', []);
+    sending.markSubmissionAttempting('task-completed', 'turn-completed');
+    sending.markTurnPending(
+      'task-completed',
+      'turn-completed',
+      'conversation-b',
+      'https://chatgpt.com/c/conversation-b',
+      'user-turn-completed',
+    );
+    const responsePath = join(root, 'completed.md');
+    sending.freezeCapture('task-completed', 'turn-completed', responsePath, []);
+    await writeFile(responsePath, 'done');
+    sending.completeTurn('task-completed', 'turn-completed', responsePath);
+    expect(() => {
+      return sending.failPendingTurnWithResolution('task-completed', 'turn-completed', {
+        adjudication: 'failed',
+        resolvedAt: '2026-08-09T00:00:00.000Z',
+        pageUrl: 'https://chatgpt.com/c/conversation-b',
+        userTurnIdentity: 'user-turn-completed',
+        stop: 'absent',
+      });
+    }).toThrowError(/expected pending/);
+    expect(sending.requireTurn('task-completed', 'turn-completed').status).toBe('completed');
+
+    sending.createTask('task-failed', 'session-failed');
+    sending.beginTurn('task-failed', 'turn-failed', '/prompt.md', []);
+    sending.failSendingTurn('task-failed', 'turn-failed', 'pre-submission failure');
+    expect(() => {
+      return sending.failPendingTurnWithResolution('task-failed', 'turn-failed', {
+        adjudication: 'failed',
+        resolvedAt: '2026-08-09T00:00:00.000Z',
+        pageUrl: 'https://chatgpt.com/c/conversation-a',
+        userTurnIdentity: 'user-turn-task-failed',
+        stop: 'absent',
+      });
+    }).toThrowError(/expected pending/);
+    expect(sending.requireTurn('task-failed', 'turn-failed').error).toBe('pre-submission failure');
+    expect(sending.getFailedTurnResolution('task-failed', 'turn-failed')).toBeNull();
+
+    sending.closeTask('task-sending');
+    expect(() => {
+      return sending.failPendingTurnWithResolution('task-sending', 'turn-a', {
+        adjudication: 'failed',
+        resolvedAt: '2026-08-09T00:00:00.000Z',
+        pageUrl: 'https://chatgpt.com/c/conversation-a',
+        userTurnIdentity: 'user-turn-task-sending',
+        stop: 'absent',
+      });
+    }).toThrowError(/task is closed/);
+    expect(sending.requireTurn('task-sending', 'turn-a').status).toBe('pending');
+    sending.close();
+  });
+
+  it('rejects a pending turn whose user identity was not persisted', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-resolve-turn-identity-'));
+    const store = new StateStore(join(root, 'state.sqlite'));
+    store.createTask('task-a', 'session-a');
+    pendingTurn(store, 'task-a', 'turn-a');
+    const raw = new DatabaseSync(join(root, 'state.sqlite'));
+    raw.prepare('UPDATE turn SET user_turn_identity = NULL WHERE task_id = ? AND id = ?').run('task-a', 'turn-a');
+    raw.close();
+
+    expect(() => {
+      return store.failPendingTurnWithResolution('task-a', 'turn-a', {
+        adjudication: 'failed',
+        resolvedAt: '2026-08-09T00:00:00.000Z',
+        pageUrl: 'https://chatgpt.com/c/conversation-a',
+        userTurnIdentity: 'user-turn-task-a',
+        stop: 'stopped',
+      });
+    }).toThrowError(/no user turn identity/);
+    expect(store.requireTurn('task-a', 'turn-a').status).toBe('pending');
+    expect(store.getFailedTurnResolution('task-a', 'turn-a')).toBeNull();
+    store.close();
+  });
+
+  it('keeps the failed turn the only unfinished-free blocker and leaves later turns possible', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-resolve-turn-continue-'));
+    const store = new StateStore(join(root, 'state.sqlite'));
+    store.createTask('task-a', 'session-a');
+    pendingTurn(store, 'task-a', 'turn-a');
+    store.failPendingTurnWithResolution('task-a', 'turn-a', {
+      adjudication: 'failed',
+      resolvedAt: '2026-08-09T00:00:00.000Z',
+      pageUrl: 'https://chatgpt.com/c/conversation-a',
+      userTurnIdentity: 'user-turn-task-a',
+      stop: 'stopped',
+    });
+
+    const continuation = store.beginTurn('task-a', 'turn-b', '/continuation.md', []);
+    expect(continuation).toMatchObject({ id: 'turn-b', status: 'sending' });
+    store.close();
+  });
+});
+
 describe('fresh-start races', () => {
   it('rejects an incompatible task table instead of migrating it', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collab-incompatible-task-'));

@@ -345,6 +345,22 @@ export class SkillFixtureBrowser implements CollabBrowser {
     return { status: 'unresolved', reason: 'unused submission verification in the single-turn Skill fixture' };
   }
 
+  async resolveFailedTurn(
+    _taskId: string,
+    _sessionName: string,
+    _expectedConversationId: string,
+    _expectedUserTurnId: string,
+    observer?: BrowserOperationObserver,
+  ): Promise<{
+    readonly conversationId: string;
+    readonly conversationUrl: string;
+    readonly userTurnIdentity: string;
+    readonly stop: 'absent' | 'stopped';
+  }> {
+    this.observe(observer);
+    throw new Error('unused failed-turn resolution in the single-turn Skill fixture');
+  }
+
   /**
    * Simulates one complete spawned browser command under the service lease.
    *

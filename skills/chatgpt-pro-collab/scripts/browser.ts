@@ -225,6 +225,14 @@ interface AutoVerifySubmissionProtocolResult extends ProtocolResult {
   readonly error?: string;
 }
 
+interface ResolveFailedTurnProtocolResult extends ProtocolResult {
+  readonly kind: 'resolve-failed-turn';
+  readonly conversationId?: string;
+  readonly conversationUrl?: string;
+  readonly userTurnIdentity?: string;
+  readonly stop?: 'absent' | 'stopped';
+}
+
 export interface BrowserResolveSubmittedResult {
   readonly conversationId: string;
   readonly conversationUrl: string;
@@ -244,6 +252,13 @@ export type BrowserArchiveState =
   | { readonly status: 'archived' }
   | { readonly status: 'not-archived' }
   | { readonly status: 'unknown'; readonly error: string };
+
+export interface BrowserResolveFailedTurnResult {
+  readonly conversationId: string;
+  readonly conversationUrl: string;
+  readonly userTurnIdentity: string;
+  readonly stop: 'absent' | 'stopped';
+}
 
 export class BrowserError extends Error {
   readonly code: string;
@@ -1231,6 +1246,63 @@ export class PlaywrightBrowser {
       'resolve-not-submitted',
       observer,
     );
+  }
+
+  /**
+   * Verifies the canonical conversation, unique target user turn, absence of later
+   * user turns, and safe empty composer, then stops the target response at most once.
+   *
+   * @param taskId Owning task identifier.
+   * @param sessionName Owning Playwright named session.
+   * @param expectedConversationId Database-bound canonical identity.
+   * @param expectedUserTurnId Persisted exact identity of the failed-response user turn.
+   * @param observer Task-lease child-process observer.
+   * @returns The verified conversation, exact user turn, and Stop outcome.
+   * @throws {BrowserError} If the conversation, user turn, later-turn, composer, or
+   *   Stop postcondition cannot be verified.
+   * @throws {Error} If a local Playwright artifact cannot be written.
+   */
+  async resolveFailedTurn(
+    taskId: string,
+    sessionName: string,
+    expectedConversationId: string,
+    expectedUserTurnId: string,
+    observer?: BrowserOperationObserver,
+  ): Promise<BrowserResolveFailedTurnResult> {
+    const result = await this.#runCode<ResolveFailedTurnProtocolResult>(
+      sessionName,
+      taskId,
+      'resolve-failed-turn',
+      resolveFailedTurnScript(expectedConversationId, expectedUserTurnId),
+      'verify failed response turn',
+      'resolve-failed-turn',
+      observer,
+    );
+    if (
+      result.conversationId === undefined ||
+      result.conversationUrl === undefined ||
+      result.userTurnIdentity === undefined ||
+      result.stop === undefined
+    ) {
+      throw new BrowserError(
+        'BROWSER_PROTOCOL_ERROR',
+        'verify failed response turn',
+        'resolve-failed-turn result omitted fields',
+      );
+    }
+    if (result.conversationId !== expectedConversationId || result.userTurnIdentity !== expectedUserTurnId) {
+      throw new BrowserError(
+        'BROWSER_PROTOCOL_ERROR',
+        'verify failed response turn',
+        'resolved identity differs from the target turn',
+      );
+    }
+    return {
+      conversationId: result.conversationId,
+      conversationUrl: result.conversationUrl,
+      userTurnIdentity: result.userTurnIdentity,
+      stop: result.stop,
+    };
   }
 
   /**
@@ -3815,6 +3887,158 @@ function resolveNotSubmittedScript(
       }
     }
     return JSON.stringify({ protocol: '${PROTOCOL}', kind: 'resolve-not-submitted' });
+  }`;
+}
+
+/**
+ * Builds the failed-response adjudication verification for a pending bound turn.
+ *
+ * The page function proves the canonical conversation, the unique persisted target
+ * user turn, the absence of any later user turn, and a safe empty composer. When the
+ * exact `Stop answering` control is still visible it is clicked exactly once and the
+ * function only succeeds after the control disappears; otherwise it is reported as
+ * absent. Every failure keeps the pending turn untouched.
+ *
+ * @param expectedConversationId Database-bound canonical identity.
+ * @param expectedUserTurnId Persisted exact identity of the target user turn.
+ * @returns A Playwright page function source.
+ * @throws {Error} This pure source builder does not throw.
+ */
+function resolveFailedTurnScript(expectedConversationId: string, expectedUserTurnId: string): string {
+  return `async (page) => {
+    const expectedConversationId = ${JSON.stringify(expectedConversationId)};
+    const expectedUserTurnId = ${JSON.stringify(expectedUserTurnId)};
+    const conversationIdOf = (pathname) => {
+      const match = /\\/c\\/([^/?#]+)\\/?$/.exec(pathname);
+      return match === null || match[1].startsWith('WEB:') ? null : match[1];
+    };
+    const visible = (element) => {
+      if (!(element instanceof HTMLElement)) return false;
+      const style = getComputedStyle(element);
+      return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
+    };
+    const url = await page.evaluate(() => {
+      return { hostname: location.hostname, pathname: location.pathname, origin: location.origin };
+    });
+    if (url.hostname !== 'chatgpt.com' || conversationIdOf(url.pathname) !== expectedConversationId) {
+      throw new Error('conversation identity does not match the failed-response turn');
+    }
+    await page.waitForFunction((targetId) => {
+      const visible = (element) => {
+        if (!(element instanceof HTMLElement)) return false;
+        const style = getComputedStyle(element);
+        return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
+      };
+      return [...document.querySelectorAll('[data-testid^="conversation-turn-"][data-turn="user"]')]
+        .filter(visible)
+        .filter((element) => element.getAttribute('data-testid') === targetId).length >= 1;
+    }, expectedUserTurnId, { timeout: 60000, polling: 100 });
+    const turnState = await page.evaluate((targetId) => {
+      const visible = (element) => {
+        if (!(element instanceof HTMLElement)) return false;
+        const style = getComputedStyle(element);
+        return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
+      };
+      const elements = [...document.querySelectorAll('[data-testid^="conversation-turn-"][data-turn]')].filter(visible);
+      const targetIndices = elements.flatMap((element, index) => {
+        return element.getAttribute('data-turn') === 'user' && element.getAttribute('data-testid') === targetId
+          ? [index]
+          : [];
+      });
+      if (targetIndices.length !== 1) {
+        return { status: 'drift', reason: 'target user turn is absent or not unique' };
+      }
+      const targetIndex = targetIndices[0];
+      for (let index = targetIndex + 1; index < elements.length; index += 1) {
+        if (elements[index].getAttribute('data-turn') === 'user') {
+          return { status: 'drift', reason: 'a later user turn exists after the target' };
+        }
+      }
+      return { status: 'ok', identity: elements[targetIndex].getAttribute('data-testid') };
+    }, expectedUserTurnId);
+    if (turnState.status === 'drift') throw new Error(turnState.reason);
+    if (turnState.status !== 'ok' || turnState.identity !== expectedUserTurnId) {
+      throw new Error('target user turn identity drifted while resolving the failed response');
+    }
+    const composer = page.locator('#prompt-textarea');
+    await composer.waitFor({ state: 'visible', timeout: 60000 });
+    if (await composer.count() !== 1 || !(await composer.isVisible())) {
+      throw new Error('page contract drift: composer is not unique and visible');
+    }
+    const composerText = await composer.evaluateAll((elements) => {
+      return elements
+        .filter((element) => element instanceof HTMLElement)
+        .map((element) => (element.textContent || '').trim());
+    });
+    if (composerText.length !== 1 || composerText[0] !== '') {
+      throw new Error('composer still contains draft text before failed-response resolution');
+    }
+    const composerForm = page.locator('form').filter({ has: composer });
+    if (await composerForm.count() !== 1) {
+      throw new Error('page contract drift: composer form is not unique');
+    }
+    const populatedFileInputCount = await composerForm.locator('input[type="file"]').evaluateAll((elements) => {
+      return elements.filter((element) => element instanceof HTMLInputElement && element.value !== '').length;
+    });
+    if (populatedFileInputCount !== 0) {
+      throw new Error('composer still has a populated file input before failed-response resolution');
+    }
+    const visibleAttachmentControlCount = await composerForm.locator('*').evaluateAll((elements) => {
+      const visible = (element) => {
+        if (!(element instanceof HTMLElement)) return false;
+        const style = getComputedStyle(element);
+        return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
+      };
+      const isAttachmentControl = (element) => {
+        if (!(element instanceof HTMLElement)) return false;
+        const ariaLabel = typeof element.getAttribute === 'function' ? element.getAttribute('aria-label') || '' : '';
+        const testId = typeof element.getAttribute === 'function' ? element.getAttribute('data-testid') || '' : '';
+        const tagName = typeof element.tagName === 'string' ? element.tagName.toUpperCase() : '';
+        return (
+          (tagName === 'BUTTON' && /remove|delete/i.test(ariaLabel)) ||
+          /file|attachment|composer-file/i.test(testId)
+        );
+      };
+      return elements.filter((element) => visible(element) && isAttachmentControl(element)).length;
+    });
+    if (visibleAttachmentControlCount !== 0) {
+      throw new Error('composer still shows staged attachment chips before failed-response resolution');
+    }
+    const stop = page.getByRole('button', { name: 'Stop answering', exact: true });
+    let stopOutcome = 'absent';
+    if (await stop.count() > 0 && await stop.first().isVisible()) {
+      if (await stop.count() !== 1) {
+        throw new Error('page contract drift: Stop answering is not unique');
+      }
+      await stop.first().click();
+      let disappeared = false;
+      for (let poll = 0; poll < 60; poll += 1) {
+        await page.waitForTimeout(250);
+        const stillVisible = await stop.count() > 0 && await stop.first().isVisible();
+        if (!stillVisible) {
+          disappeared = true;
+          break;
+        }
+      }
+      if (!disappeared) {
+        throw new Error('Stop answering did not disappear after one click');
+      }
+      stopOutcome = 'stopped';
+    }
+    const finalUrl = await page.evaluate(() => {
+      return { hostname: location.hostname, pathname: location.pathname, origin: location.origin };
+    });
+    if (finalUrl.hostname !== 'chatgpt.com' || conversationIdOf(finalUrl.pathname) !== expectedConversationId) {
+      throw new Error('conversation identity changed while resolving the failed response');
+    }
+    return JSON.stringify({
+      protocol: '${PROTOCOL}',
+      kind: 'resolve-failed-turn',
+      conversationId: conversationIdOf(finalUrl.pathname),
+      conversationUrl: finalUrl.origin + finalUrl.pathname,
+      userTurnIdentity: expectedUserTurnId,
+      stop: stopOutcome,
+    });
   }`;
 }
 

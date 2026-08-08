@@ -13,6 +13,7 @@ import {
   type BrowserCaptureResult,
   type BrowserObservationResult,
   type BrowserOperationObserver,
+  type BrowserResolveFailedTurnResult,
   type BrowserResolveSubmittedResult,
   type BrowserSendResult,
   type BrowserSessionInfo,
@@ -129,6 +130,13 @@ export interface CollabBrowser {
     attachmentNames: readonly string[],
     observer?: BrowserOperationObserver,
   ): Promise<void>;
+  resolveFailedTurn(
+    taskId: string,
+    sessionName: string,
+    expectedConversationId: string,
+    expectedUserTurnId: string,
+    observer?: BrowserOperationObserver,
+  ): Promise<BrowserResolveFailedTurnResult>;
   cleanSendComposer(
     taskId: string,
     sessionName: string,
@@ -1605,6 +1613,85 @@ export class CollabService {
   }
 
   /**
+   * Applies a user-confirmed terminal response failure to one active pending turn.
+   *
+   * The user's failure fact is authoritative and never inferred. Under the task lease
+   * the command rebuilds the same named browser and canonical conversation when
+   * missing, verifies the canonical conversation, the unique persisted target user
+   * turn, the absence of any later user turn, and a safe empty composer, stops an
+   * exact visible `Stop answering` at most once, and only then atomically fails the
+   * pending turn while recording the human adjudication, page identity, target user
+   * turn, and Stop outcome in the turn error. A repeated call after the recorded
+   * resolution is idempotent without browser actions; every proof failure preserves
+   * the pending state and never creates a user turn.
+   *
+   * @param taskId Active task identifier.
+   * @param turnId Pending turn whose Pro response the user confirmed failed.
+   * @param verdict Required terminal failure verdict.
+   * @returns The status snapshot with `nextAction: send` after resolution.
+   * @throws {CollabError} If the task, turn, conversation, page, or Stop proof fails.
+   * @throws {Error} If state, browser, or seed operations fail.
+   */
+  async resolveTurn(taskId: string, turnId: string, verdict: 'failed'): Promise<StatusRecord> {
+    if (verdict !== 'failed') {
+      throw new CollabError('USAGE', 'resolve-turn verdict must be failed');
+    }
+    return this.#withStore(async (store) => {
+      return this.#withTaskOperation(store, taskId, 'resolve-turn', async (observer) => {
+        const task = store.requireTask(taskId);
+        const turn = store.requireTurn(taskId, turnId);
+        if (task.status !== 'active') {
+          throw new CollabError('TASK_NOT_ACTIVE', `task is ${task.status}: ${taskId}`);
+        }
+        const recorded = store.getFailedTurnResolution(taskId, turnId);
+        if (turn.status === 'failed' && recorded !== null) {
+          const browserStatus = await this.#browser.sessionAvailability(task.playwrightSession);
+          return { ...store.getStatus(taskId, browserStatus), nextAction: 'send' };
+        }
+        if (turn.status !== 'pending') {
+          throw new CollabError('TURN_NOT_RESOLVABLE', `turn is ${turn.status}: ${turnId}`);
+        }
+        if (task.conversationId === null || task.conversationUrl === null) {
+          throw new CollabError('TRANSCRIPT_INCONSISTENT', `resolvable task has no conversation: ${taskId}`);
+        }
+        if (turn.userTurnIdentity === null) {
+          throw new CollabError('TRANSCRIPT_INCONSISTENT', `pending turn has no user turn identity: ${turnId}`);
+        }
+        const sessionName = task.playwrightSession;
+        const resolvedAt = new Date().toISOString();
+        if ((await this.#browser.sessionAvailability(sessionName)) === 'missing') {
+          const seedStatePath = await requireSeedState(this.#paths);
+          await this.#browser.startTask(taskId, sessionName, seedStatePath, true, observer);
+          await this.#browser.recoverConversation(
+            taskId,
+            sessionName,
+            task.conversationUrl,
+            task.conversationId,
+            observer,
+          );
+        }
+        const verified = await this.#browser.resolveFailedTurn(
+          taskId,
+          sessionName,
+          task.conversationId,
+          turn.userTurnIdentity,
+          observer,
+        );
+        assertConversation(taskId, task.conversationId, task.conversationUrl, verified);
+        store.failPendingTurnWithResolution(taskId, turnId, {
+          adjudication: 'failed',
+          resolvedAt,
+          pageUrl: verified.conversationUrl,
+          userTurnIdentity: verified.userTurnIdentity,
+          stop: verified.stop,
+        });
+        const browserStatus = await this.#browser.sessionAvailability(sessionName);
+        return { ...store.getStatus(taskId, browserStatus), nextAction: 'send' };
+      });
+    });
+  }
+
+  /**
    * Serializes browser side effects for one task across independent CLI processes.
    *
    * @param store Current process-local state connection.
@@ -2112,6 +2199,21 @@ export async function runCli(
         }
         throw usageError('resolve-submission verdict must be submitted or not-submitted');
       }
+      case 'resolve-turn': {
+        requireParameterCount(command, parameters, 3);
+        const [taskId, turnId, verdict] = parameters;
+        if (verdict !== 'failed') {
+          throw usageError('resolve-turn verdict must be failed');
+        }
+        io.writeOutput(
+          jsonLine({
+            ok: true,
+            command,
+            ...(await service.resolveTurn(required(taskId), required(turnId), 'failed')),
+          }),
+        );
+        return 0;
+      }
       default:
         throw usageError(`unknown command: ${command}`);
     }
@@ -2226,6 +2328,7 @@ Usage:
   node "<skill-directory>/scripts/collab.ts" recover <taskId>
   node "<skill-directory>/scripts/collab.ts" resolve-submission <taskId> <turnId> submitted <conversationUrl>
   node "<skill-directory>/scripts/collab.ts" resolve-submission <taskId> <turnId> not-submitted
+  node "<skill-directory>/scripts/collab.ts" resolve-turn <taskId> <turnId> failed
   node "<skill-directory>/scripts/collab.ts" close <taskId>
   node "<skill-directory>/scripts/collab.ts" archive <taskId>
 `;

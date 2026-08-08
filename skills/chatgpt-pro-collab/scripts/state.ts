@@ -38,6 +38,14 @@ export interface ArtifactDescription {
   readonly label: string;
 }
 
+export interface FailedTurnResolution {
+  readonly adjudication: 'failed';
+  readonly resolvedAt: string;
+  readonly pageUrl: string;
+  readonly userTurnIdentity: string;
+  readonly stop: 'absent' | 'stopped';
+}
+
 export interface TaskRecord {
   readonly id: string;
   readonly playwrightSession: string;
@@ -888,6 +896,85 @@ export class StateStore {
       }
       return this.requireTurn(taskId, turnId);
     });
+  }
+
+  /**
+   * Fails a proven pending turn and records the complete human response adjudication.
+   *
+   * The user-provided terminal failure fact is never inferred: the transition only
+   * happens after the page proof, and the turn error carries the human conclusion,
+   * the verified canonical page, the exact target user turn, and the Stop outcome.
+   *
+   * @param taskId Owning active task identifier.
+   * @param turnId Pending turn whose Pro response the user confirmed failed.
+   * @param resolution Human adjudication, page identity, target user turn, and Stop outcome.
+   * @returns The updated failed turn with the serialized resolution in its error field.
+   * @throws {StateError} If the task is inactive, the turn is not pending, or the
+   *   pending turn lacks its persisted user turn identity.
+   * @throws {Error} If SQLite cannot commit the transition.
+   */
+  failPendingTurnWithResolution(taskId: string, turnId: string, resolution: FailedTurnResolution): TurnRecord {
+    return this.#transaction(() => {
+      this.requireActiveTask(taskId);
+      const turn = this.requireTurn(taskId, turnId);
+      if (turn.status !== 'pending') {
+        throw new StateError('TURN_STATE_CONFLICT', `turn is ${turn.status}, expected pending: ${turnId}`);
+      }
+      if (turn.userTurnIdentity === null) {
+        throw new StateError('TRANSCRIPT_INCONSISTENT', `pending turn has no user turn identity: ${turnId}`);
+      }
+      const now = new Date().toISOString();
+      this.#database
+        .prepare('UPDATE turn SET status = ?, error = ?, updated_at = ? WHERE task_id = ? AND id = ?')
+        .run('failed', JSON.stringify(resolution), now, taskId, turnId);
+      return this.requireTurn(taskId, turnId);
+    });
+  }
+
+  /**
+   * Returns the recorded failed-response adjudication of a turn, or null.
+   *
+   * A failed turn that was not created by a response adjudication (for example a
+   * pre-submission failure) returns null so the resolution command can reject it
+   * instead of treating it as an idempotent repeat.
+   *
+   * @param taskId Owning task identifier.
+   * @param turnId Turn whose resolution marker is queried.
+   * @returns The complete resolution record, or null when the turn is not failed
+   *   by a recorded response adjudication.
+   * @throws {Error} If the state store cannot be read.
+   */
+  getFailedTurnResolution(taskId: string, turnId: string): FailedTurnResolution | null {
+    const turn = this.getTurn(taskId, turnId);
+    if (turn === null || turn.status !== 'failed' || turn.error === null) {
+      return null;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(turn.error);
+    } catch {
+      return null;
+    }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      return null;
+    }
+    const candidate = parsed as Record<string, unknown>;
+    if (
+      candidate.adjudication !== 'failed' ||
+      typeof candidate.resolvedAt !== 'string' ||
+      typeof candidate.pageUrl !== 'string' ||
+      typeof candidate.userTurnIdentity !== 'string' ||
+      (candidate.stop !== 'absent' && candidate.stop !== 'stopped')
+    ) {
+      return null;
+    }
+    return {
+      adjudication: 'failed',
+      resolvedAt: candidate.resolvedAt,
+      pageUrl: candidate.pageUrl,
+      userTurnIdentity: candidate.userTurnIdentity,
+      stop: candidate.stop,
+    };
   }
 
   /**
