@@ -5,7 +5,7 @@
 ## 权威文档
 
 - 面向用户的用途、用法和边界：`README.md`
-- 产品行为、权限、技术合同和验收：`docs/specs/*.md`；创建 Spec 时遵守 `define-product-spec` Skill
+- 产品行为、权限、技术合同和验收：`docs/specs/*.md`；创建或修订 Spec 时遵守 `define-product-spec` Skill
 - 跨规格或长期有效的架构决策：`docs/adr/adr-*.md`；创建 ADR 时遵守 `create-architectural-decision-record` Skill
 - 决策问题 Spike：`docs/spikes/*.md`；创建或执行时遵守 `create-spike` Skill
 - 代码规范：`CODE_STANDARD.md`
@@ -22,32 +22,33 @@
 
 ## 开发流程角色
 
-- **Coordinator**：local coordinating session；使用 Orca Orchestrator 建立并监督 Run、Task 与 Dispatch，维护 writer ownership，处理 Spec 变化、target branch 同步、验证、Review 调度与集成。
-- **Implementation writer**：Orca supervised worker，默认 Agent 为 `opencode`，只写入 Task 声明的 write scope。
-- **Independent reviewer**：Orca supervised worker，默认 Agent 为 `pi`，Review 指定 SHA 区间并返回 findings。
+- **Coordinator**：local coordinating session；创建专用 Orca task worktree，通过 Orca Orchestrator 建立并监督 Run、Task 与 Dispatch，维护 writer ownership，并对 Spec 变化、候选验证、Review 和集成负责。
+- **Implementation writer**：Orca supervised worker，默认 Agent 为 `opencode`；只写入 Orca Task 分配的 write scope，并交付对应 atomic commit。
+- **Independent reviewer**：Orca supervised worker，默认 Agent 为 `pi`；按 `WORKFLOW.md` 使用 `open-code-review-delegate` Skill 只读 Review 最终 aggregate diff 并返回 findings。
 - **Orca Orchestrator**：提供 Run、Task、Dispatch、Message 与可选 decision gate 的运行时生命周期和任务状态。
 
-同一文件或共享状态范围同时只有一个 writer；只读调查可并行。Coordinator 在 context compact 或接手后，先读本地 checkpoint（worktree comment 或 `.orca-tmp/session-handoff.md`），再以 Orca runtime、Git、requirement source 和适用 Spec 校准。
+同一文件或共享状态范围同时只有一个 writer；只读调查可并行。
 
 ## Agent 任务协作路由
 
-根据用户请求匹配任务场景：
+根据任务场景选择路由：
 
+- **仓库开发**：涉及仓库写入时，先按 `WORKFLOW.md` 创建专用 Orca task worktree。Coordinator 继续对实施、Review 和最终结果负责时，使用 `orchestration` Skill。
 - **监督式协作**：例如“把任务拆成 A、B、C，交给多个 Agent。”使用 `orchestration`
-  Skill。你负责监督并做最终汇总：建立或绑定 Run、创建 Task、派发 supervised worker；派发成功后保持当前模型回合，滚动执行版本匹配的有界 `check --wait` 消费 Run inbox 的 FIFO Delivery，直到 expected Dispatch 全部结算。每个 Delivery 的全部 Message 处理完、正式副作用完成后最后 ack，然后继续等待或按退出条件结束；timeout、空结果或 heartbeat 不是完成或失败。不得以 terminal monitoring、terminal input、terminal delivery 或 worker signal 代替 Orchestration Delivery。Worker 独立执行，只在真正阻塞、需要升级或完成时通过 Orca 联系 Coordinator。Coordinator 中断后只能显式从 Orca runtime 与未 ack Delivery 恢复，不承诺自动继续。循环的完整约束见 WORKFLOW.md 第 6 节。
+  Skill。Coordinator 继续对执行过程和最终结果负责；Run、Task、Dispatch、消息、等待和 worker 操作直接遵守版本匹配的 Skill。
 - **完整任务交接**：例如“把这个任务交给另一个 Agent 完成，你不需要继续跟踪。”使用 `orca-cli` Skill。
 - **普通 Orca 操作**：例如“创建一个 Worktree”“在当前 Worktree 启动新 Agent”或“读取指定 Terminal 的输出。”使用 `orca-cli` Skill。
 - **边界不明确**：用户仅要求“交给另一个 Agent 或 Worktree”，但没有要求监督、等待或汇总结果时，按完整任务交接处理。
 
 核心判断：任务转交后，当前 Agent 是否继续对执行过程和最终结果负责；继续负责时使用 `orchestration`，转移所有权或仅操作 Orca 资源时使用 `orca-cli`。
 
-Coordinator 与 supervised worker 的关系不是 Git branch 关系。正式事件经 Run inbox 的 FIFO Delivery 投递，消费方式见 WORKFLOW.md 第 6 节；不以 terminal 轮询或读取代替 Delivery 等待。
+Coordinator 与 supervised worker 的关系不是 Git branch 关系。运行时协作遵守对应 Skill；仓库候选、验证、Review 和集成遵守 `WORKFLOW.md`。
 
 ## Git 与提交
 
 - 新提交使用 Unicode Gitmoji，格式为 `<gitmoji> (<scope>): <summary>`；没有有意义的 scope 时省略 `(<scope>):`。
 - 每个提交只使用一个表示主要意图的 Gitmoji，不再叠加 `feat:`、`fix:`、`docs:` 等类型前缀。
-- 默认保持线性历史：任务分支在实施期间保持隔离；任务完成后，由协调员在同一任务分支上同步目标分支并执行 fast-forward 集成。
+- 默认保持线性历史：任务分支在实施期间保持隔离；Coordinator 在该分支上同步目标分支，完成全量验证和 Review 后再执行 fast-forward 集成。
 - 只有用户明确要求保留分支拓扑，或上游同步必须保留 merge 关系时，才能创建 merge commit。
 - 创建 merge commit 时，在最终报告中说明原因。
 
