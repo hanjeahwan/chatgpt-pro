@@ -23,7 +23,7 @@ atomic task 以一个完整、可验收的行为为边界，并包含交付该�
 
 实施期间用户请求、Spec 或验收条件发生实质变化时，Coordinator 更新或替换受影响的 Orca Tasks 后再继续派发。仍满足新要求的 commit 可以复用。
 
-Spec 增加或实质修订后，Coordinator 在拆分或继续派发前运行该当前版本 Spec 的执行 preflight，并按未决项的阻塞范围和处理方式决定受影响 Task 的开始。产品行为合同、产品边界、技术映射与验收/验证直接约束 Orca Task、final candidate 验证和 aggregate diff Review。最后一次相关修改后，必要或触发的 `VER-*` 重新运行。Spec status 只表示生命周期，单独不决定 Task 的开始或完成。执行状态保留在 Orca Task、Dispatch、验证和 Review。Reviewer 可以读取绑定候选的验证结果和 Spec 要求直接检查的证据。
+Spec 增加或实质修订后，Coordinator 在拆分或继续派发前执行该版本 Spec 的 `执行前核对`，并按未决项的阻塞范围和处理方式决定受影响工作能否开始。Coordinator 直接以 Spec 的产品行为合同、产品边界、技术映射和 `验收与验证` 为依据，创建 Orca Task、执行 final candidate 验证和 aggregate diff Review。最后一次相关修改后，Coordinator 重跑必要或触发的 `VER-*`。Spec status 只表示规格生命周期，单独不决定工作的开始或完成。Coordinator 将执行状态保留在 Orca Task、Dispatch、验证和 Review。Review Task 授权 reviewer 读取实际绑定候选的验证结果和 Spec 要求直接检查的证据。
 
 ## 3. Implementation Dispatch 与 atomic commit
 
