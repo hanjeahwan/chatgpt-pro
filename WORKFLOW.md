@@ -4,7 +4,7 @@
 
 ```mermaid
 flowchart TD
-    C0[Coordinator: 验证 Orca runtime 与 Skills] --> C1[Coordinator: 创建或复用独立 Orca worktree]
+    C0[Coordinator: 验证 Orca runtime、Skills 与事件唤醒能力 preflight] --> C1[Coordinator: 创建或复用独立 Orca worktree]
     C1 --> C2[Coordinator: 建立或继续 Run 并创建当前 Task]
     C2 --> S0{派发前 Task source、Spec references 与共享合同仍有效?}
     S0 -- 否 --> P0[Coordinator: 更新规划与 planning_base_sha，创建或修订替代 Task]
@@ -90,14 +90,15 @@ Implementation、remediation 与 review 三条 worker lane 共用同一套 paren
 
 1. Dispatch 成功后更新最小 checkpoint（第 9 节），Coordinator terminal 保持打开并进入 idle；进入 idle 只表示当前模型回合结束，Coordinator 不保持阻塞等待命令，不基于 timeout 重新检查，也不建立定时轮询。从派发到 Run 结算或清理前，同一个 Coordinator terminal 只绑定一个 active Run，不复用该 terminal 运行其他 active Run；checkpoint 保存该 Run / active Task / Dispatch 与运行期确认的 parent terminal handle，compact 或接手恢复后仍指向同一 Run。
 2. child 独立执行；只在真正阻塞、需要升级或完成时产生正式事件：question、escalation 或 worker_done。heartbeat 只作为 Orca runtime 存活信号，不触发 Coordinator，也不是完成或放行证据。
-3. 正式事件先通过 Orca 写入 Run inbox，再通过 Orca terminal delivery 对 parent 发送一次性 wake；wake 只发送给 Dispatch 契约携带的运行期确认 parent terminal handle，不从命名、branch 或本地上下文推断 target，也不得对非 terminal 对象 ID 发送。question 使用版本匹配的 Orca parent-addressed ask；正式 question 持久化后必须产生恰好一次 parent wake，ask 已内建 wake 时不得重复发送。
-4. wake signal 不复制结果内容，Run inbox 是事件事实源；同一个 Coordinator session 自动继续并处理当前 Deliveries，每个 Delivery 的全部 Message 处理后再确认。
+3. 正式事件先通过 Orca 写入 Run inbox，再通过 Orca terminal delivery 对 parent 发送一次性 wake；wake 只发送给 Dispatch 契约携带的运行期确认 parent terminal handle，不从命名、branch 或本地上下文推断 target，也不得对非 terminal 对象 ID 发送。发送 terminal wake 前，child 先用 runtime 确认的 queued-input 能力，或执行一次原生 tui-idle 等待（terminal 输入同步，不是 Coordinator 轮询）。wake 命令报告 stale handle 时：从 Orca runtime 重新获取一次 Coordinator terminal handle，更新 active Dispatch 的运行时元数据与 checkpoint，再重试一次 wake；第二次失败按 runtime failure 处理并升级。durable Run inbox 事件始终是权威事实，重试不得复制事件。question 使用版本匹配的 Orca parent-addressed ask；正式 question 持久化后必须产生恰好一次 parent wake，ask 已内建 wake 时不得重复发送。
+4. wake signal 不复制结果内容，Run inbox 是事件事实源；同一个 Coordinator session 自动继续并处理当前 Deliveries，每个 Delivery 的全部 Message 处理后再确认。wake 处理幂等：没有可处理的未确认 Delivery 时，Coordinator 直接回到 idle，不做状态叙述、terminal 读取或 runtime 刷新。
 5. Coordinator 接受结果、回复、重规划或继续主流程；每次回复 child、修订 Dispatch 或仍有 active child 而再次进入 idle 前，都刷新最小 checkpoint（第 9 节）。
-6. 事件唤醒路径必须通过 targeted smoke-test 验证（派发过 supervised child 的 Task 必需，见第 12 节 Merge 条件）：派发 minimal child，写入一个持久化非 heartbeat 正式事件，验证恰好一次、不含业务 payload 的 parent wake；再发送 heartbeat，验证不产生 parent wake；evidence 绑定被 Review 的 HEAD 与 Orca runtime 版本。
+6. 事件唤醒能力 preflight 在每个 Run 的第一次 supervised Dispatch 前验证一次，不逐 Task 重复（不为每个 implementation/review Task 派发 minimal child）：派发 minimal child，验证三项——(a) worker_done/escalation：持久化正式事件后产生恰好一次、无业务 payload 的 parent wake；(b) question：验证版本匹配的 ask 是否内建唤醒 parent；不内建时，验证官方支持的非阻塞 question-persist-then-wake 路径（先持久化 question，再在 tui-idle 后发送恰好一次固定 wake）；(c) heartbeat：不产生 parent wake。当前 Orca runtime 版本无法证明 (b) 时，在第一次 supervised Dispatch 前停止，不在 Merge 时才发现。复用条件（Orca runtime 版本、Coordinator terminal、terminal 路由能力、事件/唤醒通信合同均未变化）满足时沿用记录，仅在 Orca 重启、runtime 版本变化、Coordinator terminal 更换或 wake 投递失败后重做；结果存入 Orca Run result、worktree comment 或 checkpoint 的 'Decisions / blockers / unverified items'。
 
 规则：
 
 - child 的正式事件直接触发同一个 Coordinator session 继续处理；Coordinator 对最终结果负责，但负责不代表持续观察 child terminal。
+- Coordinator 对 child 的回复使用版本匹配的 Orchestration answer/reply/send 路径；terminal delivery 只用于对 parent 发送无业务 payload 的 wake，绝不用于向 child 发送业务消息。
 - Runtime 对象和 task worktree 在集成后由 Coordinator 结算或清理（第 8 节）。
 
 ## 7. 独立 Review 与 finding 修复
@@ -120,7 +121,7 @@ Review 与 remediation lane 的派发、事件接收和 idle 行为遵循第 6 �
 ## 9. Checkpoint 与清理
 
 - 优先用 Orca worktree comment 保存一行进度；需要更多恢复上下文时，在当前 worktree 使用 `.orca-tmp/session-handoff.md`（该目录已被根 `.gitignore` 忽略）。规则落地前只使用 worktree comment。
-- checkpoint 只保存 8 个字段：Objective；Worktree / branch / target；Last stable HEAD；Run / active Task / Dispatch / parent terminal handle；Current writer and scope；Last completed action；Next action；Decisions / blockers / unverified items。
+- checkpoint 只保存 8 个字段：Objective；Worktree / branch / target；Last stable HEAD；Active Task / Dispatch:；Current writer and scope；Last completed action；Next action；Decisions / blockers / unverified items。其中 'Active Task / Dispatch:' 的值只放运行时引用：run=<run-id>；task=<task-id>；dispatch=<dispatch-id>；parent-terminal=<runtime handle>，不新增第九个字段。
 - 不保存 heartbeat、等待时长、Message 镜像、terminal transcript、runtime task graph、自定义任务状态、逐任务 evidence 或 finding 状态表；checkpoint 不是 Task ledger 镜像。与现场冲突时，以 Orca runtime、Git、requirement source 和适用 Spec 为准。child worktree 不继承父 worktree 的 ignored 文件，跨 worktree 上下文通过 Orca Task spec 或消息传递。
 - 只在 context compact 前、ownership 交接前、关键决策、阻塞或重规划时，以及恢复并完成现场校准后更新；派发 child 后、回复 child 后、修订 Dispatch 后或仍有 active child 而再次进入 idle 前，刷新 checkpoint。恢复顺序：读取 handoff 与当前 worktree checkpoint → 读取 Git 与 Orca runtime → 读取 requirement source 与适用 Spec → 修正过期摘要 → 从 Next action 继续。
 - 任务结束且不再需要恢复后，删除 `.orca-tmp/session-handoff.md`；`git clean -fdX` 前确认不再需要 checkpoint。
@@ -136,6 +137,7 @@ Review 与 remediation lane 的派发、事件接收和 idle 行为遵循第 6 �
 - [ ] worktree clean，或已有修改的负责人和用途已明确。
 - [ ] Task 的 requirement source、适用 Spec references、write scope、required checks 和 dependencies 已明确。
 - [ ] 没有两个 writer 修改同一文件或共享状态范围。
+- [ ] 本 Run 第一次 supervised Dispatch 前，事件唤醒能力 preflight 已通过，或复用条件满足并沿用有效记录（第 6 节）；preflight 未通过时不得派发第一个 supervised child。
 - [ ] 高风险变化已识别必要的 Spec、manual/live verification 和 Review。
 
 ## 12. Merge 条件
@@ -145,7 +147,6 @@ Review 与 remediation lane 的派发、事件接收和 idle 行为遵循第 6 �
 - [ ] Coordinator 在最终相关修改后运行的自动化检查通过，结果绑定最终 HEAD。
 - [ ] 当前 requirement source 与适用 Spec 仍支持最终实现和验收条件。
 - [ ] 必需的 manual/live verification 已完成，或未验证原因已记录。
-- [ ] 派发过 supervised child 的 Task：事件唤醒 targeted smoke-test 已通过——一个持久化非 heartbeat 正式事件产生恰好一次无业务 payload 的 parent wake，heartbeat 不产生 parent wake，evidence 绑定 reviewed HEAD 与 Orca runtime 版本。
 - [ ] 任务要求的独立 Review 已完成，结论绑定最终 HEAD，阻塞 finding 已关闭。
 - [ ] 最终 diff、未验证项和剩余风险已检查并报告。
 - [ ] required Dispatch 已完成并被接受，阻塞 question/escalation 已解决，writer ownership 已归还，没有仍会修改最终候选 HEAD 的 active Dispatch。
