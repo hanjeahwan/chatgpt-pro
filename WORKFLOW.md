@@ -114,7 +114,7 @@ Coordinator 区分三个独立判断：Message 是否属于预期 Task 与对应
 
 ### Coordinator 原生等待循环
 
-Implementation、remediation 与 review 三条 worker lane 共用同一个原生监督循环：Coordinator 派发成功后不结束当前模型回合，在当前回合内滚动执行有界 `check --wait` 消费 Run inbox 的 FIFO Delivery；不依赖 child 发送 wake signal、terminal input、terminal delivery 或后台 waiter。命令、超时与恢复细节以版本匹配的 `orchestration` Skill 和运行时回执为准，本节只规定仓库级不变序列。Coordinator 指监督方 session，worker 指被派发的 supervised worker，不是 Git branch 关系。
+Implementation、remediation 与 review 三条 worker lane 共用同一个原生监督循环：Coordinator 派发成功后不结束当前模型回合，在当前回合内滚动执行有界 `check --wait` 消费 Run inbox 的 FIFO Delivery；不依赖 worker 发送 wake signal、terminal input、terminal delivery 或后台 waiter。命令、超时与恢复细节以版本匹配的 `orchestration` Skill 和运行时回执为准，本节只规定仓库级不变序列。Coordinator 指监督方 session，worker 指被派发的 supervised worker，不是 Git branch 关系。
 
 1. 派发成功后记录必要的 Run / Task / Dispatch 引用（第 9 节 checkpoint），立即在当前模型回合内执行有界 `check --wait`，等待 `worker_done`、`escalation`、`question`；worker lane 异步执行，不是 Coordinator 进入等待的前置条件；不得用 sleep、周期 terminal read 或后台 waiter 替代。
 2. `check --wait` 返回该 Run 的 oldest FIFO Delivery：处理该 Delivery 的全部 Message；类型过滤只决定何时返回，不缩减该 Delivery 内必须处理的消息；ack 前该批次会原样重放。
@@ -131,7 +131,7 @@ Implementation、remediation 与 review 三条 worker lane 共用同一个原生
 规则：
 
 - Coordinator 对最终结果负责，但负责不表示持续观察 worker terminal；进度以 Delivery 事件为准。
-- Coordinator 对 worker 的正式回复使用版本匹配的 Orchestration answer/reply/send 路径；terminal input、terminal delivery 或 child signal 不是监督生命周期的恢复机制。
+- Coordinator 对 worker 的正式回复使用版本匹配的 Orchestration answer/reply/send 路径；terminal input、terminal delivery 或 worker signal 不是监督生命周期的恢复机制。
 - Runtime 对象和 task worktree 在集成后由 Coordinator 清理（第 8 节）；Run 是 durable 命名空间与 inbox，不执行关闭动作。
 
 ## 7. 独立 Review 与 finding 修复

@@ -34,7 +34,7 @@
 根据用户请求匹配任务场景：
 
 - **监督式协作**：例如“把任务拆成 A、B、C，交给多个 Agent。”使用 `orchestration`
-  Skill。你负责监督并做最终汇总：建立或绑定 Run、创建 Task、派发 supervised worker；派发成功后保持当前模型回合，滚动执行版本匹配的有界 `check --wait` 消费 Run inbox 的 FIFO Delivery，直到 expected Dispatch 全部结算。每个 Delivery 的全部 Message 处理完、正式副作用完成后最后 ack，然后继续等待或按退出条件结束；timeout、空结果或 heartbeat 不是完成或失败。不得以 terminal monitoring、terminal input、terminal delivery 或 child signal 代替 Orchestration Delivery。Worker 独立执行，只在真正阻塞、需要升级或完成时通过 Orca 联系 Coordinator。Coordinator 中断后只能显式从 Orca runtime 与未 ack Delivery 恢复，不承诺自动继续。循环的完整约束见 WORKFLOW.md 第 6 节。
+  Skill。你负责监督并做最终汇总：建立或绑定 Run、创建 Task、派发 supervised worker；派发成功后保持当前模型回合，滚动执行版本匹配的有界 `check --wait` 消费 Run inbox 的 FIFO Delivery，直到 expected Dispatch 全部结算。每个 Delivery 的全部 Message 处理完、正式副作用完成后最后 ack，然后继续等待或按退出条件结束；timeout、空结果或 heartbeat 不是完成或失败。不得以 terminal monitoring、terminal input、terminal delivery 或 worker signal 代替 Orchestration Delivery。Worker 独立执行，只在真正阻塞、需要升级或完成时通过 Orca 联系 Coordinator。Coordinator 中断后只能显式从 Orca runtime 与未 ack Delivery 恢复，不承诺自动继续。循环的完整约束见 WORKFLOW.md 第 6 节。
 - **完整任务交接**：例如“把这个任务交给另一个 Agent 完成，你不需要继续跟踪。”使用 `orca-cli` Skill。
 - **普通 Orca 操作**：例如“创建一个 Worktree”“在当前 Worktree 启动新 Agent”或“读取指定 Terminal 的输出。”使用 `orca-cli` Skill。
 - **边界不明确**：用户仅要求“交给另一个 Agent 或 Worktree”，但没有要求监督、等待或汇总结果时，按完整任务交接处理。
