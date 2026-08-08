@@ -45,4 +45,4 @@ pnpm collab -- close <taskId>
 
 ## 边界
 
-Collab 不扫描或理解仓库，不检查 Git 状态或秘密，不应用 Pro 回复，也不执行、提交、合并或发布代码。`close` 只关闭本地浏览器；`archive` 只归档目标 Web conversation。完整行为和验收合同见 [浏览器协作 Spec](docs/specs/2026-08-03-chatgpt-pro-browser-collaboration.md)。
+Collab 不扫描或理解仓库，不检查 Git 状态或秘密，不应用 Pro 回复，也不执行、提交、合并或发布代码。`close` 只关闭本地浏览器，并把 task 保留为可恢复暂停态：同一 task 的后续 feedback 先 `status`，按 `nextAction` 执行 `recover`，继续原 canonical conversation；`archive` 仍独立。完整行为和验收合同见 [浏览器协作 Spec](docs/specs/2026-08-03-chatgpt-pro-browser-collaboration.md)。

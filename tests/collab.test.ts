@@ -14,6 +14,7 @@ import {
   artifactPath,
   collabPaths,
   ensureCollabDirectories,
+  responsePath,
   savePromptCopy,
 } from '../skills/chatgpt-pro-collab/scripts/session.ts';
 import { StateStore } from '../skills/chatgpt-pro-collab/scripts/state.ts';
@@ -1835,6 +1836,80 @@ describe('BEH-008 closed task recovery to the same conversation', () => {
     store.close();
   });
 
+  it('recovers a closed task with a frozen capturing turn back to wait without resending', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const promptPath = join(fixture.root, 'closed-capturing.md');
+    await writeFile(promptPath, 'capturing close');
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+    const store = new StateStore(fixture.paths.database);
+    store.freezeCapture(task.taskId, turn.turnId, responsePath(fixture.paths, task.taskId, turn.turnId), []);
+    store.close();
+    await fixture.service.close(task.taskId);
+    fixture.browser.sessionAvailabilityResult = 'missing';
+
+    expect(await fixture.service.status(task.taskId)).toMatchObject({ taskStatus: 'closed', nextAction: 'recover' });
+    const recovered = await fixture.service.recover(task.taskId);
+    expect(recovered).toMatchObject({ taskStatus: 'active', turnStatus: 'capturing', nextAction: 'wait' });
+    expect(fixture.browser.recoveredConversations).toEqual([task.taskId]);
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireTask(task.taskId)).toMatchObject({
+      status: 'active',
+      conversationId: `conversation-${task.taskId}`,
+    });
+    expect(reopened.requireTurn(task.taskId, turn.turnId)).toMatchObject({ status: 'capturing' });
+    reopened.close();
+
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 20_000, 20_000)).resolves.toMatchObject({
+      status: 'completed',
+    });
+    const finalStore = new StateStore(fixture.paths.database);
+    expect(finalStore.requireTurn(task.taskId, turn.turnId).status).toBe('completed');
+    expect(finalStore.listTurns(task.taskId)).toHaveLength(1);
+    finalStore.close();
+    expect(fixture.browser.expectedConversationIds).toEqual([null]);
+    expect(fixture.browser.expectedAssistantTurnIds).toEqual([null]);
+  });
+
+  it('keeps a closed bound task closed when conversation identity verification fails and recovers on retry', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const promptPath = join(fixture.root, 'closed-identity-fails.md');
+    await writeFile(promptPath, 'identity fails');
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+    await fixture.service.wait(task.taskId, turn.turnId, 20_000, 20_000);
+    await fixture.service.close(task.taskId);
+    fixture.browser.sessionAvailabilityResult = 'missing';
+    fixture.browser.nextRecoverConversationIdentityFailureTaskId = task.taskId;
+
+    await expect(fixture.service.recover(task.taskId)).rejects.toMatchObject({ code: 'BROWSER_COMMAND_FAILED' });
+    const store = new StateStore(fixture.paths.database);
+    expect(store.requireTask(task.taskId)).toMatchObject({
+      status: 'closed',
+      closedAt: expect.any(String),
+      conversationId: `conversation-${task.taskId}`,
+      conversationUrl: `https://chatgpt.com/c/conversation-${task.taskId}`,
+    });
+    expect(store.requireTurn(task.taskId, turn.turnId).status).toBe('completed');
+    store.close();
+    expect(fixture.browser.recoveredConversations).toEqual([]);
+
+    const recovered = await fixture.service.recover(task.taskId);
+    expect(recovered).toMatchObject({ taskStatus: 'active', browserStatus: 'available', nextAction: 'none' });
+    expect(fixture.browser.recoveredConversations).toEqual([task.taskId]);
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireTask(task.taskId)).toMatchObject({
+      status: 'active',
+      closedAt: null,
+      conversationId: `conversation-${task.taskId}`,
+      conversationUrl: `https://chatgpt.com/c/conversation-${task.taskId}`,
+    });
+    expect(reopened.requireTurn(task.taskId, turn.turnId).status).toBe('completed');
+    reopened.close();
+  });
+
   it('recovers an unbound closed task to the fixed Project blank composer', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
@@ -2337,6 +2412,7 @@ class FakeBrowser implements CollabBrowser {
   readonly downloadedArtifacts: string[] = [];
   nextDownloadFailureSourceUrl: string | null = null;
   nextStartFailureCode: string | null = null;
+  nextRecoverConversationIdentityFailureTaskId: string | null = null;
   sessionAvailabilityResult: 'available' | 'missing' | 'unknown' = 'available';
   nextVerifySafeComposerFailureTaskId: string | null = null;
   observedOperations = 0;
@@ -2536,7 +2612,7 @@ class FakeBrowser implements CollabBrowser {
   }
 
   /**
-   * Records one fake conversation recovery navigation.
+   * Records one fake conversation recovery navigation, with an optional injected identity failure.
    *
    * @param taskId Task identifier.
    * @param _sessionName Unused named session.
@@ -2544,7 +2620,7 @@ class FakeBrowser implements CollabBrowser {
    * @param conversationId Database-bound identity.
    * @param observer Task-lease child-process observer.
    * @returns The recovered conversation identity.
-   * @throws {Error} This fake recovery does not throw.
+   * @throws {BrowserError} While the injected one-shot identity mismatch is armed.
    */
   async recoverConversation(
     taskId: string,
@@ -2554,6 +2630,14 @@ class FakeBrowser implements CollabBrowser {
     observer?: BrowserOperationObserver,
   ) {
     this.observe(observer);
+    if (this.nextRecoverConversationIdentityFailureTaskId === taskId) {
+      this.nextRecoverConversationIdentityFailureTaskId = null;
+      throw new BrowserError(
+        'BROWSER_COMMAND_FAILED',
+        'recover conversation',
+        `injected conversation identity mismatch for ${taskId}`,
+      );
+    }
     this.recoveredConversations.push(taskId);
     return Promise.resolve({ conversationId, conversationUrl });
   }
