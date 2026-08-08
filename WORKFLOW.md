@@ -31,7 +31,7 @@ Spec 增加或实质修订后，Coordinator 在拆分或继续派发前执行该
 - Coordinator 使用 `orchestration` Skill 将 Implementation Task 派发给 `AGENTS.md` 定义的 Implementation writer，工作位置为本次 task worktree。
 - Implementation writer 只修改 Task 的 write scope，并按 `CODE_STANDARD.md` 实现满足验收条件的最小完整改动。
 - 每个 atomic Task 默认形成一个 atomic commit；若一个 Task 包含多个无关实现目的，Implementation writer 将其交回 Coordinator 重新拆分。
-- Implementation writer 提交前检查 diff 并运行针对性检查，然后通过当前 Dispatch 的 `worker_done` 报告 commit SHA、实际检查和未解决问题。
+- Implementation writer 提交前检查 diff 并运行针对性检查；`worker_done` 前必须完成该 atomic Task 直接受影响且前置条件可用的验证（包括适用的 live VER），前置不可用时报告未验证项，不得把 Task 描述为已经完整证明，随后报告 commit SHA、实际检查和未解决问题。
 - Coordinator 只接受属于当前 Task 和 Dispatch 的 `worker_done`。接受前，Coordinator 核对 commit SHA、write scope、检查结果、writer ownership 和 worktree 状态。
 
 ## 4. 候选与全量验证
