@@ -1270,6 +1270,27 @@ describe('BEH-003 send journal and archive attachments', () => {
     reopened.close();
   });
 
+  it('returns recover when the draft session disappears after cleanup', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const promptPath = join(fixture.root, 'draft-prompt.md');
+    await writeFile(promptPath, 'draft');
+    const store = new StateStore(fixture.paths.database);
+    const turn = store.beginSendTurn(task.taskId, 'draft-turn', promptPath, [], 'draft-op');
+    await savePromptCopy(fixture.paths, task.taskId, turn.turn.id, Buffer.from('draft'));
+    store.close();
+    const cleanSendComposer = fixture.browser.cleanSendComposer.bind(fixture.browser);
+    fixture.browser.cleanSendComposer = async (...args) => {
+      await cleanSendComposer(...args);
+      fixture.browser.sessionAvailabilityResult = 'missing';
+    };
+
+    const status = await fixture.service.recover(task.taskId);
+
+    expect(status).toMatchObject({ turnStatus: null, browserStatus: 'missing', nextAction: 'recover' });
+  });
+
   it('rebuilds an unbound interrupted draft from seed when in-page cleanup fails', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();

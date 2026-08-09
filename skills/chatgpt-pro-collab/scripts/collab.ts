@@ -1538,7 +1538,8 @@ export class CollabService {
         );
       }
       const after = await this.#browser.sessionAvailability(task.playwrightSession);
-      return { ...store.getStatus(taskId, after), nextAction: 'send' };
+      const status = store.getStatus(taskId, after);
+      return status.nextAction === 'none' && after === 'available' ? { ...status, nextAction: 'send' } : status;
     }
     if (task.status === 'starting' || operation?.kind === 'start') {
       const seedStatePath = await requireSeedState(this.#paths);
