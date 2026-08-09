@@ -413,14 +413,14 @@ async function assertReadableRegularFile(filePath: string, label: string): Promi
 /**
  * Publishes a new file without an overwrite window.
  *
- * A hard link makes the fully flushed temporary inode visible at the final path and fails
- * atomically when that path already exists. This is stricter than a rename, which would
- * overwrite an earlier transcript on POSIX.
+ * A hard link makes the fully written and closed temporary inode visible at the final path
+ * and fails atomically when that path already exists. This protects publication from process
+ * interruption, but does not promise persistence across power loss.
  *
  * @param target Absolute target path.
  * @param data Bytes or text to publish.
  * @returns A promise that resolves after the temporary name is removed.
- * @throws {Error} If writing, syncing, publishing, or cleanup fails.
+ * @throws {Error} If writing, closing, publishing, or cleanup fails.
  */
 async function writeNewFileAtomically(target: string, data: Uint8Array | string): Promise<void> {
   await mkdir(dirname(target), { recursive: true });
@@ -429,7 +429,6 @@ async function writeNewFileAtomically(target: string, data: Uint8Array | string)
   try {
     try {
       await file.writeFile(data);
-      await file.sync();
     } finally {
       await file.close();
     }
