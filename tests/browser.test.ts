@@ -2672,6 +2672,31 @@ describe('BEH-003 and BEH-013 submission verification against page evidence', ()
     expect(verified).toMatchObject({ status: 'submitted', userTurnIdentity: 'conversation-turn-1' });
   });
 
+  it('ignores a long-message disclosure control when matching the saved prompt', async () => {
+    const fixture = submissionPageFixture({
+      pathname: '/g/g-p-123-chatgpt-pro-collab/c/conversation-a',
+      turns: [
+        {
+          testId: 'conversation-turn-1',
+          turn: 'user',
+          promptText: 'exact long prompt',
+          disclosureText: 'Show more',
+        },
+        { testId: 'conversation-turn-2', turn: 'assistant' },
+      ],
+    });
+
+    const verified = await runSubmissionScript(fixture.page, {
+      conversationId: 'conversation-a',
+      previousUserTurnIdentity: null,
+      prompt: 'exact long prompt',
+      attachmentNames: [],
+      expectKind: 'auto-verify-submission',
+    });
+
+    expect(verified).toMatchObject({ status: 'submitted', userTurnIdentity: 'conversation-turn-1' });
+  });
+
   it('does not match when the prompt matches but attachment chips are out of order', async () => {
     const fixture = submissionPageFixture({
       pathname: '/g/g-p-123-chatgpt-pro-collab/c/conversation-a',

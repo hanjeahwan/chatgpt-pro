@@ -3,6 +3,7 @@ export interface SubmissionTurn {
   readonly turn: 'user' | 'assistant';
   readonly promptText?: string;
   readonly chips?: readonly string[];
+  readonly disclosureText?: string;
 }
 
 export interface SubmissionPageOptions {
@@ -143,6 +144,12 @@ export function submissionPageFixture(options: SubmissionPageOptions): Submissio
       const heading = headingLeaf(null);
       const prompt = promptLeaf(turn.promptText, null);
       descendants.push(heading, prompt);
+      if (turn.disclosureText !== undefined) {
+        const button = new SubmissionHtmlElement('', [], null, 'BUTTON');
+        const label = new SubmissionHtmlElement(turn.disclosureText, [], button, 'SPAN');
+        (button.children as LeafElement[]).push(label);
+        descendants.push(button, label);
+      }
       return new (class extends SubmissionHtmlElement {
         getAttribute(name: string): string | null {
           if (name === 'data-testid') {

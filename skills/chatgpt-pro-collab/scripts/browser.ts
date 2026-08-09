@@ -2692,6 +2692,14 @@ const USER_TURN_EVIDENCE = `
         const role = typeof leaf.getAttribute === 'function' ? (leaf.getAttribute('role') || '') : '';
         return /^H[1-6]$/.test(tagName) || role === 'heading';
       };
+      const insideButton = (leaf) => {
+        let ancestor = leaf;
+        while (ancestor !== null && ancestor !== element) {
+          if (ancestor.tagName === 'BUTTON' || ancestor.getAttribute('role') === 'button') return true;
+          ancestor = ancestor.parentElement;
+        }
+        return false;
+      };
       const leafInside = (leaf, container) => {
         let ancestor = leaf.parentElement;
         while (ancestor !== null && ancestor !== element) {
@@ -2715,6 +2723,7 @@ const USER_TURN_EVIDENCE = `
       const attachmentTexts = [];
       const promptParts = [];
       for (const leaf of leaves) {
+        if (insideButton(leaf)) continue;
         const inChip = [...chipContainers].some((container) => leafInside(leaf, container));
         const text = (leaf.textContent || '').trim();
         if (inChip) {
