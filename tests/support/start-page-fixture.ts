@@ -593,6 +593,9 @@ export function startPageFixture(options: StartPageOptions): StartPageFixture {
     },
     locator(selector: string) {
       return {
+        filter(_options: { readonly visible?: boolean }) {
+          return this;
+        },
         count() {
           return Promise.resolve(matches(selector).length);
         },

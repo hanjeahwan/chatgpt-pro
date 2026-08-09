@@ -533,6 +533,7 @@ describe('BEH-002 fixed Project and GPT-5.6 Sol Power 5/5 start context', () => 
     const startSource = await lastScript(fixture.invocations);
     expect(startSource).toContain('role="slider"');
     expect(startSource).toContain('aria-valuenow');
+    expect(startSource).toContain('.filter({ visible: true })');
     expectPageFunctionSyntax(startSource);
   });
 
