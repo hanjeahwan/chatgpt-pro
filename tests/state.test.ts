@@ -599,6 +599,82 @@ describe('BEH-013 failed-response turn resolution state gate', () => {
 });
 
 describe('fresh-start races', () => {
+  it('rejects an old turn table before creating an index that depends on a missing column', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-incompatible-turn-'));
+    const databasePath = join(root, 'state.sqlite');
+    const current = new StateStore(databasePath);
+    current.close();
+    const raw = new DatabaseSync(databasePath);
+    raw.exec(`
+      DROP INDEX turn_task_user_identity;
+      DROP TABLE turn;
+      CREATE TABLE turn (
+        task_id TEXT NOT NULL,
+        id TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (
+          status IN ('sending', 'pending', 'capturing', 'completed', 'failed', 'unknown-submission')
+        ),
+        prompt_path TEXT NOT NULL,
+        attachments_json TEXT NOT NULL,
+        response_path TEXT,
+        artifact_set_recorded INTEGER NOT NULL DEFAULT 0 CHECK (artifact_set_recorded IN (0, 1)),
+        error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (task_id, id),
+        FOREIGN KEY (task_id) REFERENCES task(id)
+      ) STRICT;
+    `);
+    raw.close();
+
+    let thrown: unknown;
+    let opened: StateStore | null = null;
+    try {
+      opened = new StateStore(databasePath);
+    } catch (error) {
+      thrown = error;
+    }
+    opened?.close();
+    expect(thrown).toBeInstanceOf(StateError);
+    expect(thrown).toMatchObject({
+      code: 'STATE_SCHEMA_INCOMPATIBLE',
+      message: expect.stringMatching(/does not match the current schema/),
+    });
+  });
+
+  it('rejects a same-column task table with an obsolete status check', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-incompatible-task-status-'));
+    const databasePath = join(root, 'state.sqlite');
+    const raw = new DatabaseSync(databasePath);
+    raw.exec(`
+      CREATE TABLE task (
+        id TEXT PRIMARY KEY,
+        playwright_session TEXT NOT NULL UNIQUE,
+        conversation_id TEXT,
+        conversation_url TEXT,
+        status TEXT NOT NULL CHECK (status IN ('active', 'closing', 'closed', 'failed')),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        closed_at TEXT,
+        browser_operation_token TEXT,
+        browser_operation_pid INTEGER,
+        browser_operation_name TEXT,
+        browser_operation_child_pid INTEGER,
+        browser_operation_command_pid INTEGER
+      ) STRICT;
+    `);
+    raw.close();
+
+    expect(() => {
+      const store = new StateStore(databasePath);
+      try {
+        store.createStartingTask('task-a', 'session-a', 'operation-a');
+      } finally {
+        store.close();
+      }
+    }).toThrowError(/does not match the current schema/);
+  });
+
   it('rejects an incompatible task table instead of migrating it', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collab-incompatible-task-'));
     const databasePath = join(root, 'state.sqlite');

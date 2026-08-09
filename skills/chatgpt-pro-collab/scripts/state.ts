@@ -201,6 +201,7 @@ export class StateStore {
     `);
     requireCurrentTaskSchema(this.#database);
 
+    const turnTableExisted = tableExists(this.#database, 'turn');
     this.#database.exec(`
       CREATE TABLE IF NOT EXISTS turn (
         task_id TEXT NOT NULL,
@@ -220,10 +221,16 @@ export class StateStore {
         FOREIGN KEY (task_id) REFERENCES task(id)
       ) STRICT;
     `);
+    requireCurrentTurnSchema(this.#database);
+    if (turnTableExisted && !hasUniqueIndex(this.#database, 'turn', ['task_id', 'user_turn_identity'])) {
+      throw new StateError(
+        'STATE_SCHEMA_INCOMPATIBLE',
+        'the turn table does not match the current schema; rebuild the local Collab state database',
+      );
+    }
     this.#database.exec(
       'CREATE UNIQUE INDEX IF NOT EXISTS turn_task_user_identity ON turn (task_id, user_turn_identity)',
     );
-    requireCurrentTurnSchema(this.#database);
 
     this.#database.exec(`
       CREATE TABLE IF NOT EXISTS artifact (
@@ -2237,7 +2244,7 @@ function computeNextAction(
  *
  * @param database Process-local SQLite connection.
  * @returns Nothing when the current `task` schema is present.
- * @throws {StateError} If the task table is absent or its columns differ from the current schema.
+ * @throws {StateError} If the task table differs from the current schema contract.
  */
 function requireCurrentTaskSchema(database: DatabaseSync): void {
   const columns = database
@@ -2265,7 +2272,10 @@ function requireCurrentTaskSchema(database: DatabaseSync): void {
     columns.length !== expected.length ||
     expected.some((column) => {
       return !columns.includes(column);
-    })
+    }) ||
+    !tableHasCheck(database, 'task', "status IN ('starting', 'active', 'closing', 'closed', 'failed')") ||
+    !hasUniqueIndex(database, 'task', ['id']) ||
+    !hasUniqueIndex(database, 'task', ['playwright_session'])
   ) {
     throw new StateError(
       'STATE_SCHEMA_INCOMPATIBLE',
@@ -2279,7 +2289,7 @@ function requireCurrentTaskSchema(database: DatabaseSync): void {
  *
  * @param database Process-local SQLite connection.
  * @returns Nothing when the current `turn` schema is present.
- * @throws {StateError} If the turn table is absent or its columns differ from the current schema.
+ * @throws {StateError} If the turn table differs from the current schema contract.
  */
 function requireCurrentTurnSchema(database: DatabaseSync): void {
   const columns = database
@@ -2305,13 +2315,95 @@ function requireCurrentTurnSchema(database: DatabaseSync): void {
     columns.length !== expected.length ||
     expected.some((column) => {
       return !columns.includes(column);
-    })
+    }) ||
+    !tableHasCheck(
+      database,
+      'turn',
+      "status IN ('sending', 'pending', 'capturing', 'completed', 'failed', 'unknown-submission')",
+    ) ||
+    !tableHasCheck(database, 'turn', 'artifact_set_recorded IN (0, 1)') ||
+    !hasUniqueIndex(database, 'turn', ['task_id', 'id'])
   ) {
     throw new StateError(
       'STATE_SCHEMA_INCOMPATIBLE',
       'the turn table does not match the current schema; rebuild the local Collab state database',
     );
   }
+}
+
+/**
+ * Reports whether one schema table already exists.
+ *
+ * @param database Process-local SQLite connection.
+ * @param tableName Fixed internal table name.
+ * @returns `true` when SQLite already contains the table.
+ * @throws {Error} If SQLite cannot inspect its schema catalog.
+ */
+function tableExists(database: DatabaseSync, tableName: string): boolean {
+  return database.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?").get(tableName) !== undefined;
+}
+
+/**
+ * Checks one required table-level CHECK expression after normalizing SQL whitespace.
+ *
+ * @param database Process-local SQLite connection.
+ * @param tableName Fixed internal table name.
+ * @param expression Required CHECK expression from the current schema.
+ * @returns `true` when the stored table definition contains that expression.
+ * @throws {Error} If SQLite cannot inspect its schema catalog.
+ */
+function tableHasCheck(database: DatabaseSync, tableName: string, expression: string): boolean {
+  const value = database.prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?").get(tableName);
+  if (value === undefined) {
+    return false;
+  }
+  const sql = text(record(value).sql, `${tableName} schema SQL`);
+  return normalizeSchemaSql(sql).includes(`check(${normalizeSchemaSql(expression)})`);
+}
+
+/**
+ * Checks for one exact unique-key contract without depending on SQLite's generated index name.
+ *
+ * @param database Process-local SQLite connection.
+ * @param tableName Fixed internal table name.
+ * @param expectedColumns Ordered columns that must form the unique index.
+ * @returns `true` when one unique index covers exactly those columns.
+ * @throws {Error} If SQLite cannot inspect index metadata.
+ */
+function hasUniqueIndex(database: DatabaseSync, tableName: string, expectedColumns: readonly string[]): boolean {
+  const indexes = database
+    .prepare('SELECT name FROM pragma_index_list(?) WHERE "unique" = 1 AND partial = 0')
+    .all(tableName);
+  return indexes.some((value) => {
+    const indexName = text(record(value).name, `${tableName} unique index name`);
+    const columns = database
+      .prepare('SELECT name FROM pragma_index_info(?) ORDER BY seqno')
+      .all(indexName)
+      .map((column) => {
+        return text(record(column).name, `${tableName} unique index column`);
+      });
+    return (
+      columns.length === expectedColumns.length &&
+      expectedColumns.every((column, index) => {
+        return columns[index] === column;
+      })
+    );
+  });
+}
+
+/**
+ * Normalizes schema SQL so formatting differences do not alter compatibility checks.
+ *
+ * @param value Stored or expected SQL fragment.
+ * @returns Lowercase SQL without insignificant whitespace around punctuation.
+ * @throws {Error} This normalizer does not throw for strings.
+ */
+function normalizeSchemaSql(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .replace(/\s*([(),])\s*/g, '$1')
+    .trim();
 }
 
 /**
