@@ -2727,7 +2727,7 @@ describe('BEH-004 periodic reload during pending observation', () => {
     finalStore.close();
   });
 
-  it('performs the first page observation even when the wait lease exhausts the observation window', async () => {
+  it('returns pending without observing when the wait lease exhausts the observation window', async () => {
     const fixture = await reloadServiceFixture((paths, advance) => {
       return new ClockAdvancingWaitLeaseStore(paths.database, () => {
         advance(5);
@@ -2739,15 +2739,16 @@ describe('BEH-004 periodic reload during pending observation', () => {
     await writeFile(promptPath, 'exhausted window');
     const turn = await fixture.service.send(task.taskId, promptPath, []);
 
-    await expect(fixture.service.wait(task.taskId, turn.turnId, 1, 20_000)).resolves.toMatchObject({
-      status: 'completed',
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 1, 20_000)).resolves.toEqual({
+      status: 'pending',
+      taskId: task.taskId,
       turnId: turn.turnId,
     });
-    expect(fixture.browser.observeResponseCalls).toBe(1);
-    expect(fixture.browser.observeResponseBudgets).toEqual([1]);
+    expect(fixture.browser.observeResponseCalls).toBe(0);
+    expect(fixture.browser.observeResponseBudgets).toEqual([]);
     expect(fixture.browser.reloadConversationCalls).toBe(0);
     const store = new StateStore(fixture.paths.database);
-    expect(store.requireTurn(task.taskId, turn.turnId).status).toBe('completed');
+    expect(store.requireTurn(task.taskId, turn.turnId).status).toBe('pending');
     store.close();
   });
 

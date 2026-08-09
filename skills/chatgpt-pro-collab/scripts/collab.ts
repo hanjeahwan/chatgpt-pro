@@ -838,9 +838,6 @@ export class CollabService {
   /**
    * Observes within one finite window, then captures within one independent finite deadline.
    *
-   * Every positive observation window performs at least one page observation even when local
-   * wait overhead has exhausted the window: the first observation is never skipped for an
-   * early pending return or a reload, and a completed first observation still captures.
    * While the pending turn stays uncaptured, the same monotonic schedule unconditionally
    * reloads the bound canonical conversation every 300000ms of uncaptured time inside the
    * observation budget. Each observation slice is capped at the smaller of the remaining
@@ -879,7 +876,6 @@ export class CollabService {
       }
       const initialTurn = store.requireTurn(taskId, turnId);
       let captureDeadline = initialTurn.status === 'capturing' ? waitStartedAt + captureTimeoutMs : null;
-      let observedOnce = false;
 
       while (true) {
         const result = await this.#withTaskOperation(store, taskId, 'wait', async (observer) => {
@@ -916,7 +912,7 @@ export class CollabService {
           if (turn.status === 'pending') {
             const remainingObservationMs = remainingMilliseconds(observationDeadline, this.#now);
             const remainingUntilReloadMs = remainingMilliseconds(nextReloadAt, this.#now);
-            if (remainingObservationMs === 0 && observedOnce) {
+            if (remainingObservationMs === 0) {
               return { status: 'pending' as const, taskId, turnId };
             }
             if (remainingObservationMs > 0 && remainingUntilReloadMs === 0) {
@@ -942,10 +938,9 @@ export class CollabService {
               task.playwrightSession,
               task.conversationId,
               userTurnIdentity,
-              Math.max(1, Math.min(remainingObservationMs, remainingUntilReloadMs)),
+              Math.min(remainingObservationMs, remainingUntilReloadMs),
               observer,
             );
-            observedOnce = true;
             if (observed.status === 'pending') {
               return remainingMilliseconds(observationDeadline, this.#now) === 0
                 ? { status: 'pending' as const, taskId, turnId }
