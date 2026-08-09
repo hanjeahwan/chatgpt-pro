@@ -74,6 +74,8 @@ node "<skill-directory>/scripts/collab.ts" wait <taskId> <turnId> <observationWi
 
 每个观察窗口只调用一次 `wait`，不要在调用尚未返回时另行轮询浏览器。结果为 `pending` 时，远端生成与本地任务保持活动；需要继续观察时，再由宿主显式发起一个新窗口。结果为 `completed` 时读取原始 `response.md` 和 `artifactPaths`，由宿主决定如何解释、验证或使用；不要让 Collab 自动执行回复内容。捕获超时会返回错误，后续 `wait` 使用新的 `captureTimeoutMs` 继续同一 turn。前一轮完成后，可在同一 `taskId` 再次 send/wait 以保留 conversation 上下文。
 
+`wait` 观察期间，同一 turn 连续 300000ms 仍未捕获时，Collab 会在该次等待内自动 reload 当前 conversation 以重新水合页面，再继续观察与捕获；触发只由时间决定，不检查页面完成信号，reload 不终止远端生成、不改变 turn 状态，观察窗口到期仍正常返回 `pending`。不要把 reload 或 repeated `pending` 当作失败依据；只有用户明确确认失败时才执行下面的裁决。
+
 只有用户明确说明该 Pro response 已失败或终止时，才裁决原 turn：
 
 ```sh

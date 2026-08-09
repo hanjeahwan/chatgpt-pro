@@ -38,6 +38,7 @@ import {
 import { StateError, StateStore, type OperationRecord, type StatusRecord, type TurnRecord } from './state.ts';
 
 const CAPTURE_ABORT_SETTLE_MS = 250;
+const OBSERVATION_RELOAD_PERIOD_MS = 300_000;
 
 export interface CollabBrowser {
   setup(): Promise<string>;
@@ -58,6 +59,13 @@ export interface CollabBrowser {
     sessionName: string,
     conversationUrl: string,
     conversationId: string,
+    observer?: BrowserOperationObserver,
+  ): Promise<{ readonly conversationId: string; readonly conversationUrl: string }>;
+  reloadConversation(
+    taskId: string,
+    sessionName: string,
+    expectedConversationId: string,
+    expectedUserTurnId: string,
     observer?: BrowserOperationObserver,
   ): Promise<{ readonly conversationId: string; readonly conversationUrl: string }>;
   send(
@@ -212,6 +220,7 @@ export class CollabService {
   readonly #browser: CollabBrowser;
   readonly #storeFactory: () => StateStore;
   readonly #idGenerator: () => string;
+  readonly #now: () => number;
 
   /**
    * Creates the command service with injectable browser, database, and ID boundaries.
@@ -220,6 +229,7 @@ export class CollabService {
    * @param browser Browser side-effect boundary.
    * @param storeFactory Creates one process-local SQLite connection per command.
    * @param idGenerator Collision-resistant task and turn identifier source.
+   * @param now Injectable monotonic clock used by the wait observation schedule.
    * @throws {Error} This constructor does not perform I/O.
    */
   constructor(
@@ -229,11 +239,15 @@ export class CollabService {
       return new StateStore(paths.database);
     },
     idGenerator: () => string = randomUUID,
+    now: () => number = () => {
+      return performance.now();
+    },
   ) {
     this.#paths = paths;
     this.#browser = browser;
     this.#storeFactory = storeFactory;
     this.#idGenerator = idGenerator;
+    this.#now = now;
   }
 
   /**
@@ -791,6 +805,12 @@ export class CollabService {
   /**
    * Observes within one finite window, then captures within one independent finite deadline.
    *
+   * While the pending turn stays uncaptured, the same monotonic schedule unconditionally
+   * reloads the bound canonical conversation every 300000ms of uncaptured time inside the
+   * observation budget; reload time counts against the original observation deadline and
+   * never terminates generation, changes turn state, or sends a continuation. Capturing
+   * retries skip the reload schedule.
+   *
    * @param taskId Active task identifier.
    * @param turnId Submitted turn identifier.
    * @param observationWindowMs Maximum reply-generation observation window for this call.
@@ -807,8 +827,9 @@ export class CollabService {
   ): Promise<WaitResult> {
     requirePositiveMilliseconds('observationWindowMs', observationWindowMs);
     requirePositiveMilliseconds('captureTimeoutMs', captureTimeoutMs);
-    const waitStartedAt = performance.now();
+    const waitStartedAt = this.#now();
     const observationDeadline = waitStartedAt + observationWindowMs;
+    let nextReloadAt = waitStartedAt + OBSERVATION_RELOAD_PERIOD_MS;
 
     return this.#withStore(async (store) => {
       const completed = await completedWaitResult(store, taskId, turnId);
@@ -837,14 +858,14 @@ export class CollabService {
           }
           const conversationId = task.conversationId;
           if (turn.status === 'capturing' && captureDeadline === null) {
-            captureDeadline = performance.now() + captureTimeoutMs;
+            captureDeadline = this.#now() + captureTimeoutMs;
           }
 
           let targetResponsePath = turn.responsePath;
           let expectedAssistantTurnId: string | null = null;
           const captureWasPending = turn.status === 'pending';
           if (turn.status === 'pending') {
-            const remainingObservationMs = remainingMilliseconds(observationDeadline);
+            const remainingObservationMs = remainingMilliseconds(observationDeadline, this.#now);
             if (remainingObservationMs === 0) {
               return { status: 'pending' as const, taskId, turnId };
             }
@@ -853,6 +874,17 @@ export class CollabService {
                 'TRANSCRIPT_INCONSISTENT',
                 `pending turn has no persisted user turn identity: ${turnId}`,
               );
+            }
+            if (this.#now() >= nextReloadAt) {
+              await this.#browser.reloadConversation(
+                taskId,
+                task.playwrightSession,
+                task.conversationId,
+                turn.userTurnIdentity,
+                observer,
+              );
+              nextReloadAt = this.#now() + OBSERVATION_RELOAD_PERIOD_MS;
+              return null;
             }
             const observed = await this.#browser.observeResponse(
               taskId,
@@ -863,14 +895,14 @@ export class CollabService {
               observer,
             );
             if (observed.status === 'pending') {
-              return remainingMilliseconds(observationDeadline) === 0
+              return remainingMilliseconds(observationDeadline, this.#now) === 0
                 ? { status: 'pending' as const, taskId, turnId }
                 : null;
             }
             assertConversation(taskId, task.conversationId, task.conversationUrl, observed);
             expectedAssistantTurnId = observed.assistantTurnId;
             targetResponsePath = responsePath(this.#paths, taskId, turnId);
-            captureDeadline = performance.now() + captureTimeoutMs;
+            captureDeadline = this.#now() + captureTimeoutMs;
           }
 
           if (targetResponsePath === null || captureDeadline === null) {
@@ -891,9 +923,10 @@ export class CollabService {
                 observer,
               );
             },
+            this.#now,
           );
           assertConversation(taskId, conversationId, task.conversationUrl, captured);
-          if (remainingMilliseconds(captureDeadline) === 0) {
+          if (remainingMilliseconds(captureDeadline, this.#now) === 0) {
             throw new CollabError('CAPTURE_TIMEOUT', `response capture timed out: ${turnId}`);
           }
           if (captureWasPending) {
@@ -901,7 +934,7 @@ export class CollabService {
           } else {
             store.verifyArtifactSet(taskId, turnId, captured.artifacts);
           }
-          if (remainingMilliseconds(captureDeadline) === 0) {
+          if (remainingMilliseconds(captureDeadline, this.#now) === 0) {
             throw new CollabError('CAPTURE_TIMEOUT', `response capture timed out: ${turnId}`);
           }
           await publishOrVerifyResponse(targetResponsePath, captured.response);
@@ -913,8 +946,9 @@ export class CollabService {
             task.conversationId,
             captureDeadline,
             observer,
+            this.#now,
           );
-          if (remainingMilliseconds(captureDeadline) === 0) {
+          if (remainingMilliseconds(captureDeadline, this.#now) === 0) {
             throw new CollabError('CAPTURE_TIMEOUT', `response capture timed out: ${turnId}`);
           }
           store.completeTurn(taskId, turnId, targetResponsePath);
@@ -944,6 +978,7 @@ export class CollabService {
    * @param conversationId Database-bound conversation identity.
    * @param captureDeadline Monotonic deadline shared by response and all artifact capture.
    * @param observer Task-lease child-process observer.
+   * @param now Injectable monotonic clock matching the deadline's time base.
    * @returns Readable final artifact paths in response order.
    * @throws {CollabError} If the shared capture deadline expires.
    * @throws {Error} If download, publication, or persisted artifact state is inconsistent.
@@ -956,6 +991,9 @@ export class CollabService {
     conversationId: string,
     captureDeadline: number,
     observer: BrowserOperationObserver,
+    now: () => number = () => {
+      return performance.now();
+    },
   ): Promise<readonly string[]> {
     const artifactPaths: string[] = [];
     const artifacts = store.listArtifacts(taskId, turnId);
@@ -990,6 +1028,7 @@ export class CollabService {
               observer,
             );
           },
+          now,
         );
         let target = artifact.localPath;
         if (target === null) {
@@ -999,7 +1038,7 @@ export class CollabService {
           throw new CollabError('ARTIFACT_INCONSISTENT', `pending artifact path has no filename: ${artifact.ordinal}`);
         }
         await publishOrVerifyArtifact(temporaryPath, target);
-        if (remainingMilliseconds(captureDeadline) === 0) {
+        if (remainingMilliseconds(captureDeadline, now) === 0) {
           throw new CollabError('CAPTURE_TIMEOUT', `artifact capture timed out: ${turnId}`);
         }
         store.completeArtifact(taskId, turnId, artifact.ordinal);
@@ -1009,7 +1048,7 @@ export class CollabService {
         if (store.requireArtifact(taskId, turnId, artifact.ordinal).status === 'pending') {
           store.recordArtifactError(taskId, turnId, artifact.ordinal, errorMessage(error));
         }
-        if (remainingMilliseconds(captureDeadline) === 0) {
+        if (remainingMilliseconds(captureDeadline, now) === 0) {
           throw new CollabError('CAPTURE_TIMEOUT', `artifact capture timed out: ${turnId}`);
         }
         throw error;
@@ -1838,11 +1877,17 @@ function requirePositiveMilliseconds(name: string, value: number): void {
  * Converts a monotonic deadline to a positive integer browser budget.
  *
  * @param deadline Monotonic `performance.now()` deadline.
+ * @param now Injectable monotonic clock matching the deadline's time base.
  * @returns Zero after expiry, otherwise the remaining whole-millisecond ceiling.
  * @throws {Error} This pure arithmetic helper does not throw for a finite deadline.
  */
-function remainingMilliseconds(deadline: number): number {
-  return Math.max(0, Math.ceil(deadline - performance.now()));
+function remainingMilliseconds(
+  deadline: number,
+  now: () => number = () => {
+    return performance.now();
+  },
+): number {
+  return Math.max(0, Math.ceil(deadline - now()));
 }
 
 type CaptureOperationOutcome<T> =
@@ -1856,6 +1901,7 @@ type CaptureOperationOutcome<T> =
  * @param turnId Turn identifier used in the stable timeout diagnostic.
  * @param phase Capture phase used in the timeout diagnostic.
  * @param operation Browser operation started with the remaining budget and host cancellation signal.
+ * @param now Injectable monotonic clock matching the deadline's time base.
  * @returns The operation result when it settles before the deadline.
  * @throws {CollabError} With `CAPTURE_TIMEOUT` after deadline expiry, including delayed failures.
  * @throws {Error} The original browser error when it settles before the deadline.
@@ -1865,8 +1911,11 @@ async function captureOperationWithinDeadline<T>(
   turnId: string,
   phase: 'response' | 'artifact',
   operation: (remainingCaptureMs: number, signal: AbortSignal) => Promise<T>,
+  now: () => number = () => {
+    return performance.now();
+  },
 ): Promise<T> {
-  const remainingCaptureMs = remainingMilliseconds(deadline);
+  const remainingCaptureMs = remainingMilliseconds(deadline, now);
   if (remainingCaptureMs === 0) {
     throw captureTimeout(turnId, phase);
   }
@@ -1878,10 +1927,10 @@ async function captureOperationWithinDeadline<T>(
     })
     .then(
       (value): CaptureOperationOutcome<T> => {
-        return { kind: 'completed', value, settledAt: performance.now() };
+        return { kind: 'completed', value, settledAt: now() };
       },
       (error: unknown): CaptureOperationOutcome<T> => {
-        return { kind: 'failed', error, settledAt: performance.now() };
+        return { kind: 'failed', error, settledAt: now() };
       },
     );
   let deadlineTimer: NodeJS.Timeout | undefined;

@@ -1853,6 +1853,36 @@ describe('BEH-013 browser boundary support', () => {
     expectPageFunctionSyntax(source);
   });
 
+  it('reloads the bound conversation and verifies the rehydrated identity after the fixed CLI reload', async () => {
+    const fixture = await browserFixture([
+      output('reloaded current page'),
+      pageResult({
+        protocol,
+        kind: 'reload-verified',
+        conversationId: 'conversation-a',
+        conversationUrl: 'https://chatgpt.com/c/conversation-a',
+      }),
+    ]);
+
+    const result = await fixture.browser.reloadConversation('task-a', 'session-a', 'conversation-a', 'user-turn-a');
+
+    expect(result).toEqual({
+      conversationId: 'conversation-a',
+      conversationUrl: 'https://chatgpt.com/c/conversation-a',
+    });
+    expect(fixture.invocations[0]?.arguments).toEqual(
+      expect.arrayContaining([expect.stringContaining('--raw'), 'reload']),
+    );
+    const source = await scriptForInvocation(fixture.invocations[1]);
+    expect(source).toContain("kind: 'reload-verified'");
+    expect(source).toContain('user-turn-a');
+    expect(source).toContain('expectedConversationId');
+    expect(source).toContain('\'[data-testid^="conversation-turn-"][data-turn]\'');
+    expect(source).not.toContain('copy-turn-action-button');
+    expect(source).not.toContain('Stop answering');
+    expectPageFunctionSyntax(source);
+  });
+
   it('closes a reused session when the start context fails definitely', async () => {
     const fixture = await browserFixture([
       output('Sessions:\n  - name: session-a\n    state: open\n    pid: 4123\n'),

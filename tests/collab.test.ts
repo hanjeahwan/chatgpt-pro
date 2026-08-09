@@ -2125,6 +2125,117 @@ describe('BEH-004 wait observation anchored on the persisted user turn', () => {
   });
 });
 
+describe('BEH-004 periodic reload during pending observation', () => {
+  it('reloads the bound conversation purely on 300000ms of uncaptured monotonic time and repeats within the budget', async () => {
+    const fixture = await reloadServiceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const promptPath = join(fixture.root, 'reload-prompt.md');
+    await writeFile(promptPath, 'long generation');
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+    fixture.browser.pendingWaitPolls = 10_000;
+
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 700_000, 20_000)).resolves.toEqual({
+      status: 'pending',
+      taskId: task.taskId,
+      turnId: turn.turnId,
+    });
+    expect(fixture.browser.reloadConversationCalls).toBe(2);
+    expect(fixture.browser.reloadedConversations).toEqual([
+      `conversation-${task.taskId}`,
+      `conversation-${task.taskId}`,
+    ]);
+    expect(fixture.browser.reloadedUserTurnIds).toEqual([`user-turn-${task.taskId}-1`, `user-turn-${task.taskId}-1`]);
+    expect(fixture.browser.observeResponseCalls).toBe(14);
+    const store = new StateStore(fixture.paths.database);
+    expect(store.requireTurn(task.taskId, turn.turnId)).toMatchObject({ status: 'pending', responsePath: null });
+    expect(store.listArtifacts(task.taskId, turn.turnId)).toEqual([]);
+    store.close();
+  });
+
+  it('returns pending at window expiry without reload when the window is shorter than one period', async () => {
+    const fixture = await reloadServiceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const promptPath = join(fixture.root, 'short-window.md');
+    await writeFile(promptPath, 'short window');
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+    fixture.browser.pendingWaitPolls = 10_000;
+
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 100_000, 20_000)).resolves.toEqual({
+      status: 'pending',
+      taskId: task.taskId,
+      turnId: turn.turnId,
+    });
+    expect(fixture.browser.reloadConversationCalls).toBe(0);
+  });
+
+  it('captures the completed response after a periodic reload without changing the turn state', async () => {
+    const fixture = await reloadServiceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const promptPath = join(fixture.root, 'reload-complete.md');
+    await writeFile(promptPath, 'reload then complete');
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+    fixture.browser.pendingWaitPolls = 7;
+
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 700_000, 20_000)).resolves.toMatchObject({
+      status: 'completed',
+      turnId: turn.turnId,
+    });
+    expect(fixture.browser.reloadConversationCalls).toBe(1);
+    expect(fixture.browser.observeResponseCalls).toBe(8);
+    const store = new StateStore(fixture.paths.database);
+    expect(store.requireTurn(task.taskId, turn.turnId).status).toBe('completed');
+    store.close();
+  });
+
+  it('keeps the turn pending without capture when the reload identity check drifts', async () => {
+    const fixture = await reloadServiceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const promptPath = join(fixture.root, 'reload-drift.md');
+    await writeFile(promptPath, 'reload drift');
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+    fixture.browser.pendingWaitPolls = 10_000;
+    fixture.browser.nextReloadConversationFailureTaskId = task.taskId;
+
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 700_000, 20_000)).rejects.toMatchObject({
+      code: 'PAGE_CONTRACT_DRIFT',
+    });
+    expect(fixture.browser.reloadConversationCalls).toBe(1);
+    expect(fixture.browser.expectedAssistantTurnIds).toEqual([]);
+    const store = new StateStore(fixture.paths.database);
+    expect(store.requireTurn(task.taskId, turn.turnId)).toMatchObject({ status: 'pending', responsePath: null });
+    expect(store.listArtifacts(task.taskId, turn.turnId)).toEqual([]);
+    expect(store.getTaskOperation(task.taskId)).toBeNull();
+    store.close();
+  });
+
+  it('never reloads while retrying a capturing turn', async () => {
+    const fixture = await reloadServiceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const promptPath = join(fixture.root, 'capturing-retry.md');
+    await writeFile(promptPath, 'capturing retry');
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+    const store = new StateStore(fixture.paths.database);
+    store.freezeCapture(task.taskId, turn.turnId, responsePath(fixture.paths, task.taskId, turn.turnId), []);
+    store.close();
+
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 700_000, 20_000)).resolves.toMatchObject({
+      status: 'completed',
+      turnId: turn.turnId,
+    });
+    expect(fixture.browser.reloadConversationCalls).toBe(0);
+    expect(fixture.browser.observeResponseCalls).toBe(0);
+    expect(fixture.browser.expectedAssistantTurnIds).toEqual([null]);
+    const finalStore = new StateStore(fixture.paths.database);
+    expect(finalStore.requireTurn(task.taskId, turn.turnId).status).toBe('completed');
+    finalStore.close();
+  });
+});
+
 describe('BEH-013 status, recover, and resolve-submission', () => {
   it('returns a read-only status with browser availability and the safe next action', async () => {
     const fixture = await serviceFixture();
@@ -2699,6 +2810,11 @@ class FakeBrowser implements CollabBrowser {
   captureAbortCount = 0;
   observeResponseCalls = 0;
   readonly observedUserTurnIds: string[] = [];
+  readonly reloadedConversations: string[] = [];
+  readonly reloadedUserTurnIds: string[] = [];
+  reloadConversationCalls = 0;
+  nextReloadConversationFailureTaskId: string | null = null;
+  onPendingPoll: (() => void) | null = null;
   downloadDelayMs = 0;
   downloadFailureDelayMs = 0;
   downloadNeverSettlesSourceUrl: string | null = null;
@@ -2914,6 +3030,42 @@ class FakeBrowser implements CollabBrowser {
     }
     this.recoveredConversations.push(taskId);
     return Promise.resolve({ conversationId, conversationUrl });
+  }
+
+  /**
+   * Records one fake periodic reload of the bound pending conversation.
+   *
+   * @param taskId Task identifier.
+   * @param _sessionName Unused named session.
+   * @param expectedConversationId Database-bound identity.
+   * @param expectedUserTurnId Persisted user turn anchor passed to the reload.
+   * @param observer Task-lease child-process observer.
+   * @returns The unchanged fake conversation identity.
+   * @throws {BrowserError} When the injected identity-drift failure is armed.
+   */
+  async reloadConversation(
+    taskId: string,
+    _sessionName: string,
+    expectedConversationId: string,
+    expectedUserTurnId: string,
+    observer?: BrowserOperationObserver,
+  ) {
+    this.observe(observer);
+    this.reloadConversationCalls += 1;
+    this.reloadedConversations.push(expectedConversationId);
+    this.reloadedUserTurnIds.push(expectedUserTurnId);
+    if (this.nextReloadConversationFailureTaskId === taskId) {
+      this.nextReloadConversationFailureTaskId = null;
+      throw new BrowserError(
+        'PAGE_CONTRACT_DRIFT',
+        'reload pending conversation',
+        `injected reload identity drift for ${taskId}`,
+      );
+    }
+    return Promise.resolve({
+      conversationId: expectedConversationId,
+      conversationUrl: `https://chatgpt.com/c/${expectedConversationId}`,
+    });
   }
 
   /**
@@ -3164,6 +3316,7 @@ class FakeBrowser implements CollabBrowser {
       await new Promise<void>((resolve) => {
         setTimeout(resolve, this.waitPollDelayMs);
       });
+      this.onPendingPoll?.();
       return { status: 'pending' as const };
     }
     return {
@@ -3476,6 +3629,55 @@ async function serviceFixture() {
     paths,
     browser,
     service,
+    start() {
+      return service.start(randomUUID());
+    },
+  };
+}
+
+/**
+ * Creates a service fixture whose monotonic wait clock and fake browser polls share one
+ * test-controlled time base, so the 300000ms reload schedule runs deterministically.
+ *
+ * @returns Fixture with the controllable clock, fake browser, and service.
+ * @throws {Error} If the temporary fixture cannot be created.
+ */
+async function reloadServiceFixture() {
+  const root = await mkdtemp(join(tmpdir(), 'collab-reload-'));
+  const paths = collabPaths(root);
+  await ensureCollabDirectories(paths);
+  let now = 0;
+  const clock = {
+    now(): number {
+      return now;
+    },
+    advance(ms: number): void {
+      now += ms;
+    },
+  };
+  const browser = new FakeBrowser(paths);
+  browser.onPendingPoll = () => {
+    clock.advance(50_000);
+  };
+  let id = 0;
+  const service = new CollabService(
+    paths,
+    browser,
+    () => {
+      return new StateStore(paths.database);
+    },
+    () => {
+      id += 1;
+      return `id-${id}`;
+    },
+    clock.now,
+  );
+  return {
+    root,
+    paths,
+    browser,
+    service,
+    clock,
     start() {
       return service.start(randomUUID());
     },

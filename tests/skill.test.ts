@@ -189,6 +189,20 @@ export class SkillFixtureBrowser implements CollabBrowser {
     return { conversationId, conversationUrl };
   }
 
+  async reloadConversation(
+    taskId: string,
+    _sessionName: string,
+    expectedConversationId: string,
+    _expectedUserTurnId: string,
+    observer?: BrowserOperationObserver,
+  ): Promise<{ readonly conversationId: string; readonly conversationUrl: string }> {
+    this.observe(observer);
+    return {
+      conversationId: expectedConversationId,
+      conversationUrl: `https://chatgpt.com/c/${expectedConversationId}`,
+    };
+  }
+
   async send(
     taskId: string,
     _sessionName: string,
