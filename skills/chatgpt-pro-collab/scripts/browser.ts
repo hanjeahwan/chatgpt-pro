@@ -1130,41 +1130,22 @@ export class PlaywrightBrowser {
    * @param sessionName Owning Playwright named session, already proven missing by the caller.
    * @param observer Task-lease child-process observer.
    * @returns Nothing after the seed is loaded into the new session.
-   * @throws {BrowserError} If opening, loading, or mandatory cleanup fails.
+   * @throws {BrowserError} If opening the seeded session fails.
    */
   async #rebuildTaskSession(taskId: string, sessionName: string, observer?: BrowserOperationObserver): Promise<void> {
     await ensureTaskDirectories(this.#paths, taskId);
-    let opened = false;
-    try {
-      await this.#invoke(
-        sessionName,
-        taskId,
-        ['open', 'about:blank', '--browser=chrome', '--headed'],
-        'open task browser',
-        observer,
-      );
-      opened = true;
-      await this.#invoke(
-        sessionName,
-        taskId,
-        ['state-load', this.#paths.seedState],
-        'load authentication state',
-        observer,
-      );
-    } catch (error) {
-      if (opened) {
-        try {
-          await this.#invoke(sessionName, taskId, ['close'], 'close failed task browser', observer);
-        } catch (closeError) {
-          throw new BrowserError(
-            'BROWSER_CLEANUP_FAILED',
-            'rebuild task session',
-            `${errorMessage(error)}; cleanup also failed: ${errorMessage(closeError)}`,
-          );
-        }
-      }
-      throw error;
-    }
+    await this.#invoke(
+      sessionName,
+      taskId,
+      ['open', 'about:blank', '--browser=chrome', '--headed'],
+      'open seeded task browser',
+      observer,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      this.#paths.seedState,
+    );
   }
 
   /**
@@ -1426,6 +1407,7 @@ export class PlaywrightBrowser {
    * @param onCommandNotSpawned Called only when the gate proves the guarded command did not spawn.
    * @param signal Host cancellation that safely terminates the gate and guarded command;
    *   null is reserved for the interactive login wait.
+   * @param storageStatePath Authentication state loaded by the fixed CLI while opening a new context.
    * @returns Captured stdout and stderr.
    * @throws {BrowserError} If `npx` exits unsuccessfully or cannot start.
    */
@@ -1439,6 +1421,7 @@ export class PlaywrightBrowser {
     onCommandStarted?: () => void,
     onCommandNotSpawned?: () => void,
     signal: AbortSignal | null = AbortSignal.timeout(COMMAND_HOST_DEADLINE_MS),
+    storageStatePath?: string,
   ): Promise<BrowserCommandOutput> {
     const outputDirectory = join(taskDirectory(this.#paths, taskId), 'playwright');
     try {
@@ -1448,6 +1431,7 @@ export class PlaywrightBrowser {
         cwd: this.#cwd,
         environment: {
           ...process.env,
+          ...(storageStatePath === undefined ? {} : { PLAYWRIGHT_MCP_STORAGE_STATE: storageStatePath }),
           PLAYWRIGHT_MCP_ALLOW_UNRESTRICTED_FILE_ACCESS: 'true',
           PLAYWRIGHT_MCP_OUTPUT_DIR: outputDirectory,
         },

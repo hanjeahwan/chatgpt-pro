@@ -2027,7 +2027,6 @@ describe('BEH-013 browser boundary support', () => {
   it('rebuilds a missing bound session directly at its canonical conversation', async () => {
     const fixture = await browserFixture([
       output('opened'),
-      output('state loaded'),
       pageResult({
         protocol,
         kind: 'recover-conversation',
@@ -2049,8 +2048,9 @@ describe('BEH-013 browser boundary support', () => {
       return invocation.arguments.slice(4);
     });
     expect(commands[0]).toEqual(['open', 'about:blank', '--browser=chrome', '--headed']);
-    expect(commands[1]).toEqual(['state-load', fixture.paths.seedState]);
-    expect(commands[2]?.[0]).toBe('run-code');
+    expect(fixture.invocations[0]?.environment.PLAYWRIGHT_MCP_STORAGE_STATE).toBe(fixture.paths.seedState);
+    expect(commands[1]?.[0]).toBe('run-code');
+    expect(commands.flat()).not.toContain('state-load');
     expect(commands.flat()).not.toContain('https://chatgpt.com/projects');
   });
 
