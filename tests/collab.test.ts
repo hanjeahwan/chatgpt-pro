@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { BrowserError, type BrowserOperationObserver } from '../skills/chatgpt-pro-collab/scripts/browser.ts';
 import { CollabService, runCli, type CliIo, type CollabBrowser } from '../skills/chatgpt-pro-collab/scripts/collab.ts';
@@ -191,6 +191,48 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     await expect(fixture.service.close(task.taskId)).resolves.toMatchObject({ alreadyClosed: false });
   });
 
+  it.each(['start', 'recover', 'close'] as const)(
+    'bounds %s while another live process retains the compatible task lease',
+    async (command) => {
+      const fixture = await serviceFixture();
+      await fixture.service.setup();
+      const task = await fixture.start();
+      const owner = new StateStore(fixture.paths.database);
+      owner.acquireTaskOperation(task.taskId, command === 'close' ? 'wait' : command, 'external-owner');
+      vi.useFakeTimers();
+
+      try {
+        const operation = fixture.service[command](task.taskId).then(
+          () => {
+            return 'resolved';
+          },
+          (error: unknown) => {
+            return error instanceof Error && 'code' in error ? error.code : 'unexpected-error';
+          },
+        );
+        if (command === 'start') {
+          await readFile(fixture.paths.seedState);
+        }
+        const bounded = Promise.race([
+          operation,
+          new Promise<string>((resolve) => {
+            setTimeout(() => {
+              resolve('still-waiting');
+            }, 6_500);
+          }),
+        ]);
+
+        await vi.advanceTimersByTimeAsync(6_500);
+        await expect(bounded).resolves.toBe('TASK_OPERATION_IN_PROGRESS');
+      } finally {
+        owner.releaseTaskOperation(task.taskId, 'external-owner');
+        await vi.advanceTimersByTimeAsync(500);
+        vi.useRealTimers();
+        owner.close();
+      }
+    },
+  );
+
   it('rejects a prompt whose surrounding whitespace cannot be proven verbatim on the page', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
@@ -214,14 +256,20 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     await writeFile(promptPath, 'long response');
     const turn = await fixture.service.send(task.taskId, promptPath, []);
     fixture.browser.pendingWaitPolls = 1;
-    fixture.browser.waitPollDelayMs = 100;
+    fixture.browser.waitPollDelayMs = 5_000;
+    vi.useFakeTimers();
 
-    const waiting = fixture.service.wait(task.taskId, turn.turnId, 20_000, 20_000);
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 20);
-    });
-    await expect(fixture.service.close(task.taskId)).resolves.toMatchObject({ alreadyClosed: false });
-    await expect(waiting).rejects.toMatchObject({ code: 'TASK_NOT_ACTIVE' });
+    try {
+      const waiting = fixture.service.wait(task.taskId, turn.turnId, 20_000, 20_000);
+      const waitingRejected = expect(waiting).rejects.toMatchObject({ code: 'TASK_NOT_ACTIVE' });
+      await vi.advanceTimersByTimeAsync(20);
+      const closing = fixture.service.close(task.taskId);
+      await vi.advanceTimersByTimeAsync(6_000);
+      await expect(closing).resolves.toMatchObject({ alreadyClosed: false });
+      await waitingRejected;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('returns pending once at observation expiry and resumes the same turn later', async () => {

@@ -39,6 +39,8 @@ import { StateError, StateStore, type OperationRecord, type StatusRecord, type T
 
 const CAPTURE_ABORT_SETTLE_MS = 250;
 const OBSERVATION_RELOAD_PERIOD_MS = 300_000;
+const TASK_OPERATION_RETRY_INTERVAL_MS = 250;
+const TASK_OPERATION_RETRY_LIMIT = 24;
 
 export interface CollabBrowser {
   setupOpen(sessionName: string): Promise<void>;
@@ -445,6 +447,7 @@ export class CollabService {
           existing = raced;
         }
       }
+      let remainingRetries = TASK_OPERATION_RETRY_LIMIT;
       while (true) {
         const token = randomUUID();
         try {
@@ -460,6 +463,10 @@ export class CollabService {
           if (operation !== null && operation !== 'start') {
             throw error;
           }
+          if (remainingRetries === 0) {
+            throw error;
+          }
+          remainingRetries -= 1;
           await yieldTaskOperation();
         }
       }
@@ -1097,6 +1104,7 @@ export class CollabService {
     taskId: string,
   ): Promise<{ readonly taskId: string; readonly wasOpen: boolean; readonly alreadyClosed: boolean }> {
     return this.#withStore(async (store) => {
+      let remainingRetries = TASK_OPERATION_RETRY_LIMIT;
       while (true) {
         const token = randomUUID();
         try {
@@ -1125,6 +1133,10 @@ export class CollabService {
           if (operation !== null && operation !== 'wait') {
             throw error;
           }
+          if (remainingRetries === 0) {
+            throw error;
+          }
+          remainingRetries -= 1;
           await yieldTaskOperation();
         }
       }
@@ -1316,6 +1328,7 @@ export class CollabService {
    */
   async recover(taskId: string): Promise<StatusRecord> {
     return this.#withStore(async (store) => {
+      let remainingRetries = TASK_OPERATION_RETRY_LIMIT;
       while (true) {
         const token = randomUUID();
         try {
@@ -1331,6 +1344,10 @@ export class CollabService {
           if (operation !== null && operation !== 'recover') {
             throw error;
           }
+          if (remainingRetries === 0) {
+            throw error;
+          }
+          remainingRetries -= 1;
           await yieldTaskOperation();
         }
       }
@@ -2027,14 +2044,14 @@ function captureTimeout(turnId: string, phase: 'response' | 'artifact'): CollabE
 }
 
 /**
- * Gives a waiting close command a scheduling window between bounded browser polls.
+ * Gives a compatible operation a scheduling window before its next bounded lease attempt.
  *
  * @returns A promise resolved on a later event-loop turn.
  * @throws {Error} Timers do not ordinarily throw.
  */
 async function yieldTaskOperation(): Promise<void> {
   await new Promise<void>((resolve) => {
-    setTimeout(resolve, 50);
+    setTimeout(resolve, TASK_OPERATION_RETRY_INTERVAL_MS);
   });
 }
 
