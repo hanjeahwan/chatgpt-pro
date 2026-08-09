@@ -808,8 +808,11 @@ export class CollabService {
    * While the pending turn stays uncaptured, the same monotonic schedule unconditionally
    * reloads the bound canonical conversation every 300000ms of uncaptured time inside the
    * observation budget; reload time counts against the original observation deadline and
-   * never terminates generation, changes turn state, or sends a continuation. Capturing
-   * retries skip the reload schedule.
+   * never terminates generation, changes turn state, or sends a continuation. The reload
+   * cadence stays anchored to the observation start: a reload's own duration counts toward
+   * the current period and never re-anchors the next trigger from reload completion. A
+   * reload that exhausts the observation budget returns pending without observing further.
+   * Capturing retries skip the reload schedule.
    *
    * @param taskId Active task identifier.
    * @param turnId Submitted turn identifier.
@@ -883,8 +886,13 @@ export class CollabService {
                 turn.userTurnIdentity,
                 observer,
               );
-              nextReloadAt = this.#now() + OBSERVATION_RELOAD_PERIOD_MS;
-              return null;
+              nextReloadAt += OBSERVATION_RELOAD_PERIOD_MS;
+              while (nextReloadAt <= this.#now()) {
+                nextReloadAt += OBSERVATION_RELOAD_PERIOD_MS;
+              }
+              return remainingMilliseconds(observationDeadline, this.#now) === 0
+                ? { status: 'pending' as const, taskId, turnId }
+                : null;
             }
             const observed = await this.#browser.observeResponse(
               taskId,

@@ -2153,6 +2153,31 @@ describe('BEH-004 periodic reload during pending observation', () => {
     store.close();
   });
 
+  it('keeps the 300000ms cadence anchored to the observation start when a reload itself consumes time', async () => {
+    const fixture = await reloadServiceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const promptPath = join(fixture.root, 'slow-reload.md');
+    await writeFile(promptPath, 'slow reload');
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+    fixture.browser.pendingWaitPolls = 10_000;
+    fixture.browser.onReload = () => {
+      fixture.clock.advance(100_000);
+    };
+
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 700_000, 20_000)).resolves.toEqual({
+      status: 'pending',
+      taskId: task.taskId,
+      turnId: turn.turnId,
+    });
+    expect(fixture.browser.reloadConversationCalls).toBe(2);
+    expect(fixture.browser.observeResponseCalls).toBe(10);
+    const store = new StateStore(fixture.paths.database);
+    expect(store.requireTurn(task.taskId, turn.turnId)).toMatchObject({ status: 'pending', responsePath: null });
+    expect(store.listArtifacts(task.taskId, turn.turnId)).toEqual([]);
+    store.close();
+  });
+
   it('returns pending at window expiry without reload when the window is shorter than one period', async () => {
     const fixture = await reloadServiceFixture();
     await fixture.service.setup();
@@ -2815,6 +2840,7 @@ class FakeBrowser implements CollabBrowser {
   reloadConversationCalls = 0;
   nextReloadConversationFailureTaskId: string | null = null;
   onPendingPoll: (() => void) | null = null;
+  onReload: (() => void) | null = null;
   downloadDelayMs = 0;
   downloadFailureDelayMs = 0;
   downloadNeverSettlesSourceUrl: string | null = null;
@@ -3062,6 +3088,7 @@ class FakeBrowser implements CollabBrowser {
         `injected reload identity drift for ${taskId}`,
       );
     }
+    this.onReload?.();
     return Promise.resolve({
       conversationId: expectedConversationId,
       conversationUrl: `https://chatgpt.com/c/${expectedConversationId}`,
