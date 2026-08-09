@@ -1,26 +1,112 @@
 # ChatGPT Pro Collab
 
-本仓库提供一个 Agent Skill，通过彼此隔离的本地浏览器任务与 ChatGPT Pro Web 持续多轮协作。宿主明确选择 prompt 与附件；Collab 只负责浏览器会话、Web conversation、原始回复和本地审计记录。
+ChatGPT Pro Collab 是一个 Agent Skill，让本地 Agent 通过 ChatGPT Pro Web 建立独立、可恢复的协作任务。你决定发送什么 prompt 和附件；Collab 负责浏览器会话、同一 conversation 的多轮沟通、原始回复与文件保存，以及中断后的恢复。
 
-## 用法
+它不会扫描仓库、替你执行 Pro 的建议，也不会提交、合并或发布代码。
 
-运行环境需要 Node.js `>=22.19.0`、npm/npx、Chrome，以及可交互登录的 ChatGPT Pro 账号。安装后的 Skill 以加载到的 `SKILL.md` 所在绝对目录替换 `<skill-directory>`，并保持宿主项目为当前工作目录：
+![Codeartz AI 猫把本地任务和附件送入独立 ChatGPT 会话，并取回原始回复与文件](assets/chatgpt-pro-collab-readme-illustrations/01-collaboration-loop.png)
+
+## 适合什么场景
+
+- 把一个明确任务交给 ChatGPT Pro 深度处理，并把结果交回本地 Agent 验证。
+- 在同一个 conversation 中持续追问，不重复背景说明。
+- 显式上传少量文件，或把大量文件打包后作为单个附件发送。
+- 等待长时间生成，同时保留 `pending` 状态，稍后继续捕获。
+- 保存回复里的 `sandbox:` 文件，并保留 prompt、附件路径、页面证据和操作记录。
+- 浏览器关闭、命令中断或提交结果不明确时，从持久状态安全恢复。
+
+## 快速开始
+
+运行环境需要 Node.js `>=22.19.0`、npm/npx、Chrome，以及可交互登录的 ChatGPT Pro 账号。以下命令中的 `<skill-directory>` 是已加载 Skill 的绝对路径；运行时保持宿主项目为当前目录。
+
+### 1. 保存登录状态
+
+首次使用执行一次：
 
 ```sh
 node "<skill-directory>/scripts/collab.ts" setup
-node "<skill-directory>/scripts/collab.ts" start <taskId>
-node "<skill-directory>/scripts/collab.ts" send <taskId> <promptPath> [attachmentPath ...]
-node "<skill-directory>/scripts/collab.ts" wait <taskId> <turnId> <observationWindowMs> <captureTimeoutMs>
-node "<skill-directory>/scripts/collab.ts" status <taskId>
-node "<skill-directory>/scripts/collab.ts" recover <taskId>
-node "<skill-directory>/scripts/collab.ts" resolve-submission <taskId> <turnId> submitted <conversationUrl>
-node "<skill-directory>/scripts/collab.ts" resolve-submission <taskId> <turnId> not-submitted
-node "<skill-directory>/scripts/collab.ts" resolve-turn <taskId> <turnId> failed
-node "<skill-directory>/scripts/collab.ts" archive <taskId>
-node "<skill-directory>/scripts/collab.ts" close <taskId>
 ```
 
-在本源码仓库开发时，先安装 pnpm 依赖，再使用 package script：
+Collab 会打开独立浏览器等待登录，验证成功后保存共享认证源。它不会读取或覆盖 Chrome 的日常用户目录。
+
+### 2. 创建任务
+
+为本次协作生成一个稳定的 UUID v4：
+
+```sh
+node "<skill-directory>/scripts/collab.ts" start <taskId>
+```
+
+每个 task 使用独立的 Playwright session。`start` 只准备固定 Project、GPT-5.6 Sol、Power 5/5 的空白 composer，不会发送消息。
+
+### 3. 发送 prompt 和附件
+
+```sh
+node "<skill-directory>/scripts/collab.ts" send <taskId> <promptPath> [attachmentPath ...]
+```
+
+`send` 立即返回 `turnId`。附件只来自命令显式传入的路径；Collab 不会自行扫描项目。
+
+### 4. 等待结果
+
+```sh
+node "<skill-directory>/scripts/collab.ts" wait <taskId> <turnId> <observationWindowMs> <captureTimeoutMs>
+```
+
+完成时返回：
+
+- `responsePath`：未经改写的原始回复。
+- `artifactPaths`：按回复顺序保存的 `sandbox:` 文件。
+
+观察窗口到期时返回 `pending`，不会停止 ChatGPT 的生成。之后可以对同一个 `turnId` 再次执行 `wait`。
+
+## 多轮、恢复与收尾
+
+同一轮完成后，再次执行 `send` 和 `wait` 即可继续原 conversation。新 task 的首条消息包含固定协作合同；后续轮次沿用已有上下文，不重复该合同。
+
+![Codeartz AI 猫用持久状态重新缝合同一个被中断的 ChatGPT conversation](assets/chatgpt-pro-collab-readme-illustrations/02-durable-recovery.png)
+
+先用 `status` 查看持久状态与唯一安全的 `nextAction`：
+
+```sh
+node "<skill-directory>/scripts/collab.ts" status <taskId>
+node "<skill-directory>/scripts/collab.ts" recover <taskId>
+```
+
+常用操作：
+
+| 目的                             | 命令                                                               |
+| -------------------------------- | ------------------------------------------------------------------ |
+| 暂停本地浏览器，保留可恢复任务   | `close <taskId>`                                                   |
+| 恢复关闭或丢失的 task session    | `status <taskId>`，再按 `nextAction` 执行 `recover <taskId>`       |
+| 归档 Web conversation            | `archive <taskId>`                                                 |
+| 明确提交成功                     | `resolve-submission <taskId> <turnId> submitted <conversationUrl>` |
+| 明确没有提交                     | `resolve-submission <taskId> <turnId> not-submitted`               |
+| 明确回复已失败或永久无法完成捕获 | `resolve-turn <taskId> <turnId> failed`                            |
+
+`resolve-submission` 和 `resolve-turn` 只用于真实历史事实无法自动判定时；不要把超时或猜测当作人工裁决。
+
+## 输入与等待约束
+
+- Prompt 文件必须是有效 UTF-8，且全文首尾不能有空白，包括文件末尾换行。
+- Collab 不会 trim 或改写 prompt；不满足逐字证明条件时会在发送前拒绝。
+- 同一 `wait` 内若连续 300000ms 未捕获，Collab 会 reload 当前 conversation 重新水合页面，但不会终止生成或改变 turn 状态。
+- 捕获超时后，可以为同一个 turn 提供新的 `captureTimeoutMs` 继续。
+- 普通 `https:` 链接不会下载；只有回复中的 `sandbox:` 文件进入 artifact 捕获。
+
+## 本地数据
+
+认证源、SQLite 协调状态、prompt 副本、回复和 artifact 保存在：
+
+```text
+~/.local/chatgpt-pro-collab/
+```
+
+审计记录只保存显式附件的绝对路径，不复制附件正文。每个 task、turn 和 artifact 都有独立目录与持久身份。
+
+## 在源码仓库中运行
+
+安装依赖后，可以用 package script 替代完整路径：
 
 ```sh
 pnpm install
@@ -37,14 +123,4 @@ pnpm collab -- archive <taskId>
 pnpm collab -- close <taskId>
 ```
 
-`setup` 保存本机共享认证源。每次 `start` 需要调用方提供的稳定 canonical UUID v4 `taskId` 并返回同一个 `taskId`；`send` 提交一轮并立即返回 `turnId`。`wait` 使用有限观察窗口：到期时返回 `pending` 且不停止远端生成；完成时返回原始 `response.md` 与按回复顺序保存的 `artifactPaths`。同一 `wait` 内若连续 300000ms 未捕获，Collab 自动 reload 当前 conversation 重新水合页面后继续观察与捕获；reload 只由时间触发，不检查页面完成信号、不终止远端生成、不改变 turn 状态。捕获超时后可用新的 `captureTimeoutMs` 继续同一 turn。`status` 只读返回持久状态与唯一安全的 `nextAction`；`nextAction: none` 只表示没有待继续或待解除的持久工作流，它本身不禁止宿主按用户意图、在当前 task 状态允许时显式执行 `send` 或 `close`；`recover` 按持久阶段恢复中断操作；`resolve-submission` 对无法自动判定的提交歧义接受人工裁决，支持普通及 Project-scoped canonical conversation URL，并可安全重试完全相同的已记录裁决；`resolve-turn ... failed` 在用户明确确认 response 已失败、终止或永久无法完成捕获后裁决旧 turn，pending 仍验证页面，capturing 只保留冻结结果并在本地裁决；裁决后只读探测 session 并返回当前安全 `nextAction`，continuation 由宿主另行显式发送。同一任务完成一轮后可以继续 send/wait，多个任务可以同时等待。
-
-每个新 task 的首条 user message 由宿主把 Skill 中的固定协作合同、当前任务和当轮附件作为同一条消息提交；首次提交前失败时，下一次显式 `send` 仍包含完整合同。`start` 仍只建立空白 composer，不单独发送模式声明。conversation 绑定后的后续 turn 沿用已有上下文，不重复该合同。prompt 文件必须是有效 UTF-8，且全文首尾均无空白，包括终止换行。Collab CLI 不 trim 或改写 prompt；首尾空白会在任何状态持久化或浏览器动作前以 `PROMPT_NOT_VERBATIM_PROVABLE` 拒绝。Web 消息与宿主交给 `send` 的 prompt 文件保持一致。
-
-## 数据
-
-认证源、SQLite 协调状态与逐 turn transcript 保存在 `~/.local/chatgpt-pro-collab/`。附件只从命令明确传入的原路径上传；审计记录保存附件绝对路径，不复制附件正文。回复中的唯一 `sandbox:` 文件保存到各自 turn 的 ordinal 目录；普通 `https:` 链接不下载。
-
-## 边界
-
-Collab 不扫描或理解仓库，不检查 Git 状态或秘密，不应用 Pro 回复，也不执行、提交、合并或发布代码。`close` 只关闭本地浏览器，并把 task 保留为可恢复暂停态：同一 task 的后续 feedback 先 `status`，按 `nextAction` 执行 `recover`，继续原 canonical conversation；`archive` 仍独立。完整行为和验收合同见 [浏览器协作 Spec](docs/specs/2026-08-03-chatgpt-pro-browser-collaboration.md)。
+完整产品行为、状态合同和验收条件见 [浏览器协作 Spec](docs/specs/2026-08-03-chatgpt-pro-browser-collaboration.md)。
