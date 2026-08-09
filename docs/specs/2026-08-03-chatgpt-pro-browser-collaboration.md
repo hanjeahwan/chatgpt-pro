@@ -118,7 +118,7 @@
 以下 checkout 事实共同约束技术设计和验证方式：
 
 - 当前 checkout 已有 `skills/chatgpt-pro-collab/` 实现、`tests/` 自动化测试以及可从任意宿主目录执行的绝对路径 CLI 入口。现有代码已承载 setup、start、send、wait、capture、artifact、archive、close、status、recover、resolve-submission、browser-operation lease、通用 operation journal、浏览器进程重建和逐 turn transcript 的实现基线；BEH-013、调用方提供稳定 `taskId` 和公开的提交裁决命令均已实现。全部行为仍须按当前 VER 重新验证，不能把已有测试结果视为当前规格已通过。
-- 运行约束为 Node.js `>=22.19.0`、ESM、TypeScript `^6.0.3` 和 Vitest `4.0.18`；格式化和 lint 分别使用 oxfmt 与 oxlint。当前 `tsconfig.json` 已采用 Node 原生 TypeScript type stripping 所需的 `erasableSyntaxOnly`、`verbatimModuleSyntax`、`rewriteRelativeImportExtensions` 与 `noEmit` 约束（REF-003）。
+- 运行约束为 Node.js `>=22.19.0`、ESM、TypeScript `^6.0.3` 和 Vitest `4.0.18`；格式化和 lint 分别使用 oxfmt 与 oxlint。当前 `tsconfig.json` 已采用 Node 原生 TypeScript type stripping 所需的 `erasableSyntaxOnly`、`verbatimModuleSyntax` 与 `noEmit` 约束（REF-003）。
 - 当前 manifest 没有浏览器自动化或数据库 npm dependency；`browser.ts` 固定调用 `@playwright/cli@0.1.17`，并已实现 named session、storage state 保存与加载、显式附件上传、有界页面检查、页面内文字捕获和归档后恢复绑定 conversation。固定 CLI 的命令能力由版本化官方资料承载（REF-001）。
 - 当前 `state.ts` 使用 Node.js 标准库同步 `DatabaseSync` 保存 task、turn、artifact、operation journal 和 browser-operation lease，并以 `pending → capturing → completed` 及无覆盖文件发布支持捕获恢复；schema 已承载覆盖 setup、start、send 准备与 archive 的 operation journal 和稳定的 browser 重建状态（REF-002）。
 - 当前 `send` 已记录提交释放边界并在结果不明时保留 `unknown-submission`；提交证明或 BEH-013 的 `submitted` 裁决后持久化精确 user turn identity 与 canonical conversation identity，`not-submitted` 裁决在验证安全 composer 后把原 turn 置为 `failed`；附件已进入 Web draft、但提交命令尚未释放时的进程中断已有持久恢复阶段。

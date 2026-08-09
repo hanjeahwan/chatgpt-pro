@@ -8,12 +8,10 @@
     "check": "pnpm run format:check && pnpm run lint && pnpm run typecheck && pnpm run test",
     "collab": "node skills/chatgpt-pro-collab/scripts/collab.ts",
     "format": "oxfmt",
-    "format:all": "oxfmt .",
     "format:check": "oxfmt . --check",
     "lint": "oxlint .",
-    "lint:all": "oxlint . --fix",
     "test": "vitest --run",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json"
   },
   "devDependencies": {
     "@types/node": "^25.9.3",

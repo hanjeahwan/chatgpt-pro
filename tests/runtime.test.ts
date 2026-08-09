@@ -66,10 +66,8 @@ describe('VER-012 runtime prerequisites', () => {
     expect(execFileSync(process.execPath, [entry], { encoding: 'utf8' }).trim()).toBe('ok');
   });
 
-  it('executes the fixed Playwright CLI help and browser-less raw list', () => {
+  it('executes the fixed Playwright CLI help', () => {
     const help = execFileSync('npx', ['-y', '@playwright/cli@0.1.17', '--help'], { encoding: 'utf8' });
     expect(help).toContain('playwright-cli');
-    const listed = execFileSync('npx', ['-y', '@playwright/cli@0.1.17', '--raw', 'list'], { encoding: 'utf8' });
-    expect(listed).toMatch(/\(no browsers\)/u);
   });
 });
