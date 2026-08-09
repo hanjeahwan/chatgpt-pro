@@ -1654,23 +1654,23 @@ export class CollabService {
       return this.#withTaskOperation(store, taskId, 'resolve-submission', async (observer) => {
         const task = store.requireTask(taskId);
         const turn = store.requireTurn(taskId, turnId);
-        const recordedResolution = store.listOperations(taskId).find((operation) => {
+        const recordedEvidence = store.listOperations(taskId).find((operation) => {
           return (
             operation.kind === 'send' &&
             operation.turnId === turnId &&
             operation.phase === 'committed' &&
             operation.resolutionSource === 'human' &&
-            operation.evidence.decision !== undefined
+            operation.evidence?.decision !== undefined
           );
-        });
-        if (recordedResolution !== undefined) {
+        })?.evidence;
+        if (recordedEvidence !== undefined && recordedEvidence !== null) {
           if (
-            recordedResolution.evidence.decision !== verdict ||
-            (verdict === 'submitted' && recordedResolution.evidence.canonicalUrl !== canonicalUrl)
+            recordedEvidence.decision !== verdict ||
+            (verdict === 'submitted' && recordedEvidence.canonicalUrl !== canonicalUrl)
           ) {
             throw new CollabError(
               'SUBMISSION_RESOLUTION_CONFLICT',
-              `submission was already resolved as ${recordedResolution.evidence.decision}: ${turnId}`,
+              `submission was already resolved as ${recordedEvidence.decision}: ${turnId}`,
             );
           }
           const browserStatus = await this.#browser.sessionAvailability(task.playwrightSession);

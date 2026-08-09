@@ -111,7 +111,7 @@ export interface OperationRecord {
   readonly taskId: string | null;
   readonly turnId: string | null;
   readonly sessionName: string;
-  readonly evidence: OperationEvidence;
+  readonly evidence: OperationEvidence | null;
   readonly resolutionSource: ResolutionSource | null;
   readonly error: string | null;
   readonly createdAt: string;
@@ -1824,7 +1824,7 @@ export class StateStore {
       )
       .all(taskId);
     for (const row of rows.reverse()) {
-      const projectIdentity = decodeOperation(row).evidence.projectIdentity;
+      const projectIdentity = decodeOperation(row).evidence?.projectIdentity;
       if (projectIdentity !== undefined && projectIdentity !== null) {
         return projectIdentity;
       }
@@ -2167,12 +2167,12 @@ function decodeOperation(value: unknown): OperationRecord {
  * Decodes the stable operation evidence object without copying prompt or attachment bytes.
  *
  * @param value Serialized evidence JSON.
- * @returns The evidence object, or an empty evidence object for a null payload.
+ * @returns The evidence object, or `null` when no evidence was recorded.
  * @throws {TypeError} If the evidence is not an object.
  */
-function decodeOperationEvidence(value: string): OperationEvidence {
+function decodeOperationEvidence(value: string): OperationEvidence | null {
   if (value === 'null') {
-    return { observedAt: '', sessionName: '' };
+    return null;
   }
   const parsed: unknown = JSON.parse(value);
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {

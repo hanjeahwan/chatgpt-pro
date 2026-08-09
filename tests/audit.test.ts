@@ -169,7 +169,7 @@ describe('BEH-007 per-turn audit record', () => {
       canonicalUrl: 'https://chatgpt.com/c/conversation-a',
       pageVerification: expect.stringContaining('verified'),
     });
-    expect(human.evidence.pageVerification).not.toContain('automatically proven');
+    expect(human.evidence?.pageVerification).not.toContain('automatically proven');
     store.close();
   });
 

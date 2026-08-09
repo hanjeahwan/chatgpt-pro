@@ -255,6 +255,7 @@ describe('BEH-002, BEH-005, BEH-007, and BEH-008 state gates', () => {
     const operationId = 'send-operation-a';
     const { operation } = first.beginSendTurn('task-a', 'turn-a', '/prompt.md', [], operationId);
     expect(operation).toMatchObject({ kind: 'send', step: 'draft', phase: 'prepared', progress: 0 });
+    expect(operation.evidence).toBeNull();
     first.advanceSendToSubmitEffectUnknown(operationId, {
       observedAt: new Date().toISOString(),
       sessionName: 'session-a',
