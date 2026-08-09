@@ -2075,6 +2075,39 @@ describe('BEH-008 local close and BEH-009 archive journal', () => {
     reopened.close();
   });
 
+  it('rebuilds a missing prepared archive before clicking Archive exactly once', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const promptPath = join(fixture.root, 'missing-prepared-archive.md');
+    await writeFile(promptPath, 'missing prepared archive');
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+    await fixture.service.wait(task.taskId, turn.turnId, 20_000, 20_000);
+    const store = new StateStore(fixture.paths.database);
+    store.createOperation({
+      id: 'missing-prepared-archive-op',
+      kind: 'archive',
+      step: 'archive',
+      taskId: task.taskId,
+      turnId: null,
+      sessionName: `chatgpt-pro-collab-${task.taskId}`,
+    });
+    store.close();
+    fixture.browser.sessionAvailabilityResult = 'missing';
+
+    await expect(fixture.service.recover(task.taskId)).resolves.toMatchObject({
+      taskStatus: 'active',
+      browserStatus: 'available',
+      nextAction: 'none',
+    });
+
+    expect(fixture.browser.archiveObservations).toEqual([task.taskId]);
+    expect(fixture.browser.archived).toEqual([task.taskId]);
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireOperation('missing-prepared-archive-op')).toMatchObject({ phase: 'committed' });
+    reopened.close();
+  });
+
   it('observes and restores an already archived conversation on a repeated archive', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
@@ -4274,7 +4307,7 @@ class FakeBrowser implements CollabBrowser {
    * @param _conversationUrl Unused canonical conversation URL.
    * @param observer Task-lease child-process observer.
    * @returns The same conversation identity.
-   * @throws {Error} This fake archive does not throw.
+   * @throws {BrowserError} If the fake named session is missing.
    */
   archive(
     taskId: string,
@@ -4284,6 +4317,9 @@ class FakeBrowser implements CollabBrowser {
     observer?: BrowserOperationObserver,
   ) {
     this.observe(observer);
+    if (this.sessionAvailabilityResult === 'missing') {
+      throw new BrowserError('BROWSER_COMMAND_FAILED', 'archive conversation', 'injected missing session');
+    }
     this.archived.push(taskId);
     this.nextArchiveState = 'archived';
     return Promise.resolve({ conversationId });

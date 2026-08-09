@@ -1216,29 +1216,6 @@ export class CollabService {
     observer: BrowserOperationObserver,
   ): Promise<{ readonly taskId: string; readonly conversationId: string }> {
     const task = store.requireTask(taskId);
-    if (operation?.phase === 'prepared') {
-      store.markOperationEffectUnknown(operation.id, {
-        observedAt: new Date().toISOString(),
-        sessionName: task.playwrightSession,
-        conversationId,
-        postcondition: 'Archive command released',
-      });
-      const result = await this.#browser.archive(
-        taskId,
-        task.playwrightSession,
-        conversationId,
-        conversationUrl,
-        observer,
-      );
-      store.commitOperation(operation.id, 'automatic', {
-        observedAt: new Date().toISOString(),
-        sessionName: task.playwrightSession,
-        conversationId,
-        archived: true,
-        bindingRestored: true,
-      });
-      return { taskId, conversationId: result.conversationId };
-    }
     const rebuild = (await this.#browser.sessionAvailability(task.playwrightSession)) === 'missing';
     if (rebuild) {
       await requireSeedState(this.#paths);
