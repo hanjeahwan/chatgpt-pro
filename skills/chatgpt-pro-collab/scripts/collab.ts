@@ -613,6 +613,7 @@ export class CollabService {
    * @param taskId Task identifier.
    * @param sessionName Stable session identity of the task.
    * @param observer Task-lease child-process observer.
+   * @param reuseExistingSession Whether to open the named session only when it is absent.
    * @returns Task identity plus observed browser evidence.
    * @throws {CollabError} If the fixed context cannot be confirmed or the start conflicts.
    * @throws {Error} If setup is missing or the browser cannot start.
@@ -622,6 +623,7 @@ export class CollabService {
     taskId: string,
     sessionName: string,
     observer: BrowserOperationObserver,
+    reuseExistingSession: boolean = false,
   ): Promise<StartResult> {
     const seedStatePath = await requireSeedState(this.#paths);
     const task = store.requireTask(taskId);
@@ -657,7 +659,7 @@ export class CollabService {
       });
     }
     try {
-      const resumed = task.status === 'active' && task.conversationId === null;
+      const resumed = reuseExistingSession || (task.status === 'active' && task.conversationId === null);
       const browser = await this.#browser.startTask(taskId, task.playwrightSession, seedStatePath, resumed, observer);
       if (effectOperation.step === 'session') {
         effectOperation = store.advanceOperationStep(effectOperation.id, 'project', {
@@ -1544,52 +1546,7 @@ export class CollabService {
       return status.nextAction === 'none' && after === 'available' ? { ...status, nextAction: 'send' } : status;
     }
     if (task.status === 'starting' || operation?.kind === 'start') {
-      const seedStatePath = await requireSeedState(this.#paths);
-      const browser = await this.#browser.startTask(taskId, task.playwrightSession, seedStatePath, true, observer);
-      let recoveredOperation = operation;
-      if (recoveredOperation !== null && recoveredOperation.step === 'session') {
-        recoveredOperation = store.advanceOperationStep(recoveredOperation.id, 'project', {
-          observedAt: new Date().toISOString(),
-          sessionName: task.playwrightSession,
-          pageUrl: browser.url,
-          postcondition: 'fixed Project and blank composer verified',
-        });
-      }
-      if (recoveredOperation !== null && recoveredOperation.step === 'project') {
-        recoveredOperation = store.advanceOperationStep(recoveredOperation.id, 'configuration', {
-          observedAt: new Date().toISOString(),
-          sessionName: task.playwrightSession,
-          pageUrl: browser.url,
-          postcondition: 'current model GPT-5.6 Sol read back and Power slider at the maximum level',
-          projectIdentity: browser.projectId,
-          modelConfirmed: browser.modelConfirmed,
-          powerConfirmed: browser.powerConfirmed,
-          powerNow: browser.powerNow,
-          powerMin: browser.powerMin,
-          powerMax: browser.powerMax,
-        });
-      }
-      if (recoveredOperation !== null) {
-        const evidence = {
-          observedAt: new Date().toISOString(),
-          sessionName: task.playwrightSession,
-          pageUrl: browser.url,
-          postcondition: 'start session resumed from seed',
-          projectIdentity: browser.projectId,
-          modelConfirmed: browser.modelConfirmed,
-          powerConfirmed: browser.powerConfirmed,
-          powerNow: browser.powerNow,
-          powerMin: browser.powerMin,
-          powerMax: browser.powerMax,
-        };
-        if (task.status === 'starting') {
-          store.finishStartTask(taskId, recoveredOperation.id, 'active', evidence);
-        } else {
-          store.commitOperation(recoveredOperation.id, 'automatic', evidence);
-        }
-      } else if (task.status === 'starting') {
-        store.activateTask(taskId);
-      }
+      await this.#startTaskUnderLease(store, taskId, task.playwrightSession, observer, true);
       const after = await this.#browser.sessionAvailability(task.playwrightSession);
       return store.getStatus(taskId, after);
     }

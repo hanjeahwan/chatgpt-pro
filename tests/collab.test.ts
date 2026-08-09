@@ -2920,6 +2920,29 @@ describe('BEH-013 status, recover, and resolve-submission', () => {
     reopened.close();
   });
 
+  it('finalizes a definite failure while recovering an interrupted start', async () => {
+    const fixture = await serviceFixture();
+    const taskId = 'task-definite-start-recovery';
+    const store = new StateStore(fixture.paths.database);
+    store.createStartingTask(taskId, `chatgpt-pro-collab-${taskId}`, 'start-op');
+    store.markOperationEffectUnknown('start-op');
+    store.close();
+    await writeFile(fixture.paths.seedState, validSeedText());
+    fixture.browser.nextStartFailureCode = 'FIXED_TARGET_UNAVAILABLE';
+
+    await expect(fixture.service.recover(taskId)).rejects.toMatchObject({ code: 'FIXED_TARGET_UNAVAILABLE' });
+
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireTask(taskId)).toMatchObject({ status: 'failed' });
+    expect(reopened.requireOperation('start-op')).toMatchObject({
+      phase: 'committed',
+      error: expect.stringContaining('FIXED_TARGET_UNAVAILABLE'),
+    });
+    expect(reopened.getStatus(taskId, 'available').nextAction).toBe('none');
+    reopened.close();
+    expect(fixture.browser.startRebuilds).toEqual([true]);
+  });
+
   it('binds a Project-scoped submitted adjudication and repeats it without browser side effects', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
@@ -3617,6 +3640,7 @@ class FakeBrowser implements CollabBrowser {
   maxConcurrentCaptures = 0;
   nextCaptureFailureTaskId: string | null = null;
   startCount = 0;
+  readonly startRebuilds: boolean[] = [];
   nextChildPid = 20_000;
   nextUserTurnOrdinal = 0;
 
@@ -3715,7 +3739,7 @@ class FakeBrowser implements CollabBrowser {
    * @param taskId Task identifier.
    * @param _sessionName Unused named session.
    * @param _seedStatePath Unused shared seed.
-   * @param _rebuild Unused rebuild flag.
+   * @param rebuild Whether recovery reuses an existing named session.
    * @param observer Task-lease child-process observer.
    * @returns Fake process and context identity.
    * @throws {Error} This fake start does not throw.
@@ -3724,11 +3748,12 @@ class FakeBrowser implements CollabBrowser {
     taskId: string,
     _sessionName: string,
     _seedStatePath: string,
-    _rebuild?: boolean,
+    rebuild: boolean = false,
     observer?: BrowserOperationObserver,
   ) {
     this.observe(observer);
     this.startCount += 1;
+    this.startRebuilds.push(rebuild);
     this.sessionAvailabilityResult = 'available';
     if (this.nextStartFailureCode !== null) {
       const code = this.nextStartFailureCode;
