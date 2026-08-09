@@ -1531,6 +1531,8 @@ export function runBrowserCommand(invocation: BrowserCommandInvocation): Promise
     let commandEventBuffer = '';
     let aborting = false;
     let forcedAbort: NodeJS.Timeout | undefined;
+    let abortKillCompleted = false;
+    let childClosed = false;
     const commandEvents = child.stdio[3];
 
     if (!(commandEvents instanceof Readable)) {
@@ -1568,6 +1570,7 @@ export function runBrowserCommand(invocation: BrowserCommandInvocation): Promise
       aborting = true;
       child.kill('SIGTERM');
       forcedAbort = setTimeout(() => {
+        forcedAbort = undefined;
         try {
           if (commandPid !== undefined) {
             killIfAlive(process.platform === 'win32' ? commandPid : -commandPid, 'SIGKILL');
@@ -1576,6 +1579,10 @@ export function runBrowserCommand(invocation: BrowserCommandInvocation): Promise
           commandObserverError ??= error;
         }
         child.kill('SIGKILL');
+        abortKillCompleted = true;
+        if (childClosed) {
+          rejectOnce(commandObserverError ?? new BrowserCommandAbortedError());
+        }
       }, COMMAND_ABORT_GRACE_MS);
     };
     invocation.signal?.addEventListener('abort', abortCommand, { once: true });
@@ -1618,18 +1625,32 @@ export function runBrowserCommand(invocation: BrowserCommandInvocation): Promise
       try {
         detachObservedChild();
       } catch (detachError) {
+        if (aborting) {
+          commandObserverError ??= detachError;
+          return;
+        }
         rejectOnce(detachError);
         return;
       }
-      rejectOnce(aborting ? new BrowserCommandAbortedError() : error);
+      if (!aborting) {
+        rejectOnce(error);
+      }
     });
     child.on('close', (code, signal) => {
       if (settled) {
         return;
       }
+      childClosed = true;
       try {
         detachObservedChild();
       } catch (error) {
+        if (aborting) {
+          commandObserverError ??= error;
+          if (abortKillCompleted) {
+            rejectOnce(commandObserverError);
+          }
+          return;
+        }
         rejectOnce(error);
         return;
       }
@@ -1656,12 +1677,14 @@ export function runBrowserCommand(invocation: BrowserCommandInvocation): Promise
           commandObserverError = error;
         }
       }
-      if (commandObserverError !== undefined) {
-        rejectOnce(commandObserverError);
+      if (aborting) {
+        if (abortKillCompleted) {
+          rejectOnce(commandObserverError ?? new BrowserCommandAbortedError());
+        }
         return;
       }
-      if (aborting) {
-        rejectOnce(new BrowserCommandAbortedError());
+      if (commandObserverError !== undefined) {
+        rejectOnce(commandObserverError);
         return;
       }
       if (code === 0) {

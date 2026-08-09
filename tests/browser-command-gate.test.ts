@@ -130,12 +130,14 @@ describe('browser command side-effect gate', () => {
     }
     const root = await mkdtemp(join(tmpdir(), 'collab-command-group-abort-'));
     const grandchildPidPath = join(root, 'grandchild-pid');
-    const grandchildSource = 'setInterval(() => {}, 1000)';
+    const grandchildSource = [
+      "process.on('SIGTERM', () => {});",
+      `require('node:fs').writeFileSync(${JSON.stringify(grandchildPidPath)}, String(process.pid));`,
+      'setInterval(() => {}, 1000);',
+    ].join('');
     const commandSource = [
       "const { spawn } = require('node:child_process');",
-      "const { writeFileSync } = require('node:fs');",
-      `const child = spawn(process.execPath, ['-e', ${JSON.stringify(grandchildSource)}], { stdio: 'ignore' });`,
-      `writeFileSync(${JSON.stringify(grandchildPidPath)}, String(child.pid));`,
+      `spawn(process.execPath, ['-e', ${JSON.stringify(grandchildSource)}], { stdio: 'ignore' });`,
       'setInterval(() => {}, 1000);',
     ].join('');
     const controller = new AbortController();
@@ -163,11 +165,13 @@ describe('browser command side-effect gate', () => {
       }
       await Promise.all([waitForPidExit(commandPid), waitForPidExit(grandchildPid)]);
     } finally {
-      if (grandchildPid !== undefined) {
-        try {
-          process.kill(grandchildPid, 'SIGKILL');
-        } catch {
-          // The expected path has already terminated the grandchild.
+      for (const pid of [commandPid, grandchildPid]) {
+        if (pid !== undefined) {
+          try {
+            process.kill(pid, 'SIGKILL');
+          } catch {
+            // The expected path has already terminated the process.
+          }
         }
       }
     }
