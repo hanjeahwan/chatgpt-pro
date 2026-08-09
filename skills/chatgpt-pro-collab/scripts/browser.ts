@@ -503,16 +503,9 @@ export class PlaywrightBrowser {
     try {
       let pid: number | null = null;
       if (!rebuild || (await this.sessionAvailability(sessionName)) === 'missing') {
-        const openOutput = await this.#invoke(
-          sessionName,
-          taskId,
-          ['open', 'about:blank', '--browser=chrome', '--headed'],
-          'open task browser',
-          observer,
-        );
+        const openOutput = await this.#openSeededTaskSession(taskId, sessionName, observer, seedStatePath);
         opened = true;
         pid = parseOpenPid(openOutput.stdout, sessionName);
-        await this.#invoke(sessionName, taskId, ['state-load', seedStatePath], 'load authentication state', observer);
       } else {
         reused = true;
       }
@@ -629,7 +622,7 @@ export class PlaywrightBrowser {
     observer?: BrowserOperationObserver,
   ): Promise<{ readonly conversationId: string; readonly conversationUrl: string }> {
     if (rebuild) {
-      await this.#rebuildTaskSession(taskId, sessionName, observer);
+      await this.#openSeededTaskSession(taskId, sessionName, observer);
     }
     const result = await this.#runCode<RecoverConversationProtocolResult>(
       sessionName,
@@ -1106,7 +1099,7 @@ export class PlaywrightBrowser {
     observer?: BrowserOperationObserver,
   ): Promise<BrowserArchiveState> {
     if (rebuild) {
-      await this.#rebuildTaskSession(taskId, sessionName, observer);
+      await this.#openSeededTaskSession(taskId, sessionName, observer);
     }
     const result = await this.#runCode<ObserveArchiveProtocolResult>(
       sessionName,
@@ -1124,17 +1117,23 @@ export class PlaywrightBrowser {
   }
 
   /**
-   * Recreates a missing task session from the shared authentication seed without choosing a page.
+   * Opens a task session with the authentication seed loaded into its new context.
    *
    * @param taskId Owning task identifier.
-   * @param sessionName Owning Playwright named session, already proven missing by the caller.
+   * @param sessionName Owning Playwright named session to open.
    * @param observer Task-lease child-process observer.
-   * @returns Nothing after the seed is loaded into the new session.
+   * @param seedStatePath Authentication seed; defaults to the shared configured seed.
+   * @returns Output from the fixed CLI open command.
    * @throws {BrowserError} If opening the seeded session fails.
    */
-  async #rebuildTaskSession(taskId: string, sessionName: string, observer?: BrowserOperationObserver): Promise<void> {
+  async #openSeededTaskSession(
+    taskId: string,
+    sessionName: string,
+    observer?: BrowserOperationObserver,
+    seedStatePath: string = this.#paths.seedState,
+  ): Promise<BrowserCommandOutput> {
     await ensureTaskDirectories(this.#paths, taskId);
-    await this.#invoke(
+    return await this.#invoke(
       sessionName,
       taskId,
       ['open', 'about:blank', '--browser=chrome', '--headed'],
@@ -1144,7 +1143,7 @@ export class PlaywrightBrowser {
       undefined,
       undefined,
       undefined,
-      this.#paths.seedState,
+      seedStatePath,
     );
   }
 

@@ -378,7 +378,6 @@ describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
   it('uses the fixed CLI prefix, task output directory, and shared seed without persistence', async () => {
     const fixture = await browserFixture([
       output('### Browser `session-a` opened with pid 4123.'),
-      output('state loaded'),
       output('navigated to projects'),
       pageResult({
         protocol,
@@ -422,13 +421,18 @@ describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
       join(fixture.paths.sessionsDirectory, 'task-a', 'playwright'),
     );
     expect(fixture.invocations[0]?.environment.PLAYWRIGHT_MCP_ALLOW_UNRESTRICTED_FILE_ACCESS).toBe('true');
+    expect(fixture.invocations[0]?.environment.PLAYWRIGHT_MCP_STORAGE_STATE).toBe(fixture.paths.seedState);
     expect(
       fixture.invocations.flatMap((invocation) => {
         return invocation.arguments;
       }),
     ).not.toContain('--persistent');
-    expect(fixture.invocations[1]?.arguments).toContain(fixture.paths.seedState);
-    expect(fixture.invocations[2]?.arguments.slice(4)).toEqual(['goto', 'https://chatgpt.com/projects']);
+    expect(fixture.invocations[1]?.arguments.slice(4)).toEqual(['goto', 'https://chatgpt.com/projects']);
+    expect(
+      fixture.invocations.flatMap((invocation) => {
+        return invocation.arguments;
+      }),
+    ).not.toContain('state-load');
     expect(
       fixture.invocations.flatMap((invocation) => {
         return invocation.arguments;
@@ -448,7 +452,6 @@ describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
   it('maps a typed start failure envelope to its error code and closes the session', async () => {
     const fixture = await browserFixture([
       output('### Browser `session-a` opened with pid 4123.'),
-      output('state loaded'),
       output('navigated to projects'),
       pageResult({
         protocol,
@@ -475,7 +478,6 @@ describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
   it('preserves page-script errors and closes a failed start session', async () => {
     const fixture = await browserFixture([
       output('### Browser `session-a` opened with pid 4123.'),
-      output('state loaded'),
       output('navigated to projects'),
       output('### Error\nReferenceError: sessionStorage is not defined'),
       output("Browser 'session-a' closed"),
@@ -525,7 +527,6 @@ describe('BEH-002 fixed Project and GPT-5.6 Sol Power 5/5 start context', () => 
       }),
     ).toEqual([
       ['open', 'about:blank', '--browser=chrome', '--headed'],
-      ['state-load', fixture.paths.seedState],
       ['goto', 'https://chatgpt.com/projects'],
       ['run-code', '--filename', expect.any(String)],
     ]);
