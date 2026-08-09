@@ -210,7 +210,8 @@ export class StateStore {
       ) STRICT;
     `);
 
-    const turnTableExisted = tableExists(this.#database, 'turn');
+    const turnTableExisted =
+      this.#database.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'turn'").get() !== undefined;
     this.#database.exec(`
       CREATE TABLE IF NOT EXISTS turn (
         task_id TEXT NOT NULL,
@@ -2507,18 +2508,6 @@ function requireCurrentTurnSchema(database: DatabaseSync): void {
       'the turn table does not match the current schema; rebuild the local Collab state database',
     );
   }
-}
-
-/**
- * Reports whether one schema table already exists.
- *
- * @param database Process-local SQLite connection.
- * @param tableName Fixed internal table name.
- * @returns `true` when SQLite already contains the table.
- * @throws {Error} If SQLite cannot inspect its schema catalog.
- */
-function tableExists(database: DatabaseSync, tableName: string): boolean {
-  return database.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?").get(tableName) !== undefined;
 }
 
 /**
