@@ -3587,6 +3587,25 @@ function observeArchiveScript(canonicalUrl: string, expectedConversationId: stri
         return location.hostname === 'chatgpt.com' &&
           match !== null && !match[1].startsWith('WEB:') && match[1] === id;
       }, conversationId, { timeout: 60000, polling: 100 });
+      const sidebar = page.locator('nav').first();
+      await sidebar.waitFor({ state: 'visible', timeout: 60000 });
+      const targetLink = page.locator('a[href="/c/' + conversationId + '"]');
+      for (let poll = 0; poll < 6; poll += 1) {
+        const targetLinkCount = await targetLink.count();
+        if (targetLinkCount > 1) {
+          return JSON.stringify({
+            protocol: '${PROTOCOL}',
+            kind: 'observe-archive',
+            status: 'unknown',
+            error: 'the sidebar archive link is not unique',
+          });
+        }
+        if (targetLinkCount === 1) {
+          return JSON.stringify({ protocol: '${PROTOCOL}', kind: 'observe-archive', status: 'not-archived' });
+        }
+        if (poll < 5) await page.waitForTimeout(500);
+      }
+      return JSON.stringify({ protocol: '${PROTOCOL}', kind: 'observe-archive', status: 'archived' });
     } catch {
       return JSON.stringify({
         protocol: '${PROTOCOL}',
@@ -3595,19 +3614,6 @@ function observeArchiveScript(canonicalUrl: string, expectedConversationId: stri
         error: 'the target conversation page could not be re-observed',
       });
     }
-    const sidebarLink = await page.locator('a[href="/c/' + conversationId + '"]').count();
-    if (sidebarLink === 1) {
-      return JSON.stringify({ protocol: '${PROTOCOL}', kind: 'observe-archive', status: 'not-archived' });
-    }
-    if (sidebarLink === 0) {
-      return JSON.stringify({ protocol: '${PROTOCOL}', kind: 'observe-archive', status: 'archived' });
-    }
-    return JSON.stringify({
-      protocol: '${PROTOCOL}',
-      kind: 'observe-archive',
-      status: 'unknown',
-      error: 'the sidebar archive link is not unique',
-    });
   }`;
 }
 

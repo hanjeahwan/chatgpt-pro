@@ -1835,6 +1835,24 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     expectPageFunctionSyntax(source);
   });
 
+  it('waits for a stable sidebar absence when observing archive state', async () => {
+    const fixture = await browserFixture([pageResult({ protocol, kind: 'observe-archive', status: 'archived' })]);
+    await fixture.browser.observeArchiveState(
+      'task-a',
+      'session-a',
+      'https://chatgpt.com/c/conversation-a',
+      'conversation-a',
+    );
+    const source = await lastScript(fixture.invocations);
+    const observeArchive = new Function(`return (${source})`)() as (page: object) => Promise<string>;
+
+    await expect(observeArchive(observeArchivePageFixture([0, 0, 1]))).resolves.toContain('"status":"not-archived"');
+    await expect(observeArchive(observeArchivePageFixture([0, 0, 0, 0, 0, 0]))).resolves.toContain(
+      '"status":"archived"',
+    );
+    await expect(observeArchive(observeArchivePageFixture([2]))).resolves.toContain('"status":"unknown"');
+  });
+
   it('archives a project-scoped conversation using its canonical URL', async () => {
     const fixture = await browserFixture([pageResult({ protocol, kind: 'archive', conversationId: 'conversation-a' })]);
 
@@ -3623,6 +3641,44 @@ function archivePageFixture(
       return Promise.resolve();
     },
     waitForFunction() {
+      return Promise.resolve();
+    },
+  };
+}
+
+/**
+ * Creates the smallest page contract needed to execute archive-state observation.
+ *
+ * @param targetLinkCounts Ordered sidebar target counts returned across hydration polls.
+ * @returns A page-shaped object with a visible sidebar and deterministic target-link counts.
+ * @throws {Error} This fixture does not throw for ordinary scripted observations.
+ */
+function observeArchivePageFixture(targetLinkCounts: readonly number[]): object {
+  const counts = [...targetLinkCounts];
+  const sidebar = {
+    first() {
+      return sidebar;
+    },
+    waitFor() {
+      return Promise.resolve();
+    },
+  };
+  const targetLink = {
+    count() {
+      return Promise.resolve(counts.shift() ?? targetLinkCounts.at(-1) ?? 0);
+    },
+  };
+  return {
+    goto() {
+      return Promise.resolve();
+    },
+    waitForFunction() {
+      return Promise.resolve();
+    },
+    locator(selector: string) {
+      return selector === 'nav' ? sidebar : targetLink;
+    },
+    waitForTimeout() {
       return Promise.resolve();
     },
   };
