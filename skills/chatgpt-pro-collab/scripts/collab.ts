@@ -186,7 +186,7 @@ export interface CollabBrowser {
 
 export interface StartResult {
   readonly taskId: string;
-  readonly browserPid: number;
+  readonly browserPid: number | null;
   readonly contextMarker: string;
   readonly sessionDirectory: string;
 }

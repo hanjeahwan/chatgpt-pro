@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
-import { access, link, mkdir, open, readFile, stat, unlink } from 'node:fs/promises';
+import { access, link, mkdir, open, readFile, stat, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 
@@ -331,14 +331,14 @@ export async function requireArtifact(localPath: string): Promise<string> {
 }
 
 /**
- * Writes a unique Playwright `run-code` source file inside the task session.
+ * Writes the current Playwright `run-code` source for one task action.
  *
  * @param paths Resolved Collab paths.
  * @param taskId Owning task identifier or a unique setup identifier.
- * @param action Short action label used only for audit-friendly filenames.
+ * @param action Short action label used for the stable filename.
  * @param source JavaScript function source accepted by Playwright CLI.
  * @returns The absolute script path.
- * @throws {Error} If the script cannot be published as a new file.
+ * @throws {Error} If the script cannot be written.
  */
 export async function savePlaywrightScript(
   paths: CollabPaths,
@@ -347,8 +347,8 @@ export async function savePlaywrightScript(
   source: string,
 ): Promise<string> {
   await ensureTaskDirectories(paths, taskId);
-  const target = join(taskDirectory(paths, taskId), 'playwright', `${action}-${randomUUID()}.js`);
-  await writeNewFileAtomically(target, source);
+  const target = join(taskDirectory(paths, taskId), 'playwright', `${action}.js`);
+  await writeFile(target, source);
   return target;
 }
 

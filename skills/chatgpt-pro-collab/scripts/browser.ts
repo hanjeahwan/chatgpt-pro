@@ -60,7 +60,7 @@ export interface BrowserOperationObserver {
 }
 
 export interface BrowserSessionInfo {
-  readonly pid: number;
+  readonly pid: number | null;
   readonly url: string;
   readonly contextMarker: string;
   readonly projectId: string;
@@ -483,7 +483,7 @@ export class PlaywrightBrowser {
    * @param seedStatePath Readable setup state loaded but never saved by the task.
    * @param rebuild When true, only create the session when the named session is absent.
    * @param observer Task-lease child-process observer.
-   * @returns PID reported by Playwright plus observed page and context identity.
+   * @returns PID reported for a fresh browser, or null for a reused session, plus observed page and context identity.
    * @throws {BrowserError} If the fixed Project, model, or mode context cannot be confirmed.
    * @throws {Error} If a local Playwright artifact cannot be written.
    */
@@ -499,7 +499,7 @@ export class PlaywrightBrowser {
     let opened = false;
     let reused = false;
     try {
-      let pid = -1;
+      let pid: number | null = null;
       if (!rebuild || (await this.sessionAvailability(sessionName)) === 'missing') {
         const openOutput = await this.#invoke(
           sessionName,
@@ -531,21 +531,6 @@ export class PlaywrightBrowser {
       const result = parseStartProtocolResult(output.stdout);
       if (result.kind === 'start-failed') {
         throw new BrowserError(result.errorCode, 'start task', result.message);
-      }
-      if (pid < 0) {
-        pid = await this.#runner({
-          executable: 'npx',
-          arguments: ['-y', PLAYWRIGHT_CLI_PACKAGE, '--raw', 'list'],
-          cwd: this.#cwd,
-          environment: {
-            ...process.env,
-            PLAYWRIGHT_MCP_ALLOW_UNRESTRICTED_FILE_ACCESS: 'true',
-            PLAYWRIGHT_MCP_OUTPUT_DIR: join(taskDirectory(this.#paths, taskId), 'playwright'),
-          },
-          signal: AbortSignal.timeout(COMMAND_HOST_DEADLINE_MS),
-        }).then((listed) => {
-          return parseSessionPid(listed.stdout, sessionName);
-        });
       }
       return {
         pid,
@@ -1864,34 +1849,6 @@ function parseSessionAvailability(stdout: string, sessionName: string): BrowserA
     return 'missing';
   }
   return session.get('status') === 'open' ? 'available' : 'missing';
-}
-
-/**
- * Extracts the daemon PID from the fixed CLI `list` output when it is reported.
- *
- * @param stdout Complete `list` stdout.
- * @param sessionName Recorded named session to match exactly.
- * @returns The reported PID, or -1 when the output does not expose one.
- * @throws {BrowserError} If the listing is malformed or a reported PID is invalid.
- */
-function parseSessionPid(stdout: string, sessionName: string): number {
-  const sessions = parseSessionList(stdout);
-  if (sessions === null) {
-    throw new BrowserError('PLAYWRIGHT_CONTRACT_DRIFT', 'parse session list', 'session list is invalid');
-  }
-  const session = sessions.get(sessionName);
-  if (session === undefined) {
-    return -1;
-  }
-  const reportedPid = session.get('pid');
-  if (reportedPid === undefined) {
-    return -1;
-  }
-  const pid = Number(reportedPid);
-  if (!Number.isSafeInteger(pid) || pid <= 0) {
-    throw new BrowserError('PLAYWRIGHT_CONTRACT_DRIFT', 'parse session list', 'session PID is invalid');
-  }
-  return pid;
 }
 
 /**

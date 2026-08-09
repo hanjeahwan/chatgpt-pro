@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -13,9 +13,26 @@ import {
   publishOrVerifyArtifact,
   publishOrVerifyResponse,
   responsePath,
+  savePlaywrightScript,
   savePromptCopy,
   seedStateValid,
 } from '../skills/chatgpt-pro-collab/scripts/session.ts';
+
+describe('Playwright script storage', () => {
+  it('reuses one file per task action and keeps actions separate', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-playwright-script-'));
+    const paths = collabPaths(root);
+
+    const first = await savePlaywrightScript(paths, 'task-a', 'observe', 'first');
+    const second = await savePlaywrightScript(paths, 'task-a', 'observe', 'second');
+    const other = await savePlaywrightScript(paths, 'task-a', 'capture', 'other');
+
+    expect(second).toBe(first);
+    expect(other).not.toBe(first);
+    expect(await readdir(join(paths.sessionsDirectory, 'task-a', 'playwright'))).toEqual(['capture.js', 'observe.js']);
+    await expect(readFile(first, 'utf8')).resolves.toBe('second');
+  });
+});
 
 describe('BEH-003 and BEH-007 artifact boundaries', () => {
   it('reads only explicit paths and preserves attachment order without copying bodies', async () => {

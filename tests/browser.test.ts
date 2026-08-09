@@ -1915,9 +1915,7 @@ describe('BEH-013 browser boundary support', () => {
   it('rebuilds a session without opening when the named session already exists', async () => {
     await writeFile(join((await browserFixture([])).paths.seedState), '{}');
     const fixture = await browserFixture([
-      output(
-        '### Browsers\n- session-a-verify:\n  - status: open\n  - pid: 9000\n- session-a:\n  - status: open\n  - pid: 4123\n',
-      ),
+      output('### Browsers\n- session-a-verify:\n  - status: open\n- session-a:\n  - status: open\n'),
       output('navigated to projects'),
       pageResult({
         protocol,
@@ -1931,14 +1929,13 @@ describe('BEH-013 browser boundary support', () => {
         powerMin: 0,
         powerMax: 4,
       }),
-      output('### Browsers\n- session-a:\n  - status: open\n  - pid: 4123\n'),
     ]);
     await writeFile(fixture.paths.seedState, '{}');
 
     const result = await fixture.browser.startTask('task-a', 'session-a', fixture.paths.seedState, true);
 
     expect(result).toEqual({
-      pid: 4123,
+      pid: null,
       url: 'https://chatgpt.com/g/g-p-123/project',
       contextMarker: 'ctx',
       projectId: 'g-p-123',
@@ -1958,6 +1955,11 @@ describe('BEH-013 browser boundary support', () => {
         return invocation.arguments;
       }),
     ).not.toContain('state-load');
+    expect(
+      fixture.invocations.filter((invocation) => {
+        return invocation.arguments.at(-1) === 'list';
+      }),
+    ).toHaveLength(1);
   });
 
   it('verifies a rebuilt session against the recorded canonical conversation', async () => {
@@ -3305,7 +3307,7 @@ async function executableProjectSendFixture(options: {
         if (basename(scriptPath).startsWith('prepare-upload')) {
           options.beforePrepareUpload?.(pageFixture);
         }
-        if (basename(scriptPath).startsWith('send-')) {
+        if (basename(scriptPath) === 'send.js') {
           options.beforeSubmit?.(pageFixture);
         }
         const source = await scriptForInvocation(invocation);
