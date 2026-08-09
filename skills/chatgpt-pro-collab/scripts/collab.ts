@@ -43,10 +43,18 @@ const TASK_OPERATION_RETRY_INTERVAL_MS = 250;
 const TASK_OPERATION_RETRY_LIMIT = 24;
 
 export interface CollabBrowser {
-  setupOpen(sessionName: string): Promise<void>;
-  setupSaveSeed(sessionName: string, seedStatePath: string): Promise<{ readonly seedValidated: boolean }>;
-  setupClose(sessionName: string): Promise<{ readonly sessionClosed: boolean }>;
-  verifyAuthenticatedSeed(sessionName: string, seedStatePath: string): Promise<{ readonly authenticated: boolean }>;
+  setupOpen(sessionName: string, observer?: BrowserOperationObserver): Promise<void>;
+  setupSaveSeed(
+    sessionName: string,
+    seedStatePath: string,
+    observer?: BrowserOperationObserver,
+  ): Promise<{ readonly seedValidated: boolean }>;
+  setupClose(sessionName: string, observer?: BrowserOperationObserver): Promise<{ readonly sessionClosed: boolean }>;
+  verifyAuthenticatedSeed(
+    sessionName: string,
+    seedStatePath: string,
+    observer?: BrowserOperationObserver,
+  ): Promise<{ readonly authenticated: boolean }>;
   startTask(
     taskId: string,
     sessionName: string,
@@ -266,34 +274,52 @@ export class CollabService {
   async setup(): Promise<{ readonly seedPath: string }> {
     await ensureCollabDirectories(this.#paths);
     return this.#withStore(async (store) => {
-      const existing = store.getUncommittedSetupOperation();
-      const sessionName = existing?.sessionName ?? `chatgpt-pro-collab-setup-${this.#idGenerator()}`;
-      let operation =
-        existing ??
-        store.createOperation({
-          id: this.#idGenerator(),
-          kind: 'setup',
-          step: 'login',
-          taskId: null,
-          turnId: null,
-          sessionName,
-        });
-      const seedPath = this.#paths.seedState;
-      const now = (): string => {
-        return new Date().toISOString();
-      };
+      const token = randomUUID();
+      store.acquireSetupOperation(token);
+      return this.#withAcquiredSetupOperation(store, token, async (observer) => {
+        const existing = store.getUncommittedSetupOperation();
+        const sessionName = existing?.sessionName ?? `chatgpt-pro-collab-setup-${this.#idGenerator()}`;
+        let operation =
+          existing ??
+          store.createOperation({
+            id: this.#idGenerator(),
+            kind: 'setup',
+            step: 'login',
+            taskId: null,
+            turnId: null,
+            sessionName,
+          });
+        const seedPath = this.#paths.seedState;
+        const now = (): string => {
+          return new Date().toISOString();
+        };
 
-      if (operation.step === 'login') {
-        const seedValid = await seedStateValid(this.#paths);
-        if (seedValid) {
-          const verified = await this.#browser.verifyAuthenticatedSeed(sessionName, seedPath);
-          if (verified.authenticated) {
-            operation = store.advanceOperationStep(operation.id, 'seed', {
-              observedAt: now(),
-              sessionName,
-              postcondition: 'seed loaded in an isolated session and the authenticated page was verified',
-              seedValidated: true,
-            });
+        if (operation.step === 'login') {
+          const seedValid = await seedStateValid(this.#paths);
+          if (seedValid) {
+            const verified = await this.#browser.verifyAuthenticatedSeed(sessionName, seedPath, observer);
+            if (verified.authenticated) {
+              operation = store.advanceOperationStep(operation.id, 'seed', {
+                observedAt: now(),
+                sessionName,
+                postcondition: 'seed loaded in an isolated session and the authenticated page was verified',
+                seedValidated: true,
+              });
+            } else {
+              if (operation.phase === 'prepared') {
+                operation = store.markOperationEffectUnknown(operation.id, {
+                  observedAt: now(),
+                  sessionName,
+                  postcondition: 'setup browser command released',
+                });
+              }
+              await this.#browser.setupOpen(sessionName, observer);
+              operation = store.advanceOperationStep(operation.id, 'seed', {
+                observedAt: now(),
+                sessionName,
+                postcondition: 'interactive login observed',
+              });
+            }
           } else {
             if (operation.phase === 'prepared') {
               operation = store.markOperationEffectUnknown(operation.id, {
@@ -302,105 +328,91 @@ export class CollabService {
                 postcondition: 'setup browser command released',
               });
             }
-            await this.#browser.setupOpen(sessionName);
+            await this.#browser.setupOpen(sessionName, observer);
             operation = store.advanceOperationStep(operation.id, 'seed', {
               observedAt: now(),
               sessionName,
               postcondition: 'interactive login observed',
             });
           }
-        } else {
-          if (operation.phase === 'prepared') {
-            operation = store.markOperationEffectUnknown(operation.id, {
-              observedAt: now(),
-              sessionName,
-              postcondition: 'setup browser command released',
-            });
+        }
+
+        if (operation.step === 'seed') {
+          const seedValid = await seedStateValid(this.#paths);
+          if (!seedValid) {
+            if (operation.phase === 'prepared') {
+              operation = store.markOperationEffectUnknown(operation.id, {
+                observedAt: now(),
+                sessionName,
+                postcondition: 'state-save command released',
+              });
+              await this.#browser.setupSaveSeed(sessionName, seedPath, observer);
+            } else {
+              await this.#browser.setupOpen(sessionName, observer);
+              await this.#browser.setupSaveSeed(sessionName, seedPath, observer);
+            }
           }
-          await this.#browser.setupOpen(sessionName);
-          operation = store.advanceOperationStep(operation.id, 'seed', {
+          const validated = await seedStateValid(this.#paths);
+          if (!validated) {
+            throw new CollabError(
+              'SEED_NOT_AUTHENTICATED',
+              'saved authentication state is not a loadable ChatGPT storage state; run setup again and complete the login',
+            );
+          }
+          let verified = await this.#browser.verifyAuthenticatedSeed(sessionName, seedPath, observer);
+          if (!verified.authenticated) {
+            if (operation.phase === 'prepared') {
+              operation = store.markOperationEffectUnknown(operation.id, {
+                observedAt: now(),
+                sessionName,
+                postcondition: 'state-save command released after an interactive login',
+              });
+              await this.#browser.setupSaveSeed(sessionName, seedPath, observer);
+            } else if (operation.phase === 'effect-unknown') {
+              await this.#browser.setupOpen(sessionName, observer);
+              await this.#browser.setupSaveSeed(sessionName, seedPath, observer);
+            }
+            verified = await this.#browser.verifyAuthenticatedSeed(sessionName, seedPath, observer);
+          }
+          if (!verified.authenticated) {
+            throw new CollabError(
+              'SEED_NOT_AUTHENTICATED',
+              'saved authentication state did not produce an authenticated ChatGPT page; run setup again and complete the login',
+            );
+          }
+          operation = store.advanceOperationStep(operation.id, 'cleanup', {
             observedAt: now(),
             sessionName,
-            postcondition: 'interactive login observed',
+            postcondition: 'authentication seed saved, loaded, and authenticated on the page',
+            seedValidated: true,
           });
         }
-      }
 
-      if (operation.step === 'seed') {
-        const seedValid = await seedStateValid(this.#paths);
-        if (!seedValid) {
+        if (operation.step === 'cleanup') {
           if (operation.phase === 'prepared') {
             operation = store.markOperationEffectUnknown(operation.id, {
               observedAt: now(),
               sessionName,
-              postcondition: 'state-save command released',
+              postcondition: 'setup close command released',
             });
-            await this.#browser.setupSaveSeed(sessionName, seedPath);
-          } else {
-            await this.#browser.setupOpen(sessionName);
-            await this.#browser.setupSaveSeed(sessionName, seedPath);
           }
-        }
-        const validated = await seedStateValid(this.#paths);
-        if (!validated) {
-          throw new CollabError(
-            'SEED_NOT_AUTHENTICATED',
-            'saved authentication state is not a loadable ChatGPT storage state; run setup again and complete the login',
-          );
-        }
-        let verified = await this.#browser.verifyAuthenticatedSeed(sessionName, seedPath);
-        if (!verified.authenticated) {
-          if (operation.phase === 'prepared') {
-            operation = store.markOperationEffectUnknown(operation.id, {
-              observedAt: now(),
-              sessionName,
-              postcondition: 'state-save command released after an interactive login',
-            });
-            await this.#browser.setupSaveSeed(sessionName, seedPath);
-          } else if (operation.phase === 'effect-unknown') {
-            await this.#browser.setupOpen(sessionName);
-            await this.#browser.setupSaveSeed(sessionName, seedPath);
+          const closed = await this.#browser.setupClose(sessionName, observer);
+          if (closed.sessionClosed !== true) {
+            throw new CollabError(
+              'SETUP_SESSION_NOT_CLOSED',
+              `setup session could not be confirmed closed (sessionClosed: ${closed.sessionClosed}); run setup again to finish cleanup`,
+            );
           }
-          verified = await this.#browser.verifyAuthenticatedSeed(sessionName, seedPath);
-        }
-        if (!verified.authenticated) {
-          throw new CollabError(
-            'SEED_NOT_AUTHENTICATED',
-            'saved authentication state did not produce an authenticated ChatGPT page; run setup again and complete the login',
-          );
-        }
-        operation = store.advanceOperationStep(operation.id, 'cleanup', {
-          observedAt: now(),
-          sessionName,
-          postcondition: 'authentication seed saved, loaded, and authenticated on the page',
-          seedValidated: true,
-        });
-      }
-
-      if (operation.step === 'cleanup') {
-        if (operation.phase === 'prepared') {
-          operation = store.markOperationEffectUnknown(operation.id, {
+          operation = store.commitOperation(operation.id, 'automatic', {
             observedAt: now(),
             sessionName,
-            postcondition: 'setup close command released',
+            postcondition: 'setup session closed after verified seed',
+            seedValidated: true,
+            sessionClosed: true,
           });
         }
-        const closed = await this.#browser.setupClose(sessionName);
-        if (closed.sessionClosed !== true) {
-          throw new CollabError(
-            'SETUP_SESSION_NOT_CLOSED',
-            `setup session could not be confirmed closed (sessionClosed: ${closed.sessionClosed}); run setup again to finish cleanup`,
-          );
-        }
-        operation = store.commitOperation(operation.id, 'automatic', {
-          observedAt: now(),
-          sessionName,
-          postcondition: 'setup session closed after verified seed',
-          seedValidated: true,
-          sessionClosed: true,
-        });
-      }
-      return { seedPath: await requireSeedState(this.#paths) };
+        return { seedPath: await requireSeedState(this.#paths) };
+      });
     });
   }
 
@@ -1801,6 +1813,38 @@ export class CollabService {
     const token = randomUUID();
     store.acquireTaskOperation(taskId, operation, token);
     return this.#withAcquiredTaskOperation(store, taskId, token, action);
+  }
+
+  /**
+   * Runs setup browser work under the already acquired global lease.
+   *
+   * @param store Current process-local state connection.
+   * @param token Current setup lease token used for observer updates and release.
+   * @param action Setup side effects and journal transitions performed while the lease is held.
+   * @returns The action result after the lease is released.
+   * @throws {Error} If the action, observer state update, or lease release fails.
+   */
+  async #withAcquiredSetupOperation<T>(
+    store: StateStore,
+    token: string,
+    action: (observer: BrowserOperationObserver) => Promise<T>,
+  ): Promise<T> {
+    const observer: BrowserOperationObserver = {
+      childSpawned(pid) {
+        store.attachSetupOperationChild(token, pid);
+      },
+      childExited(pid) {
+        store.detachSetupOperationChild(token, pid);
+      },
+      commandSpawned(pid) {
+        store.attachSetupOperationCommand(token, pid);
+      },
+    };
+    try {
+      return await action(observer);
+    } finally {
+      store.releaseSetupOperation(token);
+    }
   }
 
   /**

@@ -224,6 +224,48 @@ describe('VER-011 SQLite cross-process concurrency', () => {
     contender.close();
   });
 
+  it('keeps an orphan setup lease fenced until its gate and command have both exited', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-setup-fence-'));
+    const databasePath = join(root, 'state.sqlite');
+    const initialized = new StateStore(databasePath);
+    initialized.close();
+    const workerPath = join(import.meta.dirname, 'support', 'orphan-setup-worker.ts');
+    const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 3000)'], { stdio: 'ignore' });
+    const command = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 3000)'], { stdio: 'ignore' });
+    const childPid = child.pid;
+    const commandPid = command.pid;
+    let contender: StateStore | undefined;
+    try {
+      if (childPid === undefined || commandPid === undefined) {
+        throw new Error('fixture child or command did not spawn');
+      }
+
+      await execFileAsync(process.execPath, [workerPath, databasePath, childPid.toString(), commandPid.toString()]);
+      const opened = new StateStore(databasePath);
+      contender = opened;
+      expect(() => {
+        opened.acquireSetupOperation('contender');
+      }).toThrowError(/setup browser is busy/);
+      child.kill('SIGKILL');
+      await waitForPidExit(childPid);
+      expect(() => {
+        opened.acquireSetupOperation('contender');
+      }).toThrowError(/setup browser is busy/);
+      command.kill('SIGKILL');
+      await waitForPidExit(commandPid);
+      opened.acquireSetupOperation('contender');
+      opened.releaseSetupOperation('contender');
+    } finally {
+      contender?.close();
+      child.kill('SIGKILL');
+      command.kill('SIGKILL');
+      await Promise.all([
+        childPid === undefined ? Promise.resolve() : waitForPidExit(childPid),
+        commandPid === undefined ? Promise.resolve() : waitForPidExit(commandPid),
+      ]);
+    }
+  });
+
   it('rejects a second process while one task browser lease is live', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collab-operation-concurrency-'));
     const databasePath = join(root, 'state.sqlite');

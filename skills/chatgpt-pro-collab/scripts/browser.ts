@@ -305,19 +305,21 @@ export class PlaywrightBrowser {
    * Opens the interactive setup session when absent and waits for the human login.
    *
    * @param sessionName Recorded setup session name.
+   * @param observer Setup-lease child-process observer.
    * @returns Nothing after the authenticated ChatGPT page is observed.
    * @throws {BrowserError} If the login page contract cannot be satisfied.
    * @throws {Error} If a local Playwright artifact cannot be written.
    */
-  async setupOpen(sessionName: string): Promise<void> {
+  async setupOpen(sessionName: string, observer?: BrowserOperationObserver): Promise<void> {
     const setupId = sessionName.replace(/^chatgpt-pro-collab-/u, '');
     await ensureTaskDirectories(this.#paths, setupId);
-    if ((await this.sessionAvailability(sessionName)) === 'missing') {
+    if ((await this.sessionAvailability(sessionName, observer)) === 'missing') {
       await this.#invoke(
         sessionName,
         setupId,
         ['open', CHATGPT_URL, '--browser=chrome', '--headed'],
         'open setup browser',
+        observer,
       );
     }
     await this.#runCodeWithoutResult(
@@ -326,6 +328,7 @@ export class PlaywrightBrowser {
       'await-login',
       loginWaitScript(),
       'wait for interactive login',
+      observer,
       null,
     );
   }
@@ -335,13 +338,18 @@ export class PlaywrightBrowser {
    *
    * @param sessionName Recorded setup session name.
    * @param seedStatePath Absolute authentication seed path.
+   * @param observer Setup-lease child-process observer.
    * @returns Whether the saved seed is a readable regular file.
    * @throws {BrowserError} If the state-save command fails.
    * @throws {Error} If a local Playwright artifact cannot be written.
    */
-  async setupSaveSeed(sessionName: string, seedStatePath: string): Promise<{ readonly seedValidated: boolean }> {
+  async setupSaveSeed(
+    sessionName: string,
+    seedStatePath: string,
+    observer?: BrowserOperationObserver,
+  ): Promise<{ readonly seedValidated: boolean }> {
     const setupId = sessionName.replace(/^chatgpt-pro-collab-/u, '');
-    await this.#invoke(sessionName, setupId, ['state-save', seedStatePath], 'save authentication state');
+    await this.#invoke(sessionName, setupId, ['state-save', seedStatePath], 'save authentication state', observer);
     return { seedValidated: await isReadableFile(seedStatePath) };
   }
 
@@ -360,6 +368,7 @@ export class PlaywrightBrowser {
    *
    * @param sessionName Recorded setup session name; never opened or closed by this method.
    * @param seedStatePath Absolute authentication seed path.
+   * @param observer Setup-lease child-process observer.
    * @returns Whether the loaded seed produced an authenticated ChatGPT page.
    * @throws {BrowserError} If the browser cannot be opened or the seed cannot be loaded,
    *   or the verification session cannot be closed (combining the original failure when present).
@@ -367,6 +376,7 @@ export class PlaywrightBrowser {
   async verifyAuthenticatedSeed(
     sessionName: string,
     seedStatePath: string,
+    observer?: BrowserOperationObserver,
   ): Promise<{ readonly authenticated: boolean }> {
     const setupId = sessionName.replace(/^chatgpt-pro-collab-/u, '');
     const verificationSession = `${sessionName}-verify`;
@@ -375,22 +385,30 @@ export class PlaywrightBrowser {
     let hardFailure: unknown = null;
     let authenticated = false;
     try {
-      if ((await this.sessionAvailability(verificationSession)) !== 'missing') {
-        await this.#invoke(verificationSession, verificationId, ['close'], 'close leftover seed verification browser');
+      if ((await this.sessionAvailability(verificationSession, observer)) !== 'missing') {
+        await this.#invoke(
+          verificationSession,
+          verificationId,
+          ['close'],
+          'close leftover seed verification browser',
+          observer,
+        );
       }
       await this.#invoke(
         verificationSession,
         verificationId,
         ['open', 'about:blank', '--browser=chrome', '--headed'],
         'open seed verification browser',
+        observer,
       );
       await this.#invoke(
         verificationSession,
         verificationId,
         ['state-load', seedStatePath],
         'load authentication state',
+        observer,
       );
-      await this.#invoke(verificationSession, verificationId, ['goto', CHATGPT_URL], 'open chatgpt.com');
+      await this.#invoke(verificationSession, verificationId, ['goto', CHATGPT_URL], 'open chatgpt.com', observer);
       try {
         await this.#runCodeWithoutResult(
           verificationSession,
@@ -398,6 +416,7 @@ export class PlaywrightBrowser {
           'verify-seed',
           authenticatedPageScript(),
           'verify seed',
+          observer,
         );
         authenticated = true;
       } catch {
@@ -407,7 +426,7 @@ export class PlaywrightBrowser {
       hardFailure = error;
     }
     try {
-      await this.#invoke(verificationSession, verificationId, ['close'], 'close seed verification browser');
+      await this.#invoke(verificationSession, verificationId, ['close'], 'close seed verification browser', observer);
     } catch (closeError) {
       throw new BrowserError(
         'BROWSER_CLEANUP_FAILED',
@@ -427,13 +446,17 @@ export class PlaywrightBrowser {
    * Closes the recorded setup session and verifies the session is gone.
    *
    * @param sessionName Recorded setup session name.
+   * @param observer Setup-lease child-process observer.
    * @returns Whether the session is no longer available.
    * @throws {BrowserError} If the close command itself fails.
    */
-  async setupClose(sessionName: string): Promise<{ readonly sessionClosed: boolean }> {
+  async setupClose(
+    sessionName: string,
+    observer?: BrowserOperationObserver,
+  ): Promise<{ readonly sessionClosed: boolean }> {
     const setupId = sessionName.replace(/^chatgpt-pro-collab-/u, '');
-    await this.#invoke(sessionName, setupId, ['close'], 'close setup browser');
-    return { sessionClosed: (await this.sessionAvailability(sessionName)) === 'missing' };
+    await this.#invoke(sessionName, setupId, ['close'], 'close setup browser', observer);
+    return { sessionClosed: (await this.sessionAvailability(sessionName, observer)) === 'missing' };
   }
 
   /**
@@ -544,11 +567,12 @@ export class PlaywrightBrowser {
    * Probes whether the recorded named session currently exists without opening a page.
    *
    * @param sessionName Playwright named session recorded in the task row.
+   * @param observer Optional lease child-process observer.
    * @returns `available` for an open session, `missing` for deterministic absence,
    *   and `unknown` when the CLI itself failed or its output cannot be parsed.
    * @throws {Error} This probe converts CLI failures into the unknown classification.
    */
-  async sessionAvailability(sessionName: string): Promise<BrowserAvailability> {
+  async sessionAvailability(sessionName: string, observer?: BrowserOperationObserver): Promise<BrowserAvailability> {
     let output: BrowserCommandOutput;
     try {
       output = await this.#runner({
@@ -560,6 +584,19 @@ export class PlaywrightBrowser {
           PLAYWRIGHT_MCP_ALLOW_UNRESTRICTED_FILE_ACCESS: 'true',
           PLAYWRIGHT_MCP_OUTPUT_DIR: join(taskDirectory(this.#paths, 'playwright-probe'), 'playwright'),
         },
+        ...(observer === undefined
+          ? {}
+          : {
+              onChildSpawned: (pid: number) => {
+                observer.childSpawned(pid);
+              },
+              onChildExited: (pid: number) => {
+                observer.childExited(pid);
+              },
+              onCommandSpawned: (pid: number) => {
+                observer.commandSpawned(pid);
+              },
+            }),
         signal: AbortSignal.timeout(COMMAND_HOST_DEADLINE_MS),
       });
     } catch {
@@ -1447,6 +1484,7 @@ export class PlaywrightBrowser {
    * @param action Audit-friendly script filename label.
    * @param source Page function source.
    * @param operation Concrete operation for failures.
+   * @param observer Lease child-process observer.
    * @param signal Host cancellation, or null only for the interactive login wait.
    * @returns Nothing after the page function completes.
    * @throws {BrowserError} If the command fails.
@@ -1458,6 +1496,7 @@ export class PlaywrightBrowser {
     action: string,
     source: string,
     operation: string,
+    observer?: BrowserOperationObserver,
     signal?: AbortSignal | null,
   ): Promise<void> {
     const scriptPath = await savePlaywrightScript(this.#paths, taskId, action, source);
@@ -1466,7 +1505,7 @@ export class PlaywrightBrowser {
       taskId,
       ['run-code', '--filename', scriptPath],
       operation,
-      undefined,
+      observer,
       undefined,
       undefined,
       undefined,

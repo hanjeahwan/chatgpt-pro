@@ -50,6 +50,40 @@ describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
     expect(fixture.invocations[2]?.signal).toBeUndefined();
   });
 
+  it('reports every setup browser command to the setup lease observer', async () => {
+    const fixture = await browserFixture([
+      output('  (no browsers)'),
+      output('setup browser opened'),
+      output('interactive login completed'),
+    ]);
+    const events: string[] = [];
+    const observer: BrowserOperationObserver = {
+      childSpawned(pid) {
+        events.push(`spawn:${pid}`);
+      },
+      childExited(pid) {
+        events.push(`exit:${pid}`);
+      },
+      commandSpawned(pid) {
+        events.push(`command:${pid}`);
+      },
+    };
+
+    await fixture.browser.setupOpen('chatgpt-pro-collab-setup-live', observer);
+
+    expect(events).toEqual([
+      'spawn:5000',
+      'command:6000',
+      'exit:5000',
+      'spawn:5001',
+      'command:6001',
+      'exit:5001',
+      'spawn:5002',
+      'command:6002',
+      'exit:5002',
+    ]);
+  });
+
   it('verifies a seed in a distinct named session even when the interactive setup session is logged in', async () => {
     const fixture = await browserFixture([
       output('### Browsers\n- chatgpt-pro-collab-setup-live:\n  - status: open\n  - pid: 100\n'),

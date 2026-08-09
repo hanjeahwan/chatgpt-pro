@@ -200,6 +200,15 @@ export class StateStore {
       ) STRICT;
     `);
     requireCurrentTaskSchema(this.#database);
+    this.#database.exec(`
+      CREATE TABLE IF NOT EXISTS setup_lease (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        browser_operation_token TEXT NOT NULL,
+        browser_operation_pid INTEGER NOT NULL,
+        browser_operation_child_pid INTEGER,
+        browser_operation_command_pid INTEGER
+      ) STRICT;
+    `);
 
     const turnTableExisted = tableExists(this.#database, 'turn');
     this.#database.exec(`
@@ -370,6 +379,168 @@ export class StateStore {
       throw new StateError('TASK_NOT_ACTIVE', `task is ${task.status}: ${taskId}`);
     }
     return task;
+  }
+
+  /**
+   * Acquires the global setup browser lease after every recorded process has exited.
+   *
+   * @param token Collision-resistant owner token for release authorization.
+   * @param ownerPid Process holding the lease; defaults to the current CLI process.
+   * @returns Nothing after the lease is committed.
+   * @throws {StateError} If another live process owns setup.
+   * @throws {Error} If SQLite cannot commit the lease.
+   */
+  acquireSetupOperation(token: string, ownerPid: number = process.pid): void {
+    this.#transaction(() => {
+      const value = this.#database.prepare('SELECT * FROM setup_lease WHERE singleton = 1').get();
+      if (value !== undefined) {
+        const row = record(value);
+        const existingPid = integer(row.browser_operation_pid, 'setup_lease.browser_operation_pid');
+        const existingChildPid = nullableInteger(
+          row.browser_operation_child_pid,
+          'setup_lease.browser_operation_child_pid',
+        );
+        const existingCommandPid = nullableInteger(
+          row.browser_operation_command_pid,
+          'setup_lease.browser_operation_command_pid',
+        );
+        if (
+          isProcessAlive(existingPid) ||
+          (existingChildPid !== null && isProcessAlive(existingChildPid)) ||
+          (existingCommandPid !== null && isProcessAlive(existingCommandPid))
+        ) {
+          throw new StateError('SETUP_OPERATION_IN_PROGRESS', 'setup browser is busy with another operation');
+        }
+      }
+      this.#database
+        .prepare(
+          `INSERT INTO setup_lease (
+             singleton, browser_operation_token, browser_operation_pid,
+             browser_operation_child_pid, browser_operation_command_pid
+           ) VALUES (1, ?, ?, NULL, NULL)
+           ON CONFLICT (singleton) DO UPDATE SET
+             browser_operation_token = excluded.browser_operation_token,
+             browser_operation_pid = excluded.browser_operation_pid,
+             browser_operation_child_pid = NULL,
+             browser_operation_command_pid = NULL`,
+        )
+        .run(token, ownerPid);
+    });
+  }
+
+  /**
+   * Records the setup browser-command gate under the current lease.
+   *
+   * @param token Current setup lease token.
+   * @param childPid Spawned gate process identifier.
+   * @returns Nothing after the child PID is committed.
+   * @throws {StateError} If the caller no longer owns the lease.
+   * @throws {Error} If SQLite cannot commit the child process.
+   */
+  attachSetupOperationChild(token: string, childPid: number): void {
+    this.#transaction(() => {
+      const result = this.#database
+        .prepare(
+          `UPDATE setup_lease SET browser_operation_child_pid = ?
+           WHERE singleton = 1 AND browser_operation_token = ? AND browser_operation_child_pid IS NULL`,
+        )
+        .run(childPid, token);
+      if (result.changes !== 1) {
+        throw new StateError('SETUP_OPERATION_NOT_OWNED', 'cannot attach child to setup browser lease');
+      }
+    });
+  }
+
+  /**
+   * Clears the exact setup browser-command gate after it exits.
+   *
+   * @param token Current setup lease token.
+   * @param childPid Spawned gate process identifier that exited.
+   * @returns Nothing after the child PID is cleared.
+   * @throws {StateError} If the caller no longer owns this child slot.
+   * @throws {Error} If SQLite cannot commit the child exit.
+   */
+  detachSetupOperationChild(token: string, childPid: number): void {
+    this.#transaction(() => {
+      const result = this.#database
+        .prepare(
+          `UPDATE setup_lease SET browser_operation_child_pid = NULL
+           WHERE singleton = 1 AND browser_operation_token = ? AND browser_operation_child_pid = ?`,
+        )
+        .run(token, childPid);
+      if (result.changes !== 1) {
+        throw new StateError('SETUP_OPERATION_NOT_OWNED', 'cannot detach child from setup browser lease');
+      }
+    });
+  }
+
+  /**
+   * Records the exact command process started behind the setup browser-command gate.
+   *
+   * @param token Current setup lease token.
+   * @param commandPid Spawned command process identifier.
+   * @returns Nothing after the command PID is committed.
+   * @throws {StateError} If the caller no longer owns the lease or a prior command is live.
+   * @throws {Error} If SQLite cannot commit the command process.
+   */
+  attachSetupOperationCommand(token: string, commandPid: number): void {
+    this.#transaction(() => {
+      const value = this.#database.prepare('SELECT * FROM setup_lease WHERE singleton = 1').get();
+      if (value === undefined) {
+        throw new StateError('SETUP_OPERATION_NOT_OWNED', 'cannot attach command to setup browser lease');
+      }
+      const row = record(value);
+      if (text(row.browser_operation_token, 'setup_lease.browser_operation_token') !== token) {
+        throw new StateError('SETUP_OPERATION_NOT_OWNED', 'cannot attach command to setup browser lease');
+      }
+      const previousPid = nullableInteger(
+        row.browser_operation_command_pid,
+        'setup_lease.browser_operation_command_pid',
+      );
+      if (previousPid !== null && isProcessAlive(previousPid)) {
+        throw new StateError('SETUP_OPERATION_CHILD_ACTIVE', 'previous setup browser command is still running');
+      }
+      this.#database
+        .prepare(
+          `UPDATE setup_lease SET browser_operation_command_pid = ?
+           WHERE singleton = 1 AND browser_operation_token = ?`,
+        )
+        .run(commandPid, token);
+    });
+  }
+
+  /**
+   * Releases the global setup browser lease owned by the supplied token.
+   *
+   * @param token Current setup lease token.
+   * @returns Nothing after the lease row is removed.
+   * @throws {StateError} If the caller no longer owns the lease or its command is live.
+   * @throws {Error} If SQLite cannot commit the release.
+   */
+  releaseSetupOperation(token: string): void {
+    this.#transaction(() => {
+      const value = this.#database.prepare('SELECT * FROM setup_lease WHERE singleton = 1').get();
+      if (value === undefined) {
+        throw new StateError('SETUP_OPERATION_NOT_OWNED', 'setup browser lease is not owned by this process');
+      }
+      const row = record(value);
+      if (text(row.browser_operation_token, 'setup_lease.browser_operation_token') !== token) {
+        throw new StateError('SETUP_OPERATION_NOT_OWNED', 'setup browser lease is not owned by this process');
+      }
+      const commandPid = nullableInteger(
+        row.browser_operation_command_pid,
+        'setup_lease.browser_operation_command_pid',
+      );
+      if (commandPid !== null && isProcessAlive(commandPid)) {
+        throw new StateError('SETUP_OPERATION_CHILD_ACTIVE', 'setup browser command is still running');
+      }
+      const result = this.#database
+        .prepare('DELETE FROM setup_lease WHERE singleton = 1 AND browser_operation_token = ?')
+        .run(token);
+      if (result.changes !== 1) {
+        throw new StateError('SETUP_OPERATION_NOT_OWNED', 'setup browser lease is not owned by this process');
+      }
+    });
   }
 
   /**

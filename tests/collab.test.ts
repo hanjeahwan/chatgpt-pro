@@ -90,7 +90,7 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     expect(repeatedCloseStore.requireTask(firstTask.taskId)).toEqual(closedBeforeRepeat);
     repeatedCloseStore.close();
     expect(fixture.browser.closed).toEqual([firstTask.taskId]);
-    expect(fixture.browser.observedOperations).toBe(13);
+    expect(fixture.browser.observedOperations).toBe(17);
     await expect(fixture.service.wait(firstTask.taskId, firstTurn.turnId, 20_000, 20_000)).resolves.toEqual(repeated);
     await expect(fixture.service.archive(firstTask.taskId)).rejects.toMatchObject({ code: 'TASK_NOT_ACTIVE' });
   });
@@ -809,6 +809,23 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
 });
 
 describe('BEH-001 setup journal and interruption recovery', () => {
+  it('allows only one setup caller to enter the browser side effect', async () => {
+    const fixture = await serviceFixture();
+    let releaseSetup: (() => void) | undefined;
+    fixture.browser.setupOpenGate = new Promise<void>((resolve) => {
+      releaseSetup = resolve;
+    });
+    const first = fixture.service.setup();
+    await vi.waitFor(() => {
+      expect(fixture.browser.setupSessions).toHaveLength(1);
+    });
+
+    await expect(fixture.service.setup()).rejects.toMatchObject({ code: 'SETUP_OPERATION_IN_PROGRESS' });
+    expect(fixture.browser.setupSessions).toHaveLength(1);
+    releaseSetup?.();
+    await expect(first).resolves.toEqual({ seedPath: fixture.paths.seedState });
+  });
+
   it('commits a fresh setup with seed and session-closed evidence', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
@@ -3001,6 +3018,7 @@ class FakeBrowser implements CollabBrowser {
   readonly safeComposersVerified: string[] = [];
   readonly setupSessions: string[] = [];
   readonly setupClosedSessions: string[] = [];
+  setupOpenGate: Promise<void> | null = null;
   seedAuthenticated = true;
   seedVerifications = 0;
   nextSetupCloseResult: { readonly sessionClosed: boolean } | null = null;
@@ -3075,11 +3093,19 @@ class FakeBrowser implements CollabBrowser {
    * Records one fake setup login observation.
    *
    * @param sessionName Recorded setup session name.
+   * @param observer Setup-lease child-process observer.
    * @returns Nothing after the fake login wait.
    * @throws {Error} This fake setup open does not throw.
    */
-  async setupOpen(sessionName: string): Promise<void> {
+  async setupOpen(sessionName: string, observer?: BrowserOperationObserver): Promise<void> {
+    this.observe(observer);
     this.setupSessions.push(sessionName);
+    if (this.setupOpenGate !== null) {
+      if (this.setupSessions.length > 1) {
+        throw new Error('a second setup browser side effect was entered');
+      }
+      await this.setupOpenGate;
+    }
   }
 
   /**
@@ -3087,10 +3113,16 @@ class FakeBrowser implements CollabBrowser {
    *
    * @param sessionName Recorded setup session name.
    * @param seedStatePath Fake authentication seed path.
+   * @param observer Setup-lease child-process observer.
    * @returns The validated seed flag.
    * @throws {Error} If the test file cannot be written.
    */
-  async setupSaveSeed(sessionName: string, seedStatePath: string): Promise<{ readonly seedValidated: boolean }> {
+  async setupSaveSeed(
+    sessionName: string,
+    seedStatePath: string,
+    observer?: BrowserOperationObserver,
+  ): Promise<{ readonly seedValidated: boolean }> {
+    this.observe(observer);
     await writeFile(seedStatePath, validSeedText());
     this.seedAuthenticated = true;
     return { seedValidated: true };
@@ -3100,10 +3132,15 @@ class FakeBrowser implements CollabBrowser {
    * Reports the fake setup session close, with an optional injected unconfirmed result.
    *
    * @param sessionName Recorded setup session name.
+   * @param observer Setup-lease child-process observer.
    * @returns The configured or default closed-session flag.
    * @throws {Error} This fake setup close does not throw.
    */
-  async setupClose(sessionName: string): Promise<{ readonly sessionClosed: boolean }> {
+  async setupClose(
+    sessionName: string,
+    observer?: BrowserOperationObserver,
+  ): Promise<{ readonly sessionClosed: boolean }> {
+    this.observe(observer);
     this.setupClosedSessions.push(sessionName);
     return this.nextSetupCloseResult ?? { sessionClosed: true };
   }
@@ -3113,13 +3150,16 @@ class FakeBrowser implements CollabBrowser {
    *
    * @param _sessionName Unused named session.
    * @param _seedStatePath Unused authentication seed path.
+   * @param observer Setup-lease child-process observer.
    * @returns The configured seed-authentication verdict.
    * @throws {Error} This fake verification does not throw.
    */
   async verifyAuthenticatedSeed(
     _sessionName: string,
     _seedStatePath: string,
+    observer?: BrowserOperationObserver,
   ): Promise<{ readonly authenticated: boolean }> {
+    this.observe(observer);
     this.seedVerifications += 1;
     return { authenticated: this.seedAuthenticated };
   }
