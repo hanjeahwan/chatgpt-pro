@@ -516,6 +516,7 @@ describe('BEH-002 fixed Project and GPT-5.6 Sol Power 5/5 start context', () => 
       'opener-click',
       'model-click',
       'selector-click',
+      'opener-click',
       'selector-click',
     ]);
     expect(
@@ -531,7 +532,6 @@ describe('BEH-002 fixed Project and GPT-5.6 Sol Power 5/5 start context', () => 
     const startSource = await lastScript(fixture.invocations);
     expect(startSource).toContain('role="slider"');
     expect(startSource).toContain('aria-valuenow');
-    expect(startSource).toContain('Model');
     expectPageFunctionSyntax(startSource);
   });
 
@@ -543,7 +543,17 @@ describe('BEH-002 fixed Project and GPT-5.6 Sol Power 5/5 start context', () => 
 
     expect(result.contextMarker).toBeTruthy();
     expect(result).toMatchObject({ powerNow: 4, powerMin: 0, powerMax: 4 });
-    expect(fixture.events).toEqual(['project-row-click', 'selector-click', 'selector-click']);
+    expect(fixture.events).toEqual(['project-row-click', 'selector-click', 'opener-click', 'selector-click']);
+  });
+
+  it('locates the model submenu without depending on its localized label', async () => {
+    const fixture = await executableStartFixture({ modelOpenerPrefix: '模型' });
+    await writeFile(fixture.paths.seedState, '{}');
+
+    const result = await fixture.browser.startTask('task-a', 'session-a', fixture.paths.seedState);
+
+    expect(result).toMatchObject({ modelConfirmed: true, powerConfirmed: true });
+    expect(fixture.events).toContain('model-click');
   });
 
   it('rejects with PROJECT_NOT_FOUND when the target Project row is absent', async () => {
@@ -664,6 +674,7 @@ describe('BEH-002 fixed Project and GPT-5.6 Sol Power 5/5 start context', () => 
       'opener-click',
       'model-click',
       'selector-click',
+      'opener-click',
       'selector-click',
     ]);
     const startSource = await lastScript(fixture.invocations);
@@ -3205,7 +3216,7 @@ async function browserFixture(outputs: readonly (BrowserCommandOutput | Error)[]
 
 /**
  * Creates a browser runner that executes the generated start verification function against
- * a live-compatible Projects and model/mode menu fixture.
+ * a live-compatible Projects and model/Power menu fixture.
  *
  * @param options Project, composer, and menu structure exposed to the generated function.
  * @returns Browser, fixture root, captured invocations, and ordered page events.

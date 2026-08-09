@@ -13,6 +13,7 @@ export interface StartPageOptions {
   readonly powerInitiallyMax?: boolean;
   readonly powerKeysApplies?: boolean;
   readonly modelInitiallyChecked?: boolean;
+  readonly modelOpenerPrefix?: string;
   readonly modelOpenerCount?: number;
   readonly modelRadioPresent?: boolean;
   readonly modelClickApplies?: boolean;
@@ -188,7 +189,7 @@ class StartHtmlElement implements StartDomNode {
 class StartAnchorElement extends StartHtmlElement {}
 
 /**
- * Creates the minimal Projects directory, Project composer, and model/mode menu boundary
+ * Creates the minimal Projects directory, Project composer, and model/Power menu boundary
  * needed to execute the generated start verification function.
  *
  * @param options Page structure, selection, and navigation state exposed to the page function.
@@ -207,6 +208,7 @@ export function startPageFixture(options: StartPageOptions): StartPageFixture {
     menuOpen: false,
     modelClickApplies: options.modelClickApplies ?? true,
     modelClickResetsPower: options.modelClickResetsPower ?? false,
+    modelOpenerPrefix: options.modelOpenerPrefix ?? 'Model',
     modelOpenerCount: options.modelOpenerCount ?? 1,
     modelRadioPresent: options.modelRadioPresent ?? true,
     navigateOnProjectClick: options.navigateOnProjectClick ?? true,
@@ -383,7 +385,7 @@ export function startPageFixture(options: StartPageOptions): StartPageFixture {
 
   const modelItem = node(
     'div',
-    `Model${state.currentModel}`,
+    `${state.modelOpenerPrefix}${state.currentModel}`,
     { 'role': 'menuitem', 'aria-haspopup': 'menu' },
     [],
     () => {
@@ -396,7 +398,7 @@ export function startPageFixture(options: StartPageOptions): StartPageFixture {
   Object.defineProperty(modelItem, 'textContent', {
     configurable: true,
     get() {
-      return `Model${state.currentModel}`;
+      return `${state.modelOpenerPrefix}${state.currentModel}`;
     },
   });
   const modelOpeners: StartDomNode[] = Array.from({ length: state.modelOpenerCount }, () => {
@@ -731,6 +733,8 @@ function matchesSingleSelector(element: StartDomNode, selector: string): boolean
     matchesBase = element.attributes['id'] === 'prompt-textarea';
   } else if (base === '[role="row"]') {
     matchesBase = element.attributes['role'] === 'row';
+  } else if (base === '[role="menu"]') {
+    matchesBase = element.attributes['role'] === 'menu';
   } else if (base === '[role="menuitemradio"]') {
     matchesBase = element.attributes['role'] === 'menuitemradio';
   } else if (base === '[role="menuitem"]') {
