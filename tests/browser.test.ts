@@ -1884,12 +1884,33 @@ describe('BEH-013 browser boundary support', () => {
     expect(source).toContain('user-turn-a');
     expect(source).toContain('expectedConversationId');
     expect(source).toContain('"https://chatgpt.com/c/conversation-a"');
-    expect(source).toContain('canonicalUrlOf() === target.expectedConversationUrl');
+    expect(source).toContain('location.origin + location.pathname === target.expectedConversationUrl');
     expect(source).toContain('url.origin + url.pathname !== expectedConversationUrl');
     expect(source).toContain('\'[data-testid^="conversation-turn-"][data-turn]\'');
     expect(source).not.toContain('copy-turn-action-button');
     expect(source).not.toContain('Stop answering');
     expectPageFunctionSyntax(source);
+  });
+
+  it('accepts a reloaded page matching the recorded canonical conversation URL', async () => {
+    const fixture = await executableReloadFixture({
+      hostname: 'chatgpt.com',
+      pathname: '/c/conversation-a',
+      origin: 'https://chatgpt.com',
+    });
+
+    const result = await fixture.browser.reloadConversation(
+      'task-a',
+      'session-a',
+      'https://chatgpt.com/c/conversation-a',
+      'conversation-a',
+      'conversation-turn-user-1',
+    );
+
+    expect(result).toEqual({
+      conversationId: 'conversation-a',
+      conversationUrl: 'https://chatgpt.com/c/conversation-a',
+    });
   });
 
   it('rejects a reloaded page that shares the conversation id but resolves to a different canonical URL', async () => {
@@ -3203,6 +3224,10 @@ async function executableBrowserFixture(options: ArtifactPageOptions) {
  * Creates a browser runner that executes the generated reload verification function against
  * a page-shaped stub reporting one fixed canonical URL and one matching user turn anchor.
  *
+ * The stub re-evaluates each callback from source before invoking it, mirroring Playwright's
+ * separate serialization of `waitForFunction`/`evaluate` callbacks, so closures over the page
+ * function scope are unavailable and any such reference fails exactly like a real browser.
+ *
  * @param url Host, path, and origin reported by the stub location.
  * @returns Browser, fixture root, and captured invocations.
  * @throws {Error} If the fixture directory or generated script cannot be read.
@@ -3238,7 +3263,8 @@ async function executableReloadFixture(url: {
       if (typeof callback !== 'function') {
         throw new TypeError('fixture reload callback is not a function');
       }
-      return Reflect.apply(callback, undefined, [argument]);
+      const serialized = new Function(`return (${callback.toString()})`)() as (argument: unknown) => unknown;
+      return Reflect.apply(serialized, undefined, [argument]);
     } finally {
       if (previousLocation === undefined) {
         delete globals.location;

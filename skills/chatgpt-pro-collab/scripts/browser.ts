@@ -3433,12 +3433,11 @@ function reloadVerificationScript(
       const match = /\\/c\\/([^/?#]+)\\/?$/.exec(pathname);
       return match === null || match[1].startsWith('WEB:') ? null : match[1];
     };
-    const canonicalUrlOf = () => location.origin + location.pathname;
     await page.waitForFunction((target) => {
       const match = /\\/c\\/([^/?#]+)\\/?$/.exec(location.pathname);
       const urlOk = location.hostname === 'chatgpt.com' &&
         match !== null && !match[1].startsWith('WEB:') && match[1] === target.expectedConversationId &&
-        canonicalUrlOf() === target.expectedConversationUrl;
+        location.origin + location.pathname === target.expectedConversationUrl;
       const anchors = [...document.querySelectorAll('[data-testid^="conversation-turn-"][data-turn]')].filter((element) => {
         return element.getAttribute('data-turn') === 'user' &&
           element.getAttribute('data-testid') === target.expectedUserTurnId;
