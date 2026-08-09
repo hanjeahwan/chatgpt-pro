@@ -2544,7 +2544,7 @@ describe('BEH-012 returned file capture and recoverable publication', () => {
   });
 
   it('never returns a successful pending after completion was observed even across the observation deadline', async () => {
-    const fixture = await serviceFixture();
+    const fixture = await reloadServiceFixture();
     await fixture.service.setup();
     const task = await fixture.start();
     const promptPath = join(fixture.root, 'late-files.md');
@@ -2553,11 +2553,14 @@ describe('BEH-012 returned file capture and recoverable publication', () => {
       sourceUrl: 'sandbox:/mnt/data/late.txt',
       label: 'late.txt',
     });
-    fixture.browser.captureDelayMs = 60;
+    fixture.browser.onObserveBudget = (budgetMs) => {
+      fixture.clock.advance(budgetMs);
+    };
     const turn = await fixture.service.send(task.taskId, promptPath, []);
 
     const completed = await fixture.service.wait(task.taskId, turn.turnId, 1, 20_000);
     expect(completed).toMatchObject({ status: 'completed', artifactPaths: [expect.any(String)] });
+    expect(fixture.browser.observeResponseBudgets).toEqual([1]);
     const artifactPaths = (completed as unknown as { artifactPaths: string[] }).artifactPaths;
     expect(await readFile(artifactPaths[0] ?? '', 'utf8')).toBe('artifact for sandbox:/mnt/data/late.txt');
     const store = new StateStore(fixture.paths.database);
