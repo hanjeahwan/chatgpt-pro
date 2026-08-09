@@ -96,6 +96,7 @@ node "<skill-directory>/scripts/collab.ts" status <taskId>
 
 - `wait`：对 browser 可用的 `pending` 或 `capturing` turn 使用原参数合同再次 `wait`。
 - `close`：任务正在关闭，只执行 `close`，不要重建浏览器。
+- `none`：没有待继续或待解除的持久工作流；它本身不禁止宿主按用户意图、在当前 task 状态允许时显式执行 `send` 或 `close`。
 - `recover`：执行恢复命令，由系统按持久阶段和页面证据继续启动、发送准备、browser 缺失重建、closed task 重新激活或归档恢复。closed task 恢复后仍使用原 `taskId` 和 canonical conversation；pending/capturing turn 恢复后再按返回的 `nextAction: wait` 继续：
 
   ```sh

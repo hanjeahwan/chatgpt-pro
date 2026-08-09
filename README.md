@@ -37,7 +37,7 @@ pnpm collab -- archive <taskId>
 pnpm collab -- close <taskId>
 ```
 
-`setup` 保存本机共享认证源。每次 `start` 需要调用方提供的稳定 canonical UUID v4 `taskId` 并返回同一个 `taskId`；`send` 提交一轮并立即返回 `turnId`。`wait` 使用有限观察窗口：到期时返回 `pending` 且不停止远端生成；完成时返回原始 `response.md` 与按回复顺序保存的 `artifactPaths`。同一 `wait` 内若连续 300000ms 未捕获，Collab 自动 reload 当前 conversation 重新水合页面后继续观察与捕获；reload 只由时间触发，不检查页面完成信号、不终止远端生成、不改变 turn 状态。捕获超时后可用新的 `captureTimeoutMs` 继续同一 turn。`status` 只读返回持久状态与唯一安全的 `nextAction`；`recover` 按持久阶段恢复中断操作；`resolve-submission` 对无法自动判定的提交歧义接受人工裁决；`resolve-turn ... failed` 只在用户明确确认 response 已失败或终止后裁决旧 turn，continuation 仍由宿主另行显式发送。同一任务完成一轮后可以继续 send/wait，多个任务可以同时等待。
+`setup` 保存本机共享认证源。每次 `start` 需要调用方提供的稳定 canonical UUID v4 `taskId` 并返回同一个 `taskId`；`send` 提交一轮并立即返回 `turnId`。`wait` 使用有限观察窗口：到期时返回 `pending` 且不停止远端生成；完成时返回原始 `response.md` 与按回复顺序保存的 `artifactPaths`。同一 `wait` 内若连续 300000ms 未捕获，Collab 自动 reload 当前 conversation 重新水合页面后继续观察与捕获；reload 只由时间触发，不检查页面完成信号、不终止远端生成、不改变 turn 状态。捕获超时后可用新的 `captureTimeoutMs` 继续同一 turn。`status` 只读返回持久状态与唯一安全的 `nextAction`；`nextAction: none` 只表示没有待继续或待解除的持久工作流，它本身不禁止宿主按用户意图、在当前 task 状态允许时显式执行 `send` 或 `close`；`recover` 按持久阶段恢复中断操作；`resolve-submission` 对无法自动判定的提交歧义接受人工裁决；`resolve-turn ... failed` 只在用户明确确认 response 已失败或终止后裁决旧 turn，continuation 仍由宿主另行显式发送。同一任务完成一轮后可以继续 send/wait，多个任务可以同时等待。
 
 每个新 task 的首条 user message 由宿主把 Skill 中的固定协作合同、当前任务和当轮附件作为同一条消息提交；首次提交前失败时，下一次显式 `send` 仍包含完整合同。`start` 仍只建立空白 composer，不单独发送模式声明。conversation 绑定后的后续 turn 沿用已有上下文，不重复该合同。Collab CLI 不隐式改写 prompt，Web 消息与宿主交给 `send` 的 prompt 文件保持一致。
 
