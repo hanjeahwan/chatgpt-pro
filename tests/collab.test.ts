@@ -1993,6 +1993,30 @@ describe('BEH-008 local close and BEH-009 archive journal', () => {
     expect(fixture.browser.archived).toEqual([task.taskId]);
   });
 
+  it('requires recovery before a fresh archive when the bound browser session is missing', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const promptPath = join(fixture.root, 'missing-fresh-archive.md');
+    await writeFile(promptPath, 'missing fresh archive');
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+    await fixture.service.wait(task.taskId, turn.turnId, 20_000, 20_000);
+    fixture.browser.sessionAvailabilityResult = 'missing';
+
+    await expect(fixture.service.archive(task.taskId)).rejects.toMatchObject({
+      code: 'BROWSER_SESSION_MISSING',
+      message: expect.stringContaining('recover the task before archiving'),
+    });
+
+    expect(fixture.browser.archiveObservations).toEqual([]);
+    expect(fixture.browser.recoveredConversations).toEqual([]);
+    expect(fixture.browser.archived).toEqual([]);
+    const store = new StateStore(fixture.paths.database);
+    expect(store.getUncommittedTaskOperation(task.taskId)).toBeNull();
+    store.close();
+    await expect(fixture.service.status(task.taskId)).resolves.toMatchObject({ nextAction: 'recover' });
+  });
+
   it.each(['pending', 'capturing'] as const)(
     'recovers an interrupted archive before returning a %s turn to wait without clicking Archive again',
     async (turnStatus) => {

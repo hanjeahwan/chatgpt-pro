@@ -1219,6 +1219,12 @@ export class CollabService {
   ): Promise<{ readonly taskId: string; readonly conversationId: string }> {
     const task = store.requireTask(taskId);
     const rebuild = (await this.#browser.sessionAvailability(task.playwrightSession)) === 'missing';
+    if (rebuild && operation === null) {
+      throw new CollabError(
+        'BROWSER_SESSION_MISSING',
+        `browser session is missing; recover the task before archiving: ${taskId}`,
+      );
+    }
     if (rebuild) {
       await requireSeedState(this.#paths);
     }
