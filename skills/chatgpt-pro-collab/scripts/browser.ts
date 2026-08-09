@@ -624,6 +624,7 @@ export class PlaywrightBrowser {
     if (rebuild) {
       await this.#openSeededTaskSession(taskId, sessionName, observer);
     }
+    await this.#invoke(sessionName, taskId, ['goto', conversationUrl], 'open bound conversation', observer);
     const result = await this.#runCode<RecoverConversationProtocolResult>(
       sessionName,
       taskId,
@@ -3545,7 +3546,6 @@ function recoverConversationScript(canonicalUrl: string, expectedConversationId:
       const match = /\\/c\\/([^/?#]+)\\/?$/.exec(pathname);
       return match === null || match[1].startsWith('WEB:') ? null : match[1];
     };
-    await page.goto(canonicalUrl, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction((id) => {
       const match = /\\/c\\/([^/?#]+)\\/?$/.exec(location.pathname);
       return (

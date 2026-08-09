@@ -2024,6 +2024,7 @@ describe('BEH-013 browser boundary support', () => {
 
   it('verifies a rebuilt session against the recorded canonical conversation', async () => {
     const fixture = await browserFixture([
+      output('navigated'),
       pageResult({
         protocol,
         kind: 'recover-conversation',
@@ -2043,6 +2044,7 @@ describe('BEH-013 browser boundary support', () => {
       conversationId: 'conversation-a',
       conversationUrl: 'https://chatgpt.com/c/conversation-a',
     });
+    expect(fixture.invocations[0]?.arguments.slice(4)).toEqual(['goto', 'https://chatgpt.com/c/conversation-a']);
     const source = await lastScript(fixture.invocations);
     expect(source).toContain('recover-conversation');
     expect(source).toContain('conversation-a');
@@ -2052,6 +2054,7 @@ describe('BEH-013 browser boundary support', () => {
   it('rebuilds a missing bound session directly at its canonical conversation', async () => {
     const fixture = await browserFixture([
       output('opened'),
+      output('navigated'),
       pageResult({
         protocol,
         kind: 'recover-conversation',
@@ -2074,7 +2077,9 @@ describe('BEH-013 browser boundary support', () => {
     });
     expect(commands[0]).toEqual(['open', 'about:blank', '--browser=chrome', '--headed']);
     expect(fixture.invocations[0]?.environment.PLAYWRIGHT_MCP_STORAGE_STATE).toBe(fixture.paths.seedState);
-    expect(commands[1]?.[0]).toBe('run-code');
+    expect(commands[1]).toEqual(['goto', 'https://chatgpt.com/c/conversation-a']);
+    expect(commands[2]?.[0]).toBe('run-code');
+    expect(await lastScript(fixture.invocations)).not.toContain('page.goto');
     expect(commands.flat()).not.toContain('state-load');
     expect(commands.flat()).not.toContain('https://chatgpt.com/projects');
   });
