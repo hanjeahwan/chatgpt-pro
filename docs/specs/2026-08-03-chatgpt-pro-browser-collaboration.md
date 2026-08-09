@@ -176,7 +176,7 @@
 - 每次页面完成检查保持有界。服务层使用单调时钟分别控制 `observationWindowMs` 和 `captureTimeoutMs`；网页尚未报告完成时，服务层在 `observationWindowMs` 预算内以同一单调时钟控制周期 reload（未捕获持续每达到 `300000ms`）与观察 deadline，reload 耗时计入该预算，剩余预算不足时按观察 deadline 返回 `pending`。一旦观察到完成，观察 deadline 不再参与判断，服务在宿主侧 capture watchdog 内取得完整 Copy response 与有序 artifact 描述；此阶段达到捕获 deadline 时返回 `CAPTURE_TIMEOUT` 并保持 `pending`，后续 `wait` 重新观察并重取 Copy。取得完整描述后才以单个事务进入 `capturing`；捕获 deadline 继续覆盖本次调用的 response 发布与全部文件捕获，不按文件重新计时。turn 已经是 `capturing` 时从本次调用开始建立新的捕获 deadline；此后达到 deadline 时返回 `CAPTURE_TIMEOUT` 并保留 `capturing`。deadline 前发生的真实浏览器错误保留原错误码；watchdog 必须安全终止对应 command，不能遗留悬挂 command 或 operation lease。
 - `archive` 只使用唯一的 `[data-testid="conversation-options-button"]` 和精确名称为 `Archive` 的 menuitem。脚本先观察 Archive menuitem，只有不可见时才打开菜单，避免把已打开菜单反向关闭；不得用模糊的 `Open conversation options` 匹配侧栏按钮。点击后等待离开目标 `/c/<conversationId>`，刷新侧栏并确认目标链接消失；随后重新导航到原 canonical URL，重新确认页面仍绑定原 `conversationId` 且目标 conversation turn 可定位，才返回成功。恢复后后续 `send` 与 `wait` 必须继续使用同一绑定。
 - 浏览器重建只在确认原 named session 不存在后进行，再使用同一 `taskId`、session name 和 seed 创建新内存 context。未绑定 conversation 时只恢复唯一 `chatgpt-pro-collab` Project 的空白 composer 及固定模型与 Power；已经绑定时只打开记录的 canonical URL，并要求 URL、conversation identity 与已记录相关 turn 一致。closed task 在这些后置条件全部成立后才重新置为 active；失败时保持 closed。`unknown-submission` 且没有 canonical identity 时不得猜测目标 conversation。
-- `status` 只调用固定版本 CLI 的全局 `list` 并精确匹配已记录 session name，不执行 `open`、`goto`、`run-code` 或页面读取；唯一匹配为 `available`，确定无匹配为 `missing`，CLI 失败或输出无法解析为 `unknown` 并附带真实错误。
+- `status` 只调用固定版本 CLI 的全局 `list` 并精确匹配已记录 session name，不执行 `open`、`goto`、`run-code` 或页面读取；唯一匹配为 `available`，确定无匹配为 `missing`，CLI 失败或输出无法解析为 `unknown` 并附带真实错误；当前 turn 为 `capturing` 时，现有 pending artifact 的持久错误也投射到 status 错误。
 - Playwright session 自身是浏览器生命周期事实来源；SQLite 记录稳定 session name、已观察到的可用性、conversation identity、重建证据与 `closing` 意图，但不伪造浏览器仍存活。
 
 ### 命令与结果合同
@@ -286,7 +286,7 @@ operation journal 只承载可能因进程退出而丢失确认的浏览器副�
 - `start`、`send`、`archive`、`recover`、`resolve-submission` 和 `resolve-turn` 共享同一 task operation lease；对同一 `taskId` 的重复或并发 `start` 只能观察或继续同一个 `starting` task。
 - `send` 先写入 turn 标识、prompt 副本与 operation，再进行浏览器副作用；只有确认消息已提交后才返回成功。提交结果不明确时记录 `unknown-submission` 和 `needs-decision`，不自动重发。
 - `wait` 的内部页面检查、周期 reload、operation lease 释放和再次检查都不写宿主可见进度；网页未报告完成时，未捕获持续每达到 `300000ms` 先 reload 已绑定 canonical conversation 并核对身份，再继续观察；达到观察 deadline 后才返回一次 pending。网页已报告完成但捕获在原子边界前失败时返回真实错误并保持持久状态 `pending`；后续重试仍重新观察目标 turn 并重取 Copy。turn 进入 `capturing` 后，重试跳过生成等待，先执行捕获恢复核对，再复用已完成 artifact 并只下载未完成项。
-- completed turn 的 `wait` 是幂等读取；`close` 是幂等清理。`archive` 依赖 Web 端实际状态，只有观察到指定 conversation 已归档且 task 页面恢复原绑定才返回成功。
+- completed turn 的 `wait` 是幂等读取；`close` 是幂等清理。每次 `archive` 先观察 Web 端实际状态；已经归档时只恢复原绑定，证明确未归档时才记录操作并点击，状态未知时不点击；只有指定 conversation 已归档且 task 页面恢复原绑定才返回成功。
 - 观察窗口与周期 reload 不会关闭 task、取消远端生成或改变 turn 状态。调用环境中断时，持久 task、turn、operation 和 transcript 继续存在；Playwright session 仍在时复用，已经退出时按 BEH-013 重建。
 - 回复捕获不得依赖未经隔离验证的全局剪贴板。若驱动必须使用 Copy 控件，VER-004 和 VER-006 必须证明并发任务不会读到彼此内容。
 

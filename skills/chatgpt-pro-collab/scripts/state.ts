@@ -1819,6 +1819,12 @@ export class StateStore {
       });
       const turn = unresolved ?? unfinished.at(-1) ?? null;
       const operation = this.getUncommittedTaskOperation(taskId);
+      const artifactError =
+        turn?.status === 'capturing'
+          ? this.listArtifacts(taskId, turn.id).find((artifact) => {
+              return artifact.status === 'pending' && artifact.error !== null;
+            })?.error
+          : null;
       return {
         taskId,
         taskStatus: task.status,
@@ -1830,7 +1836,7 @@ export class StateStore {
         operationPhase: operation?.phase ?? null,
         operationProgress: operation?.progress ?? null,
         evidence: operation?.evidence ?? null,
-        error: statusError ?? turn?.error ?? operation?.error ?? null,
+        error: statusError ?? turn?.error ?? operation?.error ?? artifactError ?? null,
         nextAction: computeNextAction(task, turn, operation, browserStatus),
       };
     }, 'BEGIN');

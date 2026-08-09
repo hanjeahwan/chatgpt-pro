@@ -1181,56 +1181,23 @@ export class CollabService {
         const conversationId = task.conversationId;
         const conversationUrl = task.conversationUrl ?? `https://chatgpt.com/c/${conversationId}`;
         const existingOperation = store.getUncommittedTaskOperation(taskId);
-        if (existingOperation !== null && existingOperation.kind === 'archive') {
-          return this.#recoverArchive(store, taskId, existingOperation, conversationId, conversationUrl, observer);
+        if (existingOperation !== null) {
+          if (existingOperation.kind === 'archive') {
+            return this.#recoverArchive(store, taskId, existingOperation, conversationId, conversationUrl, observer);
+          }
+          throw new StateError('OPERATION_IN_PROGRESS', 'task already has an uncommitted operation');
         }
-        const operation = store.createOperation({
-          id: this.#idGenerator(),
-          kind: 'archive',
-          step: 'archive',
-          taskId,
-          turnId: null,
-          sessionName: task.playwrightSession,
-          evidence: {
-            observedAt: new Date().toISOString(),
-            sessionName: task.playwrightSession,
-            conversationId,
-            postcondition: 'target canonical identity recorded before the Archive command',
-          },
-        });
-        store.markOperationEffectUnknown(operation.id, {
-          observedAt: new Date().toISOString(),
-          sessionName: task.playwrightSession,
-          conversationId,
-          postcondition: 'Archive command released',
-        });
-        const result = await this.#browser.archive(
-          taskId,
-          task.playwrightSession,
-          conversationId,
-          conversationUrl,
-          observer,
-        );
-        store.commitOperation(operation.id, 'automatic', {
-          observedAt: new Date().toISOString(),
-          sessionName: task.playwrightSession,
-          pageUrl: conversationUrl,
-          postcondition: 'conversation archived and canonical binding restored',
-          conversationId,
-          archived: true,
-          bindingRestored: true,
-        });
-        return { taskId, conversationId: result.conversationId };
+        return this.#recoverArchive(store, taskId, null, conversationId, conversationUrl, observer);
       });
     });
   }
 
   /**
-   * Reconciles an interrupted archive operation by observing the real Web state first.
+   * Runs a new archive or reconciles an interrupted one from the real Web state.
    *
    * @param store Current process-local state connection.
    * @param taskId Task identifier.
-   * @param operation Uncommitted archive operation.
+   * @param operation Uncommitted archive operation, or null before a new archive.
    * @param conversationId Database-bound canonical identity.
    * @param conversationUrl Recorded canonical conversation URL.
    * @param observer Task-lease child-process observer.
@@ -1241,13 +1208,13 @@ export class CollabService {
   async #recoverArchive(
     store: StateStore,
     taskId: string,
-    operation: OperationRecord,
+    operation: OperationRecord | null,
     conversationId: string,
     conversationUrl: string,
     observer: BrowserOperationObserver,
   ): Promise<{ readonly taskId: string; readonly conversationId: string }> {
     const task = store.requireTask(taskId);
-    if (operation.phase === 'prepared') {
+    if (operation?.phase === 'prepared') {
       store.markOperationEffectUnknown(operation.id, {
         observedAt: new Date().toISOString(),
         sessionName: task.playwrightSession,
@@ -1285,18 +1252,42 @@ export class CollabService {
         conversationId,
         observer,
       );
-      store.commitOperation(operation.id, 'automatic', {
-        observedAt: new Date().toISOString(),
-        sessionName: task.playwrightSession,
-        pageUrl: conversationUrl,
-        postcondition: 'already archived; canonical binding restored without a second click',
-        conversationId,
-        archived: true,
-        bindingRestored: true,
-      });
+      if (operation !== null) {
+        store.commitOperation(operation.id, 'automatic', {
+          observedAt: new Date().toISOString(),
+          sessionName: task.playwrightSession,
+          pageUrl: conversationUrl,
+          postcondition: 'already archived; canonical binding restored without a second click',
+          conversationId,
+          archived: true,
+          bindingRestored: true,
+        });
+      }
       return { taskId, conversationId };
     }
     if (observed.status === 'not-archived') {
+      operation ??= store.createOperation({
+        id: this.#idGenerator(),
+        kind: 'archive',
+        step: 'archive',
+        taskId,
+        turnId: null,
+        sessionName: task.playwrightSession,
+        evidence: {
+          observedAt: new Date().toISOString(),
+          sessionName: task.playwrightSession,
+          conversationId,
+          postcondition: 'target canonical identity recorded before the Archive command',
+        },
+      });
+      if (operation.phase === 'prepared') {
+        store.markOperationEffectUnknown(operation.id, {
+          observedAt: new Date().toISOString(),
+          sessionName: task.playwrightSession,
+          conversationId,
+          postcondition: 'Archive command released',
+        });
+      }
       const result = await this.#browser.archive(
         taskId,
         task.playwrightSession,
