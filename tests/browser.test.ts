@@ -58,6 +58,7 @@ describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
     ]);
     const events: string[] = [];
     const observer: BrowserOperationObserver = {
+      terminateCommandOnParentExit: true,
       childSpawned(pid) {
         events.push(`spawn:${pid}`);
       },
@@ -82,6 +83,11 @@ describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
       'command:6002',
       'exit:5002',
     ]);
+    expect(
+      fixture.invocations.every((invocation) => {
+        return invocation.terminateCommandOnParentExit === true;
+      }),
+    ).toBe(true);
   });
 
   it('preserves a seed verification command failure and still closes its isolated session', async () => {

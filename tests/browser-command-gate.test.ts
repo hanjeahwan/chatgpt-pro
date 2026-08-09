@@ -96,6 +96,18 @@ describe('browser command side-effect gate', () => {
     expect(commandNotSpawned).toBe(true);
   });
 
+  it('completes a setup command while its parent remains live', async () => {
+    await expect(
+      runBrowserCommand({
+        executable: process.execPath,
+        arguments: ['-e', 'process.stdout.write("ready")'],
+        cwd: process.cwd(),
+        environment: process.env,
+        terminateCommandOnParentExit: true,
+      }),
+    ).resolves.toMatchObject({ stdout: 'ready' });
+  });
+
   it('aborts and reaps both the command gate and a never-ending guarded command', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collab-command-abort-'));
     const controller = new AbortController();
@@ -374,6 +386,35 @@ describe('browser command side-effect gate', () => {
     await waitForPidExit(gatePid);
     await expect(readFile(markerPath, 'utf8')).resolves.toBe('started');
     await expect(readFile(completedPath, 'utf8')).resolves.toBe('completed');
+  });
+
+  it('force-stops a setup command when its parent dies before command PID persistence', async () => {
+    if (process.platform === 'win32') {
+      return;
+    }
+    const root = await mkdtemp(join(tmpdir(), 'collab-setup-parent-death-'));
+    const gatePidPath = join(root, 'gate-pid');
+    const commandPidPath = join(root, 'command-pid');
+    const workerPath = join(import.meta.dirname, 'support', 'setup-parent-death-worker.ts');
+    const worker = spawn(process.execPath, [workerPath, gatePidPath, commandPidPath], { stdio: 'ignore' });
+    const workerCompletion = waitForExit(worker);
+    await Promise.all([waitForPath(gatePidPath), waitForPath(commandPidPath)]);
+    const gatePid = Number(await readFile(gatePidPath, 'utf8'));
+    const commandPid = Number(await readFile(commandPidPath, 'utf8'));
+
+    try {
+      worker.kill('SIGKILL');
+      await workerCompletion;
+      await Promise.all([waitForPidExit(gatePid), waitForPidExit(commandPid)]);
+    } finally {
+      for (const pid of [gatePid, commandPid]) {
+        try {
+          process.kill(pid, 'SIGKILL');
+        } catch {
+          // The setup gate is expected to terminate both processes.
+        }
+      }
+    }
   });
 });
 

@@ -38,13 +38,20 @@ export interface ArtifactDescription {
   readonly label: string;
 }
 
-export interface FailedTurnResolution {
-  readonly adjudication: 'failed';
-  readonly resolvedAt: string;
-  readonly pageUrl: string;
-  readonly userTurnIdentity: string;
-  readonly stop: 'absent' | 'stopped';
-}
+export type FailedTurnResolution =
+  | {
+      readonly adjudication: 'failed';
+      readonly resolvedAt: string;
+      readonly sourceStatus: 'pending';
+      readonly pageUrl: string;
+      readonly userTurnIdentity: string;
+      readonly stop: 'absent' | 'stopped';
+    }
+  | {
+      readonly adjudication: 'failed';
+      readonly resolvedAt: string;
+      readonly sourceStatus: 'capturing';
+    };
 
 export interface TaskRecord {
   readonly id: string;
@@ -387,12 +394,12 @@ export class StateStore {
    *
    * @param token Collision-resistant owner token for release authorization.
    * @param ownerPid Process holding the lease; defaults to the current CLI process.
-   * @returns Nothing after the lease is committed.
+   * @returns Whether the lease was acquired; false means a dead owner's child processes are still draining.
    * @throws {StateError} If another live process owns setup.
    * @throws {Error} If SQLite cannot commit the lease.
    */
-  acquireSetupOperation(token: string, ownerPid: number = process.pid): void {
-    this.#transaction(() => {
+  acquireSetupOperation(token: string, ownerPid: number = process.pid): boolean {
+    return this.#transaction(() => {
       const value = this.#database.prepare('SELECT * FROM setup_lease WHERE singleton = 1').get();
       if (value !== undefined) {
         const row = record(value);
@@ -405,12 +412,14 @@ export class StateStore {
           row.browser_operation_command_pid,
           'setup_lease.browser_operation_command_pid',
         );
+        if (isProcessAlive(existingPid)) {
+          throw new StateError('SETUP_OPERATION_IN_PROGRESS', 'setup browser is busy with another operation');
+        }
         if (
-          isProcessAlive(existingPid) ||
           (existingChildPid !== null && isProcessAlive(existingChildPid)) ||
           (existingCommandPid !== null && isProcessAlive(existingCommandPid))
         ) {
-          throw new StateError('SETUP_OPERATION_IN_PROGRESS', 'setup browser is busy with another operation');
+          return false;
         }
       }
       this.#database
@@ -426,6 +435,7 @@ export class StateStore {
              browser_operation_command_pid = NULL`,
         )
         .run(token, ownerPid);
+      return true;
     });
   }
 
@@ -965,28 +975,34 @@ export class StateStore {
   }
 
   /**
-   * Fails a proven pending turn and records the complete human response adjudication.
+   * Fails a pending response after page proof or abandons a frozen capture.
    *
-   * The user-provided terminal failure fact is never inferred: the transition only
-   * happens after the page proof, and the turn error carries the human conclusion,
-   * the verified canonical page, the exact target user turn, and the Stop outcome.
+   * Pending resolution records the verified page identity and Stop outcome. Capturing
+   * abandonment records only its local source state, leaving the frozen response and
+   * artifact rows untouched instead of claiming fresh page evidence.
    *
    * @param taskId Owning active task identifier.
-   * @param turnId Pending turn whose Pro response the user confirmed failed.
-   * @param resolution Human adjudication, page identity, target user turn, and Stop outcome.
+   * @param turnId Pending or capturing turn the user confirmed should end.
+   * @param resolution Human adjudication matching the turn's current persistent state.
    * @returns The updated failed turn with the serialized resolution in its error field.
-   * @throws {StateError} If the task is inactive, the turn is not pending, or the
-   *   pending turn lacks its persisted user turn identity.
+   * @throws {StateError} If the task is inactive, the turn is not resolvable, the
+   *   resolution source does not match, or a pending turn lacks its user identity.
    * @throws {Error} If SQLite cannot commit the transition.
    */
-  failPendingTurnWithResolution(taskId: string, turnId: string, resolution: FailedTurnResolution): TurnRecord {
+  failTurnWithResolution(taskId: string, turnId: string, resolution: FailedTurnResolution): TurnRecord {
     return this.#transaction(() => {
       this.requireActiveTask(taskId);
       const turn = this.requireTurn(taskId, turnId);
-      if (turn.status !== 'pending') {
-        throw new StateError('TURN_STATE_CONFLICT', `turn is ${turn.status}, expected pending: ${turnId}`);
+      if (turn.status !== 'pending' && turn.status !== 'capturing') {
+        throw new StateError('TURN_STATE_CONFLICT', `turn is ${turn.status}, expected pending or capturing: ${turnId}`);
       }
-      if (turn.userTurnIdentity === null) {
+      if (resolution.sourceStatus !== turn.status) {
+        throw new StateError(
+          'TURN_STATE_CONFLICT',
+          `resolution is for ${resolution.sourceStatus}, turn is ${turn.status}: ${turnId}`,
+        );
+      }
+      if (turn.status === 'pending' && turn.userTurnIdentity === null) {
         throw new StateError('TRANSCRIPT_INCONSISTENT', `pending turn has no user turn identity: ${turnId}`);
       }
       const now = new Date().toISOString();
@@ -998,7 +1014,7 @@ export class StateStore {
   }
 
   /**
-   * Returns the recorded failed-response adjudication of a turn, or null.
+   * Returns the recorded pending-response or capture-abandonment adjudication, or null.
    *
    * A failed turn that was not created by a response adjudication (for example a
    * pre-submission failure) returns null so the resolution command can reject it
@@ -1025,9 +1041,18 @@ export class StateStore {
       return null;
     }
     const candidate = parsed as Record<string, unknown>;
+    if (candidate.adjudication !== 'failed' || typeof candidate.resolvedAt !== 'string') {
+      return null;
+    }
+    if (candidate.sourceStatus === 'capturing') {
+      return {
+        adjudication: 'failed',
+        resolvedAt: candidate.resolvedAt,
+        sourceStatus: 'capturing',
+      };
+    }
     if (
-      candidate.adjudication !== 'failed' ||
-      typeof candidate.resolvedAt !== 'string' ||
+      candidate.sourceStatus !== 'pending' ||
       typeof candidate.pageUrl !== 'string' ||
       typeof candidate.userTurnIdentity !== 'string' ||
       (candidate.stop !== 'absent' && candidate.stop !== 'stopped')
@@ -1037,6 +1062,7 @@ export class StateStore {
     return {
       adjudication: 'failed',
       resolvedAt: candidate.resolvedAt,
+      sourceStatus: 'pending',
       pageUrl: candidate.pageUrl,
       userTurnIdentity: candidate.userTurnIdentity,
       stop: candidate.stop,
@@ -1826,6 +1852,14 @@ export class StateStore {
               return artifact.status === 'pending' && artifact.error !== null;
             })?.error
           : null;
+      const latestTurn = turns.at(-1) ?? null;
+      let terminalError = latestTurn?.status === 'failed' ? latestTurn.error : null;
+      if (task.status === 'failed' && latestTurn === null) {
+        terminalError =
+          this.listOperations(taskId).findLast((candidate) => {
+            return candidate.phase === 'committed' && candidate.error !== null;
+          })?.error ?? null;
+      }
       return {
         taskId,
         taskStatus: task.status,
@@ -1837,7 +1871,7 @@ export class StateStore {
         operationPhase: operation?.phase ?? null,
         operationProgress: operation?.progress ?? null,
         evidence: operation?.evidence ?? null,
-        error: statusError ?? turn?.error ?? operation?.error ?? artifactError ?? null,
+        error: statusError ?? turn?.error ?? operation?.error ?? artifactError ?? terminalError,
         nextAction: computeNextAction(task, turn, operation, browserStatus),
       };
     }, 'BEGIN');

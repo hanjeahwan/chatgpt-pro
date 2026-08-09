@@ -224,7 +224,7 @@ describe('VER-011 SQLite cross-process concurrency', () => {
     contender.close();
   });
 
-  it('keeps an orphan setup lease fenced until its gate and command have both exited', async () => {
+  it('keeps an orphan setup lease unowned until its gate and command have both exited', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collab-setup-fence-'));
     const databasePath = join(root, 'state.sqlite');
     const initialized = new StateStore(databasePath);
@@ -243,17 +243,19 @@ describe('VER-011 SQLite cross-process concurrency', () => {
       await execFileAsync(process.execPath, [workerPath, databasePath, childPid.toString(), commandPid.toString()]);
       const opened = new StateStore(databasePath);
       contender = opened;
+      expect(opened.acquireSetupOperation('contender')).toBe(false);
       expect(() => {
-        opened.acquireSetupOperation('contender');
-      }).toThrowError(/setup browser is busy/);
+        process.kill(childPid, 0);
+      }).not.toThrow();
+      expect(() => {
+        process.kill(commandPid, 0);
+      }).not.toThrow();
       child.kill('SIGKILL');
       await waitForPidExit(childPid);
-      expect(() => {
-        opened.acquireSetupOperation('contender');
-      }).toThrowError(/setup browser is busy/);
+      expect(opened.acquireSetupOperation('contender')).toBe(false);
       command.kill('SIGKILL');
       await waitForPidExit(commandPid);
-      opened.acquireSetupOperation('contender');
+      expect(opened.acquireSetupOperation('contender')).toBe(true);
       opened.releaseSetupOperation('contender');
     } finally {
       contender?.close();

@@ -279,6 +279,69 @@ describe('BEH-002, BEH-005, BEH-007, and BEH-008 state gates', () => {
     reopened.close();
   });
 
+  it('reports only the latest terminal turn failure after active work has settled', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-terminal-turn-status-'));
+    const store = new StateStore(join(root, 'state.sqlite'));
+    seedActiveTask(store, 'task-a', 'session-a');
+    store.beginSendTurn('task-a', 'turn-a', '/failed.md', [], 'operation-a');
+    store.failSubmissionAndCommit('task-a', 'turn-a', 'operation-a', 'upload failed');
+
+    expect(store.getStatus('task-a', 'available')).toMatchObject({
+      turnId: null,
+      turnStatus: null,
+      error: 'upload failed',
+      nextAction: 'none',
+    });
+    expect(store.getStatus('task-a', 'unknown', 'probe failed').error).toBe('probe failed');
+
+    store.beginSendTurn('task-a', 'turn-b', '/completed.md', [], 'operation-b');
+    expect(store.getStatus('task-a', 'available')).toMatchObject({
+      turnId: 'turn-b',
+      turnStatus: 'sending',
+      error: null,
+      nextAction: 'recover',
+    });
+    store.advanceSendToSubmitEffectUnknown('operation-b');
+    store.commitSubmittedTurn(
+      'task-a',
+      'turn-b',
+      'conversation-a',
+      'https://chatgpt.com/c/conversation-a',
+      'user-turn-b',
+      'operation-b',
+    );
+    const responsePath = join(root, 'response.md');
+    store.freezeCapture('task-a', 'turn-b', responsePath, []);
+    await writeFile(responsePath, 'done');
+    store.completeTurn('task-a', 'turn-b', responsePath);
+
+    expect(store.getStatus('task-a', 'available')).toMatchObject({
+      turnId: null,
+      turnStatus: null,
+      error: null,
+      nextAction: 'none',
+    });
+    store.close();
+  });
+
+  it('reports the committed operation error that terminated a task before its first turn', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-terminal-task-status-'));
+    const store = new StateStore(join(root, 'state.sqlite'));
+    store.createStartingTask('task-a', 'session-a', 'start-operation-a');
+    store.failTask('task-a');
+    store.commitOperation('start-operation-a', 'automatic', undefined, 'project unavailable');
+
+    expect(store.getStatus('task-a', 'missing')).toMatchObject({
+      taskStatus: 'failed',
+      turnId: null,
+      turnStatus: null,
+      operationPhase: null,
+      error: 'project unavailable',
+      nextAction: 'none',
+    });
+    store.close();
+  });
+
   it('enforces one uncommitted operation per task and one global uncommitted setup', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collab-operation-constraints-'));
     const store = new StateStore(join(root, 'state.sqlite'));
@@ -414,7 +477,7 @@ describe('BEH-002, BEH-005, BEH-007, and BEH-008 state gates', () => {
   });
 });
 
-describe('BEH-013 failed-response turn resolution state gate', () => {
+describe('BEH-013 failed-response and capture-abandonment state gate', () => {
   const pendingTurn = (store: StateStore, taskId: string, turnId: string): void => {
     const operationId = `${taskId}-${turnId}-send-operation`;
     store.beginSendTurn(taskId, turnId, '/prompt.md', [], operationId);
@@ -435,9 +498,10 @@ describe('BEH-013 failed-response turn resolution state gate', () => {
     seedActiveTask(store, 'task-a', 'session-a');
     pendingTurn(store, 'task-a', 'turn-a');
 
-    const failed = store.failPendingTurnWithResolution('task-a', 'turn-a', {
+    const failed = store.failTurnWithResolution('task-a', 'turn-a', {
       adjudication: 'failed',
       resolvedAt: '2026-08-09T00:00:00.000Z',
+      sourceStatus: 'pending',
       pageUrl: 'https://chatgpt.com/c/conversation-a',
       userTurnIdentity: 'user-turn-task-a',
       stop: 'absent',
@@ -447,6 +511,7 @@ describe('BEH-013 failed-response turn resolution state gate', () => {
     expect(JSON.parse(failed.error ?? '{}')).toEqual({
       adjudication: 'failed',
       resolvedAt: '2026-08-09T00:00:00.000Z',
+      sourceStatus: 'pending',
       pageUrl: 'https://chatgpt.com/c/conversation-a',
       userTurnIdentity: 'user-turn-task-a',
       stop: 'absent',
@@ -454,6 +519,7 @@ describe('BEH-013 failed-response turn resolution state gate', () => {
     expect(store.getFailedTurnResolution('task-a', 'turn-a')).toEqual({
       adjudication: 'failed',
       resolvedAt: '2026-08-09T00:00:00.000Z',
+      sourceStatus: 'pending',
       pageUrl: 'https://chatgpt.com/c/conversation-a',
       userTurnIdentity: 'user-turn-task-a',
       stop: 'absent',
@@ -463,7 +529,44 @@ describe('BEH-013 failed-response turn resolution state gate', () => {
     store.close();
   });
 
-  it('rejects every non-pending turn and a non-active task while preserving state', async () => {
+  it('atomically abandons a capturing turn without changing its frozen response or artifacts', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-abandon-capture-'));
+    const store = new StateStore(join(root, 'state.sqlite'));
+    seedActiveTask(store, 'task-a', 'session-a');
+    pendingTurn(store, 'task-a', 'turn-a');
+    const responsePath = join(root, 'response.md');
+    const artifactPath = join(root, 'artifact.txt');
+    store.freezeCapture('task-a', 'turn-a', responsePath, [
+      { sourceUrl: 'sandbox:/mnt/data/artifact.txt', label: 'artifact.txt' },
+    ]);
+    await writeFile(responsePath, 'published response');
+    store.setArtifactDestination('task-a', 'turn-a', 1, 'artifact.txt', artifactPath);
+    store.recordArtifactError('task-a', 'turn-a', 1, 'download unavailable');
+
+    const failed = store.failTurnWithResolution('task-a', 'turn-a', {
+      adjudication: 'failed',
+      resolvedAt: '2026-08-09T00:00:00.000Z',
+      sourceStatus: 'capturing',
+    });
+
+    expect(failed).toMatchObject({
+      status: 'failed',
+      responsePath,
+      artifactSetRecorded: true,
+    });
+    expect(JSON.parse(failed.error ?? '{}')).toEqual({
+      adjudication: 'failed',
+      resolvedAt: '2026-08-09T00:00:00.000Z',
+      sourceStatus: 'capturing',
+    });
+    expect(store.listArtifacts('task-a', 'turn-a')).toMatchObject([
+      { status: 'pending', localPath: artifactPath, error: 'download unavailable' },
+    ]);
+    store.beginSendTurn('task-a', 'turn-b', '/next.md', [], 'operation-b');
+    store.close();
+  });
+
+  it('rejects completed, sending, unknown-submission, other-failed, and non-active turns', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collab-resolve-turn-gates-'));
     const store = new StateStore(join(root, 'state.sqlite'));
     seedActiveTask(store, 'task-sending', 'session-sending');
@@ -474,9 +577,10 @@ describe('BEH-013 failed-response turn resolution state gate', () => {
     seedActiveTask(sending, 'task-other', 'session-other');
     sending.beginSendTurn('task-other', 'turn-sending', '/prompt.md', [], 'operation-sending');
     expect(() => {
-      return sending.failPendingTurnWithResolution('task-other', 'turn-sending', {
+      return sending.failTurnWithResolution('task-other', 'turn-sending', {
         adjudication: 'failed',
         resolvedAt: '2026-08-09T00:00:00.000Z',
+        sourceStatus: 'pending',
         pageUrl: 'https://chatgpt.com/c/conversation-a',
         userTurnIdentity: 'user-turn-task-other',
         stop: 'absent',
@@ -495,9 +599,10 @@ describe('BEH-013 failed-response turn resolution state gate', () => {
       'submission unresolved',
     );
     expect(() => {
-      return sending.failPendingTurnWithResolution('task-unknown', 'turn-unknown', {
+      return sending.failTurnWithResolution('task-unknown', 'turn-unknown', {
         adjudication: 'failed',
         resolvedAt: '2026-08-09T00:00:00.000Z',
+        sourceStatus: 'pending',
         pageUrl: 'https://chatgpt.com/c/conversation-a',
         userTurnIdentity: 'user-turn-task-unknown',
         stop: 'absent',
@@ -521,9 +626,10 @@ describe('BEH-013 failed-response turn resolution state gate', () => {
     await writeFile(responsePath, 'done');
     sending.completeTurn('task-completed', 'turn-completed', responsePath);
     expect(() => {
-      return sending.failPendingTurnWithResolution('task-completed', 'turn-completed', {
+      return sending.failTurnWithResolution('task-completed', 'turn-completed', {
         adjudication: 'failed',
         resolvedAt: '2026-08-09T00:00:00.000Z',
+        sourceStatus: 'pending',
         pageUrl: 'https://chatgpt.com/c/conversation-b',
         userTurnIdentity: 'user-turn-completed',
         stop: 'absent',
@@ -535,9 +641,10 @@ describe('BEH-013 failed-response turn resolution state gate', () => {
     sending.beginSendTurn('task-failed', 'turn-failed', '/prompt.md', [], 'operation-failed');
     sending.failSubmissionAndCommit('task-failed', 'turn-failed', 'operation-failed', 'pre-submission failure');
     expect(() => {
-      return sending.failPendingTurnWithResolution('task-failed', 'turn-failed', {
+      return sending.failTurnWithResolution('task-failed', 'turn-failed', {
         adjudication: 'failed',
         resolvedAt: '2026-08-09T00:00:00.000Z',
+        sourceStatus: 'pending',
         pageUrl: 'https://chatgpt.com/c/conversation-a',
         userTurnIdentity: 'user-turn-task-failed',
         stop: 'absent',
@@ -548,9 +655,10 @@ describe('BEH-013 failed-response turn resolution state gate', () => {
 
     sending.closeTask('task-sending');
     expect(() => {
-      return sending.failPendingTurnWithResolution('task-sending', 'turn-a', {
+      return sending.failTurnWithResolution('task-sending', 'turn-a', {
         adjudication: 'failed',
         resolvedAt: '2026-08-09T00:00:00.000Z',
+        sourceStatus: 'pending',
         pageUrl: 'https://chatgpt.com/c/conversation-a',
         userTurnIdentity: 'user-turn-task-sending',
         stop: 'absent',
@@ -570,9 +678,10 @@ describe('BEH-013 failed-response turn resolution state gate', () => {
     raw.close();
 
     expect(() => {
-      return store.failPendingTurnWithResolution('task-a', 'turn-a', {
+      return store.failTurnWithResolution('task-a', 'turn-a', {
         adjudication: 'failed',
         resolvedAt: '2026-08-09T00:00:00.000Z',
+        sourceStatus: 'pending',
         pageUrl: 'https://chatgpt.com/c/conversation-a',
         userTurnIdentity: 'user-turn-task-a',
         stop: 'stopped',
@@ -588,9 +697,10 @@ describe('BEH-013 failed-response turn resolution state gate', () => {
     const store = new StateStore(join(root, 'state.sqlite'));
     seedActiveTask(store, 'task-a', 'session-a');
     pendingTurn(store, 'task-a', 'turn-a');
-    store.failPendingTurnWithResolution('task-a', 'turn-a', {
+    store.failTurnWithResolution('task-a', 'turn-a', {
       adjudication: 'failed',
       resolvedAt: '2026-08-09T00:00:00.000Z',
+      sourceStatus: 'pending',
       pageUrl: 'https://chatgpt.com/c/conversation-a',
       userTurnIdentity: 'user-turn-task-a',
       stop: 'stopped',

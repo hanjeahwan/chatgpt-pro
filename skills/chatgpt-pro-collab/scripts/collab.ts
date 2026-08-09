@@ -275,7 +275,14 @@ export class CollabService {
     await ensureCollabDirectories(this.#paths);
     return this.#withStore(async (store) => {
       const token = randomUUID();
-      store.acquireSetupOperation(token);
+      let remainingRetries = TASK_OPERATION_RETRY_LIMIT;
+      while (!store.acquireSetupOperation(token)) {
+        if (remainingRetries === 0) {
+          throw new StateError('SETUP_OPERATION_IN_PROGRESS', 'previous setup browser command is still draining');
+        }
+        remainingRetries -= 1;
+        await yieldTaskOperation();
+      }
       return this.#withAcquiredSetupOperation(store, token, async (observer) => {
         const existing = store.getUncommittedSetupOperation();
         const sessionName = existing?.sessionName ?? `chatgpt-pro-collab-setup-${this.#idGenerator()}`;
@@ -1472,6 +1479,18 @@ export class CollabService {
       }
       browserStatus = await this.#browser.sessionAvailability(task.playwrightSession);
     }
+    if (operation !== null && operation.kind === 'archive') {
+      const task = store.requireTask(taskId);
+      if (task.conversationId === null || task.conversationUrl === null) {
+        throw new CollabError(
+          'CONVERSATION_NOT_ESTABLISHED',
+          `archive recovery needs a recorded canonical conversation: ${taskId}`,
+        );
+      }
+      await this.#recoverArchive(store, taskId, operation, task.conversationId, task.conversationUrl, observer);
+      const after = await this.#browser.sessionAvailability(task.playwrightSession);
+      return store.getStatus(taskId, after);
+    }
     if (pendingTurn !== undefined && (pendingTurn.status === 'pending' || pendingTurn.status === 'capturing')) {
       return store.getStatus(taskId, browserStatus);
     }
@@ -1520,18 +1539,6 @@ export class CollabService {
       }
       const after = await this.#browser.sessionAvailability(task.playwrightSession);
       return { ...store.getStatus(taskId, after), nextAction: 'send' };
-    }
-    if (operation !== null && operation.kind === 'archive') {
-      const task = store.requireTask(taskId);
-      if (task.conversationId === null || task.conversationUrl === null) {
-        throw new CollabError(
-          'CONVERSATION_NOT_ESTABLISHED',
-          `archive recovery needs a recorded canonical conversation: ${taskId}`,
-        );
-      }
-      await this.#recoverArchive(store, taskId, operation, task.conversationId, task.conversationUrl, observer);
-      const after = await this.#browser.sessionAvailability(task.playwrightSession);
-      return store.getStatus(taskId, after);
     }
     if (task.status === 'starting' || operation?.kind === 'start') {
       const seedStatePath = await requireSeedState(this.#paths);
@@ -1738,22 +1745,18 @@ export class CollabService {
   }
 
   /**
-   * Applies a user-confirmed terminal response failure to one active pending turn.
+   * Applies a user-confirmed terminal failure to one active pending or capturing turn.
    *
-   * The user's failure fact is authoritative and never inferred. Under the task lease
-   * the command rebuilds the same named browser and canonical conversation when
-   * missing, verifies the exact recorded canonical conversation URL and identity, the
-   * unique persisted target user turn, the absence of any later user turn, and a safe
-   * empty composer, stops an exact visible `Stop answering` at most once, and only
-   * then atomically fails the pending turn while recording the human adjudication,
-   * page identity, target user turn, and Stop outcome in the turn error. A repeated
-   * call after the recorded resolution is idempotent without browser actions; every
-   * proof failure preserves the pending state and never creates a user turn.
+   * Pending resolution retains the existing page and Stop proof. Capturing resolution
+   * is a local atomic abandonment under the same task lease: it performs no page action
+   * and leaves the frozen response and artifact rows intact. Both paths then probe the
+   * named session so the returned status reflects the current safe next action. A repeated
+   * call after either recorded resolution is idempotent without repeating its side effects.
    *
    * @param taskId Active task identifier.
-   * @param turnId Pending turn whose Pro response the user confirmed failed.
+   * @param turnId Pending or capturing turn the user confirmed should end.
    * @param verdict Required terminal failure verdict.
-   * @returns The status snapshot with `nextAction: send` after resolution.
+   * @returns The current status snapshot after resolution.
    * @throws {CollabError} If the task, turn, conversation, page, or Stop proof fails.
    * @throws {Error} If state, browser, or seed operations fail.
    */
@@ -1769,50 +1772,62 @@ export class CollabService {
           throw new CollabError('TASK_NOT_ACTIVE', `task is ${task.status}: ${taskId}`);
         }
         const recorded = store.getFailedTurnResolution(taskId, turnId);
-        if (turn.status === 'failed' && recorded !== null) {
-          const browserStatus = await this.#browser.sessionAvailability(task.playwrightSession);
-          return { ...store.getStatus(taskId, browserStatus), nextAction: 'send' };
-        }
-        if (turn.status !== 'pending') {
-          throw new CollabError('TURN_NOT_RESOLVABLE', `turn is ${turn.status}: ${turnId}`);
-        }
-        if (task.conversationId === null || task.conversationUrl === null) {
-          throw new CollabError('TRANSCRIPT_INCONSISTENT', `resolvable task has no conversation: ${taskId}`);
-        }
-        if (turn.userTurnIdentity === null) {
-          throw new CollabError('TRANSCRIPT_INCONSISTENT', `pending turn has no user turn identity: ${turnId}`);
-        }
-        const sessionName = task.playwrightSession;
-        const resolvedAt = new Date().toISOString();
-        if ((await this.#browser.sessionAvailability(sessionName)) === 'missing') {
-          const seedStatePath = await requireSeedState(this.#paths);
-          await this.#browser.startTask(taskId, sessionName, seedStatePath, true, observer);
-          await this.#browser.recoverConversation(
+        if (turn.status === 'capturing') {
+          store.failTurnWithResolution(taskId, turnId, {
+            adjudication: 'failed',
+            resolvedAt: new Date().toISOString(),
+            sourceStatus: 'capturing',
+          });
+        } else if (turn.status === 'pending') {
+          if (task.conversationId === null || task.conversationUrl === null) {
+            throw new CollabError('TRANSCRIPT_INCONSISTENT', `resolvable task has no conversation: ${taskId}`);
+          }
+          if (turn.userTurnIdentity === null) {
+            throw new CollabError('TRANSCRIPT_INCONSISTENT', `pending turn has no user turn identity: ${turnId}`);
+          }
+          const sessionName = task.playwrightSession;
+          const resolvedAt = new Date().toISOString();
+          if ((await this.#browser.sessionAvailability(sessionName)) === 'missing') {
+            const seedStatePath = await requireSeedState(this.#paths);
+            await this.#browser.startTask(taskId, sessionName, seedStatePath, true, observer);
+            await this.#browser.recoverConversation(
+              taskId,
+              sessionName,
+              task.conversationUrl,
+              task.conversationId,
+              observer,
+            );
+          }
+          const verified = await this.#browser.resolveFailedTurn(
             taskId,
             sessionName,
-            task.conversationUrl,
             task.conversationId,
+            turn.userTurnIdentity,
+            task.conversationUrl,
             observer,
           );
+          assertConversation(taskId, task.conversationId, task.conversationUrl, verified);
+          store.failTurnWithResolution(taskId, turnId, {
+            adjudication: 'failed',
+            resolvedAt,
+            sourceStatus: 'pending',
+            pageUrl: verified.conversationUrl,
+            userTurnIdentity: verified.userTurnIdentity,
+            stop: verified.stop,
+          });
+        } else if (turn.status !== 'failed' || recorded === null) {
+          throw new CollabError('TURN_NOT_RESOLVABLE', `turn is ${turn.status}: ${turnId}`);
         }
-        const verified = await this.#browser.resolveFailedTurn(
-          taskId,
-          sessionName,
-          task.conversationId,
-          turn.userTurnIdentity,
-          task.conversationUrl,
-          observer,
-        );
-        assertConversation(taskId, task.conversationId, task.conversationUrl, verified);
-        store.failPendingTurnWithResolution(taskId, turnId, {
-          adjudication: 'failed',
-          resolvedAt,
-          pageUrl: verified.conversationUrl,
-          userTurnIdentity: verified.userTurnIdentity,
-          stop: verified.stop,
-        });
-        const browserStatus = await this.#browser.sessionAvailability(sessionName);
-        return { ...store.getStatus(taskId, browserStatus), nextAction: 'send' };
+        let browserStatus: BrowserAvailability;
+        try {
+          browserStatus = await this.#browser.sessionAvailability(task.playwrightSession);
+        } catch (error) {
+          return store.getStatus(taskId, 'unknown', errorMessage(error));
+        }
+        const status = store.getStatus(taskId, browserStatus);
+        return status.nextAction === 'none' && browserStatus === 'available'
+          ? { ...status, nextAction: 'send' }
+          : status;
       });
     });
   }
@@ -1853,6 +1868,7 @@ export class CollabService {
     action: (observer: BrowserOperationObserver) => Promise<T>,
   ): Promise<T> {
     const observer: BrowserOperationObserver = {
+      terminateCommandOnParentExit: true,
       childSpawned(pid) {
         store.attachSetupOperationChild(token, pid);
       },

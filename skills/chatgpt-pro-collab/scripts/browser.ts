@@ -32,6 +32,7 @@ export interface BrowserCommandInvocation {
   readonly onCommandNotSpawned?: () => void;
   readonly beforeCommandRelease?: () => void;
   readonly signal?: AbortSignal;
+  readonly terminateCommandOnParentExit?: boolean;
 }
 
 export interface BrowserCommandOutput {
@@ -57,6 +58,7 @@ export interface BrowserOperationObserver {
   childSpawned(pid: number): void;
   childExited(pid: number): void;
   commandSpawned(pid: number): void;
+  readonly terminateCommandOnParentExit?: boolean;
 }
 
 export interface BrowserSessionInfo {
@@ -592,6 +594,7 @@ export class PlaywrightBrowser {
                 observer.commandSpawned(pid);
               },
             }),
+        ...(observer?.terminateCommandOnParentExit === true ? { terminateCommandOnParentExit: true } : {}),
         signal: AbortSignal.timeout(AVAILABILITY_PROBE_DEADLINE_MS),
       });
     } catch (error) {
@@ -1429,6 +1432,7 @@ export class PlaywrightBrowser {
               },
             }),
         ...(signal === null ? {} : { signal }),
+        ...(observer?.terminateCommandOnParentExit === true ? { terminateCommandOnParentExit: true } : {}),
       });
     } catch (error) {
       throw new BrowserError('BROWSER_COMMAND_FAILED', operation, errorMessage(error));
@@ -1570,11 +1574,20 @@ export function runBrowserCommand(invocation: BrowserCommandInvocation): Promise
       reject(new BrowserCommandAbortedError());
       return;
     }
-    const child = spawn(process.execPath, [BROWSER_COMMAND_GATE_PATH, invocation.executable, ...invocation.arguments], {
-      cwd: invocation.cwd,
-      env: invocation.environment,
-      stdio: ['pipe', 'pipe', 'pipe', 'pipe'],
-    });
+    const child = spawn(
+      process.execPath,
+      [
+        BROWSER_COMMAND_GATE_PATH,
+        ...(invocation.terminateCommandOnParentExit === true ? ['--terminate-command-on-parent-exit'] : []),
+        invocation.executable,
+        ...invocation.arguments,
+      ],
+      {
+        cwd: invocation.cwd,
+        env: invocation.environment,
+        stdio: ['pipe', 'pipe', 'pipe', 'pipe'],
+      },
+    );
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     const childPid = child.pid;
@@ -1761,20 +1774,16 @@ export function runBrowserCommand(invocation: BrowserCommandInvocation): Promise
       );
     });
 
-    if (childPid !== undefined && invocation.onChildSpawned !== undefined) {
+    if (childPid !== undefined) {
       try {
-        invocation.onChildSpawned(childPid);
-        childObserved = true;
+        invocation.onChildSpawned?.(childPid);
+        childObserved = invocation.onChildSpawned !== undefined;
         invocation.beforeCommandRelease?.();
-        child.stdin.end('go\n');
-      } catch (error) {
-        child.kill('SIGTERM');
-        rejectOnce(error);
-      }
-    } else if (childPid !== undefined) {
-      try {
-        invocation.beforeCommandRelease?.();
-        child.stdin.end('go\n');
+        if (invocation.terminateCommandOnParentExit === true) {
+          child.stdin.write('go\n');
+        } else {
+          child.stdin.end('go\n');
+        }
       } catch (error) {
         child.kill('SIGTERM');
         rejectOnce(error);

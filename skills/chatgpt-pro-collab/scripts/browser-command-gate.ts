@@ -2,7 +2,11 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { closeSync, writeFileSync } from 'node:fs';
 import type { Readable, Writable } from 'node:stream';
 
-const [executable, ...arguments_] = process.argv.slice(2);
+const SETUP_PARENT_LIFETIME_FLAG = '--terminate-command-on-parent-exit';
+const PARENT_EXIT_GRACE_MS = 100;
+const gateArguments = process.argv.slice(2);
+const terminateCommandOnParentExit = gateArguments[0] === SETUP_PARENT_LIFETIME_FLAG;
+const [executable, ...arguments_] = terminateCommandOnParentExit ? gateArguments.slice(1) : gateArguments;
 if (executable === undefined) {
   throw new Error('browser command gate requires an executable');
 }
@@ -11,6 +15,7 @@ let command: ChildProcess | undefined;
 let commandSettled = false;
 let commandPidNotificationFailed = false;
 let gateBuffer = '';
+let forcedParentExitTermination: NodeJS.Timeout | undefined;
 
 process.stdout.on('error', ignoreOutputError);
 process.stderr.on('error', ignoreOutputError);
@@ -18,7 +23,9 @@ process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk: string) => {
   gateBuffer += chunk;
   if (gateBuffer === 'go\n') {
-    process.stdin.pause();
+    if (!terminateCommandOnParentExit) {
+      process.stdin.pause();
+    }
     launchCommand();
     return;
   }
@@ -31,6 +38,14 @@ process.stdin.on('end', () => {
   if (command === undefined && process.exitCode === undefined) {
     writeDiagnostic('browser command gate closed before release\n');
     process.exitCode = 125;
+    return;
+  }
+  if (terminateCommandOnParentExit && !commandSettled) {
+    signalCommand('SIGTERM');
+    forcedParentExitTermination = setTimeout(() => {
+      forcedParentExitTermination = undefined;
+      signalCommand('SIGKILL');
+    }, PARENT_EXIT_GRACE_MS);
   }
 });
 
@@ -75,6 +90,7 @@ function launchCommand(): void {
       return;
     }
     commandSettled = true;
+    process.stdin.pause();
     writeDiagnostic(`guarded command failed to start: ${error.message}\n`);
     process.exitCode = commandPidNotificationFailed ? 70 : 127;
   });
@@ -83,6 +99,11 @@ function launchCommand(): void {
       return;
     }
     commandSettled = true;
+    process.stdin.pause();
+    if (forcedParentExitTermination !== undefined) {
+      clearTimeout(forcedParentExitTermination);
+      forcedParentExitTermination = undefined;
+    }
     if (commandPidNotificationFailed) {
       process.exitCode = 70;
       return;
@@ -94,6 +115,30 @@ function launchCommand(): void {
     writeDiagnostic(`guarded command exited with ${code === null ? `signal ${String(signal)}` : `code ${code}`}\n`);
     process.exitCode = code ?? 1;
   });
+}
+
+/**
+ * Signals the guarded command through its existing process-tree boundary.
+ *
+ * @param signal Termination signal selected by the setup parent-lifetime cleanup.
+ * @returns Nothing after the signal succeeds or the command already exited.
+ * @throws {Error} Permission and invalid-signal failures are re-thrown.
+ */
+function signalCommand(signal: NodeJS.Signals): void {
+  if (command?.pid === undefined) {
+    return;
+  }
+  try {
+    if (process.platform === 'win32') {
+      command.kill(signal);
+    } else {
+      process.kill(-command.pid, signal);
+    }
+  } catch (error) {
+    if (!(error instanceof Error && 'code' in error && error.code === 'ESRCH')) {
+      throw error;
+    }
+  }
 }
 
 /**

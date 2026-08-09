@@ -82,7 +82,7 @@ node "<skill-directory>/scripts/collab.ts" wait <taskId> <turnId> <observationWi
 node "<skill-directory>/scripts/collab.ts" resolve-turn <taskId> <turnId> failed
 ```
 
-不要从 `pending`、超时、reload 或内容稳定自行推断失败。命令验证原 conversation、目标 user turn 与可继续的 composer；若目标 response 仍显示 `Stop answering`，只在该命令内结束它，然后把原 turn 标为 `failed`。成功后，由宿主准备针对中断点的具体 continuation prompt，再显式执行新的 `send`/`wait`；不要自动发送泛化的“继续”。
+不要从 `pending`、超时、reload 或内容稳定自行推断失败。对 `pending`，命令验证原 conversation、目标 user turn 与可继续的 composer；若目标 response 仍显示 `Stop answering`，只在该命令内结束它。对用户明确放弃的 `capturing`，裁决不读取或操作页面，只保留已经冻结的 `response.md`、artifact 记录与错误并把原 turn 标为 `failed`；裁决后只读探测 session 并返回当前安全 `nextAction`。成功后，由宿主准备针对中断点的具体 continuation prompt，再显式执行新的 `send`/`wait`；不要自动发送泛化的“继续”。
 
 ## 5. 检查与恢复中断状态
 
@@ -127,7 +127,7 @@ node "<skill-directory>/scripts/collab.ts" close <taskId>
 - 把附件视为不透明文件；不要因 dirty worktree、symlink、仓库外路径或旧任务增加 Collab 安全门。
 - 不要求归档使用 manifest、固定目录结构或固定协作协议；Pro 在沙盒中自行解压，Collab 不发送额外解压消息。
 - `unknown-submission` 表示无法证明消息是否已提交；不要自动重发，先执行 `status`，按 `resolve-submission` 分支向用户报告并请求裁决。
-- `pending` 不因超时或页面异常自动变为 `failed`；只有用户明确提供 response 已失败或终止的事实时，才执行第 4 节的 `resolve-turn`。
+- `pending` 或 `capturing` 不因超时或页面异常自动变为 `failed`；只有用户明确提供 response 已失败、终止或永久无法完成捕获的事实时，才执行第 4 节的 `resolve-turn`。
 - 浏览器、页面 selector、写入或状态不一致时，报告真实错误；不要重启、迁移 conversation、删除 transcript 或伪造成功。
 
 ## 8. 结束前检查

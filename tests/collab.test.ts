@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -831,6 +831,48 @@ describe('BEH-001 setup journal and interruption recovery', () => {
     await expect(first).resolves.toEqual({ seedPath: fixture.paths.seedState });
   });
 
+  it('waits for a dead setup owner processes to drain without signalling them, then resumes setup', async () => {
+    const fixture = await serviceFixture();
+    const gate = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 750)'], { stdio: 'ignore' });
+    const command = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 750)'], { stdio: 'ignore' });
+    const gatePid = gate.pid;
+    const commandPid = command.pid;
+    if (gatePid === undefined || commandPid === undefined) {
+      throw new Error('draining setup fixture did not expose its process identifiers');
+    }
+    try {
+      const store = new StateStore(fixture.paths.database);
+      store.acquireSetupOperation('dead-setup-owner', 2_147_483_647);
+      store.createOperation({
+        id: 'orphan-setup-operation',
+        kind: 'setup',
+        step: 'login',
+        taskId: null,
+        turnId: null,
+        sessionName: 'orphan-setup-session',
+      });
+      store.attachSetupOperationChild('dead-setup-owner', gatePid);
+      store.attachSetupOperationCommand('dead-setup-owner', commandPid);
+      store.close();
+
+      await expect(fixture.service.setup()).resolves.toEqual({ seedPath: fixture.paths.seedState });
+      await Promise.all([waitForProcessExit(gatePid), waitForProcessExit(commandPid)]);
+      const recovered = new StateStore(fixture.paths.database);
+      expect(recovered.requireOperation('orphan-setup-operation')).toMatchObject({ phase: 'committed' });
+      expect(recovered.listOperations()).toHaveLength(1);
+      recovered.close();
+      expect(fixture.browser.setupSessions).toEqual(['orphan-setup-session']);
+    } finally {
+      for (const pid of [gatePid, commandPid]) {
+        try {
+          process.kill(pid, 'SIGKILL');
+        } catch {
+          // The expected setup recovery path waited for both processes to exit.
+        }
+      }
+    }
+  });
+
   it('commits a fresh setup with seed and session-closed evidence', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
@@ -1653,9 +1695,10 @@ describe('BEH-013 recovery matrix completion', () => {
     if (submittedIdentity === null) {
       throw new Error('submitted fixture turn has no user identity');
     }
-    store.failPendingTurnWithResolution(taskId, submittedTurn.turnId, {
+    store.failTurnWithResolution(taskId, submittedTurn.turnId, {
       adjudication: 'failed',
       resolvedAt: new Date().toISOString(),
+      sourceStatus: 'pending',
       pageUrl: `https://chatgpt.com/c/conversation-${taskId}`,
       userTurnIdentity: submittedIdentity,
       stop: 'absent',
@@ -1928,6 +1971,50 @@ describe('BEH-008 local close and BEH-009 archive journal', () => {
     store.close();
     expect(fixture.browser.archived).toEqual([task.taskId]);
   });
+
+  it.each(['pending', 'capturing'] as const)(
+    'recovers an interrupted archive before returning a %s turn to wait without clicking Archive again',
+    async (turnStatus) => {
+      const fixture = await serviceFixture();
+      await fixture.service.setup();
+      const task = await fixture.start();
+      const promptPath = join(fixture.root, `${turnStatus}-archive-recovery.md`);
+      await writeFile(promptPath, 'interrupted archive recovery');
+      const turn = await fixture.service.send(task.taskId, promptPath, []);
+      const store = new StateStore(fixture.paths.database);
+      if (turnStatus === 'capturing') {
+        store.freezeCapture(task.taskId, turn.turnId, responsePath(fixture.paths, task.taskId, turn.turnId), []);
+      }
+      store.createOperation({
+        id: 'archive-op',
+        kind: 'archive',
+        step: 'archive',
+        taskId: task.taskId,
+        turnId: null,
+        sessionName: `chatgpt-pro-collab-${task.taskId}`,
+      });
+      store.markOperationEffectUnknown('archive-op');
+      store.close();
+      fixture.browser.nextArchiveState = 'archived';
+
+      await expect(fixture.service.status(task.taskId)).resolves.toMatchObject({ nextAction: 'recover' });
+      await expect(fixture.service.recover(task.taskId)).resolves.toMatchObject({
+        turnStatus,
+        nextAction: 'wait',
+      });
+      await expect(fixture.service.recover(task.taskId)).resolves.toMatchObject({
+        turnStatus,
+        nextAction: 'wait',
+      });
+
+      expect(fixture.browser.archived).toEqual([]);
+      expect(fixture.browser.archiveObservations).toEqual([task.taskId]);
+      expect(fixture.browser.recoveredConversations).toEqual([task.taskId]);
+      const reopened = new StateStore(fixture.paths.database);
+      expect(reopened.requireOperation('archive-op')).toMatchObject({ phase: 'committed' });
+      reopened.close();
+    },
+  );
 
   it('observes and restores an already archived conversation on a repeated archive', async () => {
     const fixture = await serviceFixture();
@@ -2953,6 +3040,17 @@ describe('BEH-013 resolve-turn failed response resolution', () => {
     store.close();
   };
 
+  const seedCapturingBoundTurn = async (
+    fixture: Awaited<ReturnType<typeof serviceFixture>>,
+    taskId: string,
+    turnId: string,
+  ): Promise<void> => {
+    await seedPendingBoundTurn(fixture, taskId, turnId);
+    const store = new StateStore(fixture.paths.database);
+    store.freezeCapture(taskId, turnId, join(fixture.root, `${turnId}-response.md`), []);
+    store.close();
+  };
+
   it('fails a pending turn after page proof and returns nextAction send without a user message', async () => {
     const fixture = await serviceFixture();
     const taskId = randomUUID();
@@ -3026,6 +3124,37 @@ describe('BEH-013 resolve-turn failed response resolution', () => {
     expect(fixture.browser.resolvedFailedTurns).toEqual([taskId]);
   });
 
+  it('returns recover after abandoning a capturing turn whose session is missing', async () => {
+    const fixture = await serviceFixture();
+    const taskId = randomUUID();
+    const turnId = 'missing-capturing-turn';
+    await seedCapturingBoundTurn(fixture, taskId, turnId);
+    fixture.browser.sessionAvailabilityResult = 'missing';
+
+    await expect(fixture.service.resolveTurn(taskId, turnId, 'failed')).resolves.toMatchObject({
+      turnStatus: null,
+      browserStatus: 'missing',
+      nextAction: 'recover',
+    });
+    expect(fixture.browser.resolvedFailedTurns).toEqual([]);
+  });
+
+  it('returns unknown without send when the post-resolution session probe fails', async () => {
+    const fixture = await serviceFixture();
+    const taskId = randomUUID();
+    const turnId = 'probe-error-capturing-turn';
+    await seedCapturingBoundTurn(fixture, taskId, turnId);
+    fixture.browser.sessionAvailabilityError = new Error('availability unavailable');
+
+    await expect(fixture.service.resolveTurn(taskId, turnId, 'failed')).resolves.toMatchObject({
+      turnStatus: null,
+      browserStatus: 'unknown',
+      nextAction: 'none',
+      error: 'availability unavailable',
+    });
+    expect(fixture.browser.resolvedFailedTurns).toEqual([]);
+  });
+
   it('preserves the pending turn when page verification fails', async () => {
     const fixture = await serviceFixture();
     const taskId = randomUUID();
@@ -3044,7 +3173,7 @@ describe('BEH-013 resolve-turn failed response resolution', () => {
     expect(fixture.browser.expectedConversationIds).toEqual([]);
   });
 
-  it('rejects capturing, completed, sending, unknown-submission, and other-failed turns', async () => {
+  it('abandons capturing locally and rejects completed, sending, unknown-submission, and other-failed turns', async () => {
     const fixture = await serviceFixture();
     const capturing = new StateStore(fixture.paths.database);
     seedActiveTask(capturing, 'capturing-task', 'session-capturing');
@@ -3094,8 +3223,15 @@ describe('BEH-013 resolve-turn failed response resolution', () => {
     );
     capturing.close();
 
+    const resolved = await fixture.service.resolveTurn('capturing-task', 'turn-capturing', 'failed');
+    expect(resolved).toMatchObject({ turnStatus: null, browserStatus: 'available', nextAction: 'send' });
+    await expect(fixture.service.resolveTurn('capturing-task', 'turn-capturing', 'failed')).resolves.toMatchObject({
+      turnStatus: null,
+      browserStatus: 'available',
+      nextAction: 'send',
+    });
+
     for (const [taskId, turnId] of [
-      ['capturing-task', 'turn-capturing'],
       ['completed-task', 'turn-completed'],
       ['sending-task', 'turn-sending'],
       ['unknown-task', 'turn-unknown'],
@@ -3106,7 +3242,11 @@ describe('BEH-013 resolve-turn failed response resolution', () => {
       });
     }
     const reopened = new StateStore(fixture.paths.database);
-    expect(reopened.requireTurn('capturing-task', 'turn-capturing').status).toBe('capturing');
+    expect(reopened.requireTurn('capturing-task', 'turn-capturing').status).toBe('failed');
+    expect(JSON.parse(reopened.requireTurn('capturing-task', 'turn-capturing').error ?? '{}')).toMatchObject({
+      adjudication: 'failed',
+      sourceStatus: 'capturing',
+    });
     expect(reopened.requireTurn('other-failed-task', 'turn-other-failed').error).toBe('pre-submission failure');
     reopened.close();
     expect(fixture.browser.resolvedFailedTurns).toEqual([]);
@@ -3154,6 +3294,42 @@ describe('BEH-013 resolve-turn failed response resolution', () => {
     expect(reopened.requireTurn(taskId, turnId).status).toBe('failed');
     reopened.close();
   });
+
+  it.each(['pending', 'capturing'] as const)(
+    'keeps nextAction wait when repeating an old resolution after a new %s turn',
+    async (turnStatus) => {
+      const fixture = await serviceFixture();
+      const taskId = randomUUID();
+      const oldTurnId = 'resolved-turn';
+      await seedPendingBoundTurn(fixture, taskId, oldTurnId);
+      await fixture.service.resolveTurn(taskId, oldTurnId, 'failed');
+
+      const nextTurnId = 'next-turn';
+      const store = new StateStore(fixture.paths.database);
+      store.beginSendTurn(taskId, nextTurnId, '/next-prompt.md', [], 'next-send-operation');
+      store.advanceSendToSubmitEffectUnknown('next-send-operation');
+      store.commitSubmittedTurn(
+        taskId,
+        nextTurnId,
+        `conversation-${taskId}`,
+        `https://chatgpt.com/c/conversation-${taskId}`,
+        'user-turn-next',
+        'next-send-operation',
+      );
+      if (turnStatus === 'capturing') {
+        store.freezeCapture(taskId, nextTurnId, join(fixture.root, 'next-response.md'), []);
+      }
+      store.close();
+
+      await expect(fixture.service.resolveTurn(taskId, oldTurnId, 'failed')).resolves.toMatchObject({
+        turnId: nextTurnId,
+        turnStatus,
+        browserStatus: 'available',
+        nextAction: 'wait',
+      });
+      expect(fixture.browser.resolvedFailedTurns).toEqual([taskId]);
+    },
+  );
 
   it('serializes concurrent adjudications through the task lease with one resolution', async () => {
     const fixture = await serviceFixture();
@@ -4254,4 +4430,31 @@ async function reloadServiceFixture(
       return service.start(randomUUID());
     },
   };
+}
+
+/**
+ * Waits for a tracked test process to exit after setup recovery terminates it.
+ *
+ * @param pid Process identifier expected to disappear.
+ * @returns Nothing after the process no longer exists.
+ * @throws {Error} If the process remains alive beyond five seconds.
+ */
+async function waitForProcessExit(pid: number): Promise<void> {
+  const deadline = Date.now() + 5000;
+  while (true) {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ESRCH') {
+        return;
+      }
+      throw error;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`tracked setup process remained alive: ${pid}`);
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 25);
+    });
+  }
 }
