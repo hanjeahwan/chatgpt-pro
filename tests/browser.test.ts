@@ -1222,6 +1222,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
       'task-a',
       'session-a',
       'conversation-a',
+      'conversation-turn-user',
       observed.status === 'completed' ? observed.assistantTurnId : null,
       5000,
       controller.signal,
@@ -1242,6 +1243,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     expect(observationSource).not.toContain('sessionStorage');
     expect(observationSource).not.toContain('page.reload');
     expect(captureSource).toContain('[data-testid="copy-turn-action-button"]');
+    expect(captureSource).toContain('expectedUserTurnId');
     expect(captureSource).toContain('expectedAssistantTurnId');
     expect(captureSource).toContain('navigator.clipboard');
     expect(captureSource).toContain("item.types.includes('text/html')");
@@ -1317,6 +1319,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
         'task-a',
         'session-a',
         'conversation-a',
+        'conversation-turn-user-1',
         [sourceUrl],
         sourceUrl,
         '/tmp/task-a-download',
@@ -1330,6 +1333,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
       'task-a',
       'session-a',
       'conversation-a',
+      'conversation-turn-user-1',
       [sourceUrl],
       sourceUrl,
       '/tmp/task-a-download-resume',
@@ -1339,6 +1343,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     const resumedSource = await lastScript(fixture.invocations);
     expect(source).toContain('const refreshControls = true');
     expect(resumedSource).toContain('const refreshControls = false');
+    expect(source).toContain('const expectedUserTurnId = "conversation-turn-user-1"');
     expect(source).toContain("sourceUrl?.startsWith('sandbox:')");
     expect(source).toContain('artifact.sourceUrl !== expectedSourceUrls[index]');
     expect(source).toContain("page.reload({ waitUntil: 'domcontentloaded' })");
@@ -1379,6 +1384,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
         'task-a',
         'session-a',
         'conversation-a',
+        'conversation-turn-user-1',
         'conversation-turn-t1',
         5000,
         new AbortController().signal,
@@ -1412,6 +1418,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
         'task-a',
         'session-a',
         'conversation-a',
+        'conversation-turn-user-1',
         'conversation-turn-missing',
         5000,
         new AbortController().signal,
@@ -1419,6 +1426,45 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     ).rejects.toMatchObject({ code: 'PLAYWRIGHT_CONTRACT_DRIFT' });
     expect(fixture.events).toEqual([]);
     expect(fixture.globalsRestored()).toBe(true);
+  });
+
+  it('anchors capturing response and artifact recovery to the persisted user turn', async () => {
+    const sourceUrl = 'sandbox:/mnt/data/target.txt';
+    const fixture = await executableBrowserFixture({
+      responseHtml: `<a href="${sourceUrl}">target</a>`,
+      responsePlain: 'target response',
+      behaviorButtonCount: 1,
+      includeLaterTurn: true,
+      suggestedFilename: 'target.txt',
+    });
+    const temporaryPath = join(fixture.root, 'target.tmp');
+
+    await expect(
+      fixture.browser.captureResponse(
+        'task-a',
+        'session-a',
+        'conversation-a',
+        'conversation-turn-user-1',
+        null,
+        5000,
+        new AbortController().signal,
+      ),
+    ).resolves.toMatchObject({ response: 'target response', artifacts: [{ sourceUrl, label: 'target' }] });
+    await expect(
+      fixture.browser.downloadArtifact(
+        'task-a',
+        'session-a',
+        'conversation-a',
+        'conversation-turn-user-1',
+        [sourceUrl],
+        sourceUrl,
+        temporaryPath,
+        5000,
+        new AbortController().signal,
+      ),
+    ).resolves.toMatchObject({ sourceUrl, suggestedFilename: 'target.txt' });
+    expect(fixture.events).not.toContain('copy:later');
+    await expect(readFile(temporaryPath, 'utf8')).resolves.toBe('downloaded target.txt');
   });
 
   it('rejects an executed Copy response whose occurrence and behavior-button counts differ', async () => {
@@ -1432,6 +1478,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
         'task-a',
         'session-a',
         'conversation-a',
+        'conversation-turn-user-1',
         null,
         5000,
         new AbortController().signal,
@@ -1458,6 +1505,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
         'task-a',
         'session-a',
         'conversation-a',
+        'conversation-turn-user-1',
         [sourceUrl],
         sourceUrl,
         temporaryPath,
@@ -1504,6 +1552,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
           'task-a',
           'session-a',
           'conversation-a',
+          'conversation-turn-user-1',
           expectedSourceUrls,
           targetSourceUrl,
           join(fixture.root, 'must-not-exist'),
@@ -1544,6 +1593,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
         'task-a',
         'session-a',
         'conversation-a',
+        'conversation-turn-user-1',
         [
           'sandbox:/mnt/data/report.html',
           'sandbox:/mnt/data/archive.zip',
@@ -1581,6 +1631,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
         'task-a',
         'session-a',
         'conversation-a',
+        'conversation-turn-user-1',
         [sourceUrl],
         sourceUrl,
         join(fixture.root, 'must-not-exist'),
@@ -1604,7 +1655,13 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     store.createTask('task-a', 'session-a');
     store.beginTurn('task-a', 'turn-a', '/prompt.md', []);
     store.markSubmissionAttempting('task-a', 'turn-a');
-    store.markTurnPending('task-a', 'turn-a', 'conversation-a', 'https://chatgpt.com/c/conversation-a', 'user-turn-a');
+    store.markTurnPending(
+      'task-a',
+      'turn-a',
+      'conversation-a',
+      'https://chatgpt.com/c/conversation-a',
+      'conversation-turn-user-1',
+    );
     store.freezeCapture('task-a', 'turn-a', targetResponsePath, [{ sourceUrl, label: 'result' }]);
     store.close();
     const service = new CollabService(fixture.paths, fixture.browser);
@@ -1639,7 +1696,13 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     store.createTask('task-a', 'session-a');
     store.beginTurn('task-a', 'turn-a', '/prompt.md', []);
     store.markSubmissionAttempting('task-a', 'turn-a');
-    store.markTurnPending('task-a', 'turn-a', 'conversation-a', 'https://chatgpt.com/c/conversation-a', 'user-turn-a');
+    store.markTurnPending(
+      'task-a',
+      'turn-a',
+      'conversation-a',
+      'https://chatgpt.com/c/conversation-a',
+      'conversation-turn-user-1',
+    );
     store.freezeCapture('task-a', 'turn-a', targetResponsePath, [
       { sourceUrl: first, label: 'first' },
       { sourceUrl: second, label: 'second' },
@@ -1677,6 +1740,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
         'task-a',
         'session-a',
         'conversation-a',
+        'conversation-turn-user-1',
         [sourceUrl],
         sourceUrl,
         '/tmp/task-a-download',

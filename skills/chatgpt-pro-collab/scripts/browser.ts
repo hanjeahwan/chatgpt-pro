@@ -922,6 +922,7 @@ export class PlaywrightBrowser {
    * @param taskId Owning task identifier.
    * @param sessionName Owning Playwright named session.
    * @param expectedConversationId Database-bound conversation identity.
+   * @param expectedUserTurnId Persisted exact identity of the target user turn.
    * @param expectedAssistantTurnId Assistant DOM identity returned by completion observation, or null for a capturing retry.
    * @param captureTimeoutMs Remaining finite capture budget.
    * @param signal Host cancellation used to terminate the command at the monotonic deadline.
@@ -934,6 +935,7 @@ export class PlaywrightBrowser {
     taskId: string,
     sessionName: string,
     expectedConversationId: string,
+    expectedUserTurnId: string,
     expectedAssistantTurnId: string | null,
     captureTimeoutMs: number,
     signal: AbortSignal,
@@ -944,7 +946,7 @@ export class PlaywrightBrowser {
       sessionName,
       taskId,
       'capture-response',
-      captureScript(expectedConversationId, expectedAssistantTurnId, captureTimeoutMs),
+      captureScript(expectedConversationId, expectedUserTurnId, expectedAssistantTurnId, captureTimeoutMs),
       'copy completed response',
       'capture',
       observer,
@@ -974,6 +976,7 @@ export class PlaywrightBrowser {
    * @param taskId Owning task identifier.
    * @param sessionName Owning Playwright named session.
    * @param expectedConversationId Database-bound conversation identity.
+   * @param expectedUserTurnId Persisted exact identity of the target user turn.
    * @param expectedSourceUrls Complete recorded artifact set in response order.
    * @param sourceUrl Exact recorded `sandbox:` logical target.
    * @param temporaryPath Fresh task-owned browser save path.
@@ -988,6 +991,7 @@ export class PlaywrightBrowser {
     taskId: string,
     sessionName: string,
     expectedConversationId: string,
+    expectedUserTurnId: string,
     expectedSourceUrls: readonly string[],
     sourceUrl: string,
     temporaryPath: string,
@@ -1002,6 +1006,7 @@ export class PlaywrightBrowser {
       'download-artifact',
       downloadArtifactScript(
         expectedConversationId,
+        expectedUserTurnId,
         expectedSourceUrls,
         sourceUrl,
         temporaryPath,
@@ -2961,6 +2966,7 @@ function observationScript(
  * Builds page-local Copy response interception for the already completed target assistant turn.
  *
  * @param expectedConversationId Database-bound canonical identity.
+ * @param expectedUserTurnId Persisted exact identity of the target user turn.
  * @param expectedAssistantTurnId Assistant DOM identity returned by completion observation, or null for a capturing retry.
  * @param captureTimeoutMs Remaining finite capture budget.
  * @returns A Playwright page function source.
@@ -2968,11 +2974,13 @@ function observationScript(
  */
 function captureScript(
   expectedConversationId: string,
+  expectedUserTurnId: string,
   expectedAssistantTurnId: string | null,
   captureTimeoutMs: number,
 ): string {
   return `async (page) => {
     const expectedConversationId = ${JSON.stringify(expectedConversationId)};
+    const expectedUserTurnId = ${JSON.stringify(expectedUserTurnId)};
     const expectedAssistantTurnId = ${JSON.stringify(expectedAssistantTurnId)};
     const captureTimeoutMs = ${JSON.stringify(captureTimeoutMs)};
     const captureDeadline = Date.now() + captureTimeoutMs;
@@ -2988,22 +2996,32 @@ function captureScript(
     }
     const turnSelector = '[data-testid^="conversation-turn-"][data-turn]';
     const copySelector = '[data-testid="copy-turn-action-button"]';
-    const assistantIndices = await page.locator(turnSelector).evaluateAll((elements, targetTurnId) => {
-      if (targetTurnId !== null) {
-        return elements.flatMap((element, index) => {
+    const assistantIndices = await page.locator(turnSelector).evaluateAll((elements, target) => {
+      const userIndices = elements.flatMap((element, index) => {
+        return element.getAttribute('data-turn') === 'user' &&
+          element.getAttribute('data-testid') === target.userTurnId
+          ? [index]
+          : [];
+      });
+      if (userIndices.length !== 1) return [];
+      const assistantIndex = userIndices[0] + 1;
+      if (
+        assistantIndex >= elements.length ||
+        elements[assistantIndex].getAttribute('data-turn') !== 'assistant'
+      ) {
+        return [];
+      }
+      if (target.assistantTurnId !== null) {
+        const exactAssistantIndices = elements.flatMap((element, index) => {
           return element.getAttribute('data-turn') === 'assistant' &&
-            element.getAttribute('data-testid') === targetTurnId
+            element.getAttribute('data-testid') === target.assistantTurnId
             ? [index]
             : [];
         });
+        if (exactAssistantIndices.length !== 1 || exactAssistantIndices[0] !== assistantIndex) return [];
       }
-      let latestUser = -1;
-      for (let index = 0; index < elements.length; index += 1) {
-        if (elements[index].getAttribute('data-turn') === 'user') latestUser = index;
-      }
-      if (latestUser < 0 || latestUser + 1 >= elements.length) return [];
-      return elements[latestUser + 1].getAttribute('data-turn') === 'assistant' ? [latestUser + 1] : [];
-    }, expectedAssistantTurnId);
+      return [assistantIndex];
+    }, { userTurnId: expectedUserTurnId, assistantTurnId: expectedAssistantTurnId });
     if (assistantIndices.length !== 1) {
       throw new Error('page contract drift: target assistant turn is absent or not unique');
     }
@@ -3107,6 +3125,7 @@ function captureScript(
  * Builds a strict source-URL-to-control mapping and saves one browser download event.
  *
  * @param expectedConversationId Database-bound canonical identity.
+ * @param expectedUserTurnId Persisted exact identity of the target user turn.
  * @param expectedSourceUrls Complete recorded artifact set in response order.
  * @param targetSourceUrl Exact recorded `sandbox:` logical target.
  * @param temporaryPath Fresh task-owned browser save path.
@@ -3117,6 +3136,7 @@ function captureScript(
  */
 function downloadArtifactScript(
   expectedConversationId: string,
+  expectedUserTurnId: string,
   expectedSourceUrls: readonly string[],
   targetSourceUrl: string,
   temporaryPath: string,
@@ -3125,6 +3145,7 @@ function downloadArtifactScript(
 ): string {
   return `async (page) => {
     const expectedConversationId = ${JSON.stringify(expectedConversationId)};
+    const expectedUserTurnId = ${JSON.stringify(expectedUserTurnId)};
     const expectedSourceUrls = ${JSON.stringify(expectedSourceUrls)};
     const targetSourceUrl = ${JSON.stringify(targetSourceUrl)};
     const temporaryPath = ${JSON.stringify(temporaryPath)};
@@ -3152,15 +3173,23 @@ function downloadArtifactScript(
     }
     const turnSelector = '[data-testid^="conversation-turn-"][data-turn]';
     await page.locator(turnSelector).last().waitFor({ state: 'visible', timeout: remaining() });
-    const assistantIndex = await page.locator(turnSelector).evaluateAll((elements) => {
-      let latestUser = -1;
-      for (let index = 0; index < elements.length; index += 1) {
-        if (elements[index].getAttribute('data-turn') === 'user') latestUser = index;
-      }
-      if (latestUser < 0 || latestUser + 1 >= elements.length) return -1;
-      return elements[latestUser + 1].getAttribute('data-turn') === 'assistant' ? latestUser + 1 : -1;
-    });
-    if (assistantIndex < 0) throw new Error('page contract drift: target assistant turn is absent');
+    const assistantIndices = await page.locator(turnSelector).evaluateAll((elements, targetUserTurnId) => {
+      const userIndices = elements.flatMap((element, index) => {
+        return element.getAttribute('data-turn') === 'user' &&
+          element.getAttribute('data-testid') === targetUserTurnId
+          ? [index]
+          : [];
+      });
+      if (userIndices.length !== 1) return [];
+      const assistantIndex = userIndices[0] + 1;
+      return assistantIndex < elements.length && elements[assistantIndex].getAttribute('data-turn') === 'assistant'
+        ? [assistantIndex]
+        : [];
+    }, expectedUserTurnId);
+    if (assistantIndices.length !== 1) {
+      throw new Error('page contract drift: target assistant turn is absent or not unique');
+    }
+    const assistantIndex = assistantIndices[0];
     const assistant = page.locator(turnSelector).nth(assistantIndex);
     const copy = assistant.locator('[data-testid="copy-turn-action-button"]');
     if (await copy.count() !== 1 || !(await copy.isVisible())) {

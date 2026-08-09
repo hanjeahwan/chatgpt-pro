@@ -393,6 +393,7 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
       code: 'INJECTED_DOWNLOAD_FAILURE',
     });
     const interruptedStore = new StateStore(fixture.paths.database);
+    const userTurnIdentity = interruptedStore.requireTurn(task.taskId, turn.turnId).userTurnIdentity;
     expect(interruptedStore.listArtifacts(task.taskId, turn.turnId)).toMatchObject([
       { sourceUrl: firstSource, status: 'completed' },
       { sourceUrl: secondSource, status: 'pending', error: expect.stringContaining('injected download failure') },
@@ -404,6 +405,8 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
       artifactPaths: [expect.any(String), expect.any(String)],
     });
     expect(fixture.browser.downloadedArtifacts).toEqual([firstSource, secondSource, secondSource]);
+    expect(fixture.browser.capturedUserTurnIds).toEqual([userTurnIdentity, userTurnIdentity]);
+    expect(fixture.browser.downloadedUserTurnIds).toEqual([userTurnIdentity, userTurnIdentity, userTurnIdentity]);
   });
 
   it('maps a delayed artifact failure after the shared deadline to CAPTURE_TIMEOUT', async () => {
@@ -1419,6 +1422,47 @@ describe('BEH-013 recovery matrix completion', () => {
       evidence: { promptVerbatimMatch: true, attachmentNamesMatch: true },
     });
     reopened.close();
+  });
+
+  it('anchors auto-verification on the nearest persisted identity across failed turns', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const taskId = randomUUID();
+    const sessionName = `chatgpt-pro-collab-${taskId}`;
+    const submittedPromptPath = join(fixture.root, 'submitted-then-failed.md');
+    await writeFile(submittedPromptPath, 'submitted then failed');
+    const seedStore = new StateStore(fixture.paths.database);
+    seedStore.createTask(taskId, sessionName);
+    seedStore.close();
+    const submittedTurn = await fixture.service.send(taskId, submittedPromptPath, []);
+
+    const crashedTurnId = 'crashed-after-failures';
+    const crashedPromptPath = join(fixture.root, 'crashed-after-failures.md');
+    await writeFile(crashedPromptPath, 'crashed after failures');
+    const store = new StateStore(fixture.paths.database);
+    const submittedIdentity = store.requireTurn(taskId, submittedTurn.turnId).userTurnIdentity;
+    if (submittedIdentity === null) {
+      throw new Error('submitted fixture turn has no user identity');
+    }
+    store.failPendingTurnWithResolution(taskId, submittedTurn.turnId, {
+      adjudication: 'failed',
+      resolvedAt: new Date().toISOString(),
+      pageUrl: `https://chatgpt.com/c/conversation-${taskId}`,
+      userTurnIdentity: submittedIdentity,
+      stop: 'absent',
+    });
+    store.beginTurn(taskId, 'pre-submit-failure', '/pre-submit-failure.md', []);
+    store.failSendingTurn(taskId, 'pre-submit-failure', 'failed before submission');
+    store.beginSendTurn(taskId, crashedTurnId, crashedPromptPath, [], 'send-op');
+    store.advanceSendToSubmitEffectUnknown('send-op');
+    store.close();
+    await savePromptCopy(fixture.paths, taskId, crashedTurnId, Buffer.from('crashed after failures'));
+
+    await expect(fixture.service.recover(taskId)).resolves.toMatchObject({
+      turnStatus: 'pending',
+      nextAction: 'wait',
+    });
+    expect(fixture.browser.autoVerificationAnchors).toEqual([submittedIdentity]);
   });
 
   it('opens the decision gate when page evidence cannot prove the submission', async () => {
@@ -2917,14 +2961,17 @@ class FakeBrowser implements CollabBrowser {
   readonly cleanedComposers: string[] = [];
   readonly archiveObservations: string[] = [];
   readonly autoVerifications: string[] = [];
+  readonly autoVerificationAnchors: Array<string | null> = [];
   nextArchiveState: 'archived' | 'not-archived' = 'archived';
   nextArchiveStateUnknown: string | null = null;
   nextAutoVerifyUnresolved: string | null = null;
   autoVerifyConversationId: string | null = null;
   readonly expectedConversationIds: Array<string | null> = [];
   readonly expectedAssistantTurnIds: Array<string | null> = [];
+  readonly capturedUserTurnIds: string[] = [];
   readonly responseArtifacts: Array<{ readonly sourceUrl: string; readonly label: string }> = [];
   readonly downloadedArtifacts: string[] = [];
+  readonly downloadedUserTurnIds: string[] = [];
   nextDownloadFailureSourceUrl: string | null = null;
   nextStartFailureCode: string | null = null;
   nextRecoverConversationIdentityFailureTaskId: string | null = null;
@@ -3226,7 +3273,7 @@ class FakeBrowser implements CollabBrowser {
    * @param _sessionName Unused named session.
    * @param expectedConversationId Database-bound identity.
    * @param _expectedProjectIdentity Unused recorded project identity.
-   * @param _previousUserTurnIdentity Unused anchor.
+   * @param previousUserTurnIdentity Persisted predecessor anchor.
    * @param _prompt Unused saved prompt.
    * @param _attachmentNames Unused ordered attachment names.
    * @param observer Task-lease child-process observer.
@@ -3238,13 +3285,14 @@ class FakeBrowser implements CollabBrowser {
     _sessionName: string,
     expectedConversationId: string | null,
     _expectedProjectIdentity: string | null,
-    _previousUserTurnIdentity: string | null,
+    previousUserTurnIdentity: string | null,
     _prompt: string,
     _attachmentNames: readonly string[],
     observer?: BrowserOperationObserver,
   ) {
     this.observe(observer);
     this.autoVerifications.push(taskId);
+    this.autoVerificationAnchors.push(previousUserTurnIdentity);
     if (this.nextAutoVerifyUnresolved === taskId) {
       this.nextAutoVerifyUnresolved = null;
       return { status: 'unresolved' as const, reason: 'injected unresolved auto-verification' };
@@ -3486,6 +3534,7 @@ class FakeBrowser implements CollabBrowser {
    * @param taskId Task identifier.
    * @param _sessionName Unused named session.
    * @param expectedConversationId Database-bound identity.
+   * @param expectedUserTurnId Persisted target user turn identity.
    * @param expectedAssistantTurnId Assistant identity observed for a pending turn, or null on capturing retry.
    * @param _captureTimeoutMs Unused finite capture budget.
    * @param signal Host cancellation used by capture timeout tests.
@@ -3497,12 +3546,14 @@ class FakeBrowser implements CollabBrowser {
     taskId: string,
     _sessionName: string,
     expectedConversationId: string,
+    expectedUserTurnId: string,
     expectedAssistantTurnId: string | null,
     _captureTimeoutMs: number,
     signal: AbortSignal,
     observer?: BrowserOperationObserver,
   ) {
     this.observe(observer);
+    this.capturedUserTurnIds.push(expectedUserTurnId);
     this.expectedAssistantTurnIds.push(expectedAssistantTurnId);
     this.activeCaptures += 1;
     this.maxConcurrentCaptures = Math.max(this.maxConcurrentCaptures, this.activeCaptures);
@@ -3539,6 +3590,7 @@ class FakeBrowser implements CollabBrowser {
    * @param _taskId Unused task identifier.
    * @param _sessionName Unused named session.
    * @param _expectedConversationId Unused database-bound identity.
+   * @param expectedUserTurnId Persisted target user turn identity.
    * @param _expectedSourceUrls Unused complete recorded artifact set.
    * @param sourceUrl Exact logical artifact target.
    * @param temporaryPath Fresh browser save path.
@@ -3552,6 +3604,7 @@ class FakeBrowser implements CollabBrowser {
     _taskId: string,
     _sessionName: string,
     _expectedConversationId: string,
+    expectedUserTurnId: string,
     _expectedSourceUrls: readonly string[],
     sourceUrl: string,
     temporaryPath: string,
@@ -3560,6 +3613,7 @@ class FakeBrowser implements CollabBrowser {
     observer?: BrowserOperationObserver,
   ) {
     this.observe(observer);
+    this.downloadedUserTurnIds.push(expectedUserTurnId);
     this.downloadedArtifacts.push(sourceUrl);
     this.downloadCaptureBudgets.push(captureTimeoutMs);
     if (this.downloadNeverSettlesSourceUrl === sourceUrl) {

@@ -157,6 +157,7 @@ describe('browser command side-effect gate', () => {
         'task-a',
         'session-a',
         'conversation-a',
+        'conversation-turn-user-1',
         ['sandbox:/mnt/data/result.txt'],
         'sandbox:/mnt/data/result.txt',
         join(root, 'artifact.tmp'),

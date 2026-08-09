@@ -90,6 +90,7 @@ export interface CollabBrowser {
     taskId: string,
     sessionName: string,
     expectedConversationId: string,
+    expectedUserTurnId: string,
     expectedAssistantTurnId: string | null,
     captureTimeoutMs: number,
     signal: AbortSignal,
@@ -99,6 +100,7 @@ export interface CollabBrowser {
     taskId: string,
     sessionName: string,
     expectedConversationId: string,
+    expectedUserTurnId: string,
     expectedSourceUrls: readonly string[],
     sourceUrl: string,
     temporaryPath: string,
@@ -499,7 +501,7 @@ export class CollabService {
     const attachmentNames = sendingTurn.attachmentPaths.map((attachmentPath) => {
       return basename(attachmentPath);
     });
-    const previousUserTurnIdentity = await previousCompletedTurnIdentity(store, taskId, sendingTurn.id);
+    const previousUserTurnIdentity = await previousUserTurnIdentityBefore(store, taskId, sendingTurn.id);
     if ((await this.#browser.sessionAvailability(task.playwrightSession)) === 'missing') {
       const seedStatePath = await requireSeedState(this.#paths);
       await this.#browser.startTask(taskId, task.playwrightSession, seedStatePath, true, observer);
@@ -866,7 +868,14 @@ export class CollabService {
           if (task.conversationId === null || task.conversationUrl === null) {
             throw new CollabError('TRANSCRIPT_INCONSISTENT', `capturable task has no conversation: ${taskId}`);
           }
+          if (turn.userTurnIdentity === null) {
+            throw new CollabError(
+              'TRANSCRIPT_INCONSISTENT',
+              `${turn.status} turn has no persisted user turn identity: ${turnId}`,
+            );
+          }
           const conversationId = task.conversationId;
+          const userTurnIdentity = turn.userTurnIdentity;
           if (turn.status === 'capturing' && captureDeadline === null) {
             captureDeadline = this.#now() + captureTimeoutMs;
           }
@@ -875,12 +884,6 @@ export class CollabService {
           let expectedAssistantTurnId: string | null = null;
           const captureWasPending = turn.status === 'pending';
           if (turn.status === 'pending') {
-            if (turn.userTurnIdentity === null) {
-              throw new CollabError(
-                'TRANSCRIPT_INCONSISTENT',
-                `pending turn has no persisted user turn identity: ${turnId}`,
-              );
-            }
             const remainingObservationMs = remainingMilliseconds(observationDeadline, this.#now);
             const remainingUntilReloadMs = remainingMilliseconds(nextReloadAt, this.#now);
             if (remainingObservationMs === 0 && observedOnce) {
@@ -892,7 +895,7 @@ export class CollabService {
                 task.playwrightSession,
                 task.conversationUrl,
                 task.conversationId,
-                turn.userTurnIdentity,
+                userTurnIdentity,
                 observer,
               );
               assertConversation(taskId, task.conversationId, task.conversationUrl, reloaded);
@@ -908,7 +911,7 @@ export class CollabService {
               taskId,
               task.playwrightSession,
               task.conversationId,
-              turn.userTurnIdentity,
+              userTurnIdentity,
               Math.max(1, Math.min(remainingObservationMs, remainingUntilReloadMs)),
               observer,
             );
@@ -936,6 +939,7 @@ export class CollabService {
                 taskId,
                 task.playwrightSession,
                 conversationId,
+                userTurnIdentity,
                 expectedAssistantTurnId,
                 remainingCaptureMs,
                 signal,
@@ -963,6 +967,7 @@ export class CollabService {
             turnId,
             task.playwrightSession,
             task.conversationId,
+            userTurnIdentity,
             captureDeadline,
             observer,
             this.#now,
@@ -995,6 +1000,7 @@ export class CollabService {
    * @param turnId Capturing turn identifier.
    * @param sessionName Owning Playwright named session.
    * @param conversationId Database-bound conversation identity.
+   * @param userTurnIdentity Persisted target user turn identity.
    * @param captureDeadline Monotonic deadline shared by response and all artifact capture.
    * @param observer Task-lease child-process observer.
    * @param now Injectable monotonic clock matching the deadline's time base.
@@ -1008,6 +1014,7 @@ export class CollabService {
     turnId: string,
     sessionName: string,
     conversationId: string,
+    userTurnIdentity: string,
     captureDeadline: number,
     observer: BrowserOperationObserver,
     now: () => number = () => {
@@ -1039,6 +1046,7 @@ export class CollabService {
               taskId,
               sessionName,
               conversationId,
+              userTurnIdentity,
               expectedSourceUrls,
               artifact.sourceUrl,
               temporaryPath,
@@ -1587,7 +1595,7 @@ export class CollabService {
         const attachmentNames = turn.attachmentPaths.map((path) => {
           return basename(path);
         });
-        const previousUserTurnIdentity = await previousCompletedTurnIdentity(store, taskId, turnId);
+        const previousUserTurnIdentity = await previousUserTurnIdentityBefore(store, taskId, turnId);
         const sessionName = task.playwrightSession;
         const resolvedAt = new Date().toISOString();
         if ((await this.#browser.sessionAvailability(sessionName)) === 'missing') {
@@ -2078,16 +2086,18 @@ async function readSavedPrompt(paths: CollabPaths, taskId: string, turnId: strin
 }
 
 /**
- * Resolves the identity anchor of the previous completed turn, or null for a first turn.
+ * Resolves the nearest persisted user identity before the current turn.
+ *
+ * Pre-submission failures have no identity and are skipped. A turn failed after
+ * submission retains its identity and remains the correct conversation anchor.
  *
  * @param store Current process-local state connection.
  * @param taskId Owning task identifier.
  * @param turnId Current turn whose predecessor anchor is needed.
- * @returns The previous completed turn's user identity, or null.
- * @throws {CollabError} If a prior completed turn lacks its recorded identity.
+ * @returns The nearest earlier user identity, or null when none was persisted.
  * @throws {Error} If the state store cannot be read.
  */
-async function previousCompletedTurnIdentity(
+async function previousUserTurnIdentityBefore(
   store: StateStore,
   taskId: string,
   turnId: string,
@@ -2099,14 +2109,13 @@ async function previousCompletedTurnIdentity(
   if (index <= 0) {
     return null;
   }
-  const previous = turns[index - 1];
-  if (previous === undefined || previous.status !== 'completed') {
-    return null;
+  for (let previousIndex = index - 1; previousIndex >= 0; previousIndex -= 1) {
+    const identity = turns[previousIndex]?.userTurnIdentity;
+    if (identity !== undefined && identity !== null) {
+      return identity;
+    }
   }
-  if (previous.userTurnIdentity === null) {
-    throw new CollabError('TRANSCRIPT_INCONSISTENT', `previous completed turn has no user identity: ${previous.id}`);
-  }
-  return previous.userTurnIdentity;
+  return null;
 }
 
 /**
