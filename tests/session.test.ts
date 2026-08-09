@@ -29,7 +29,10 @@ describe('Playwright script storage', () => {
 
     expect(second).toBe(first);
     expect(other).not.toBe(first);
-    expect(await readdir(join(paths.sessionsDirectory, 'task-a', 'playwright'))).toEqual(['capture.js', 'observe.js']);
+    expect((await readdir(join(paths.sessionsDirectory, 'task-a', 'playwright'))).sort()).toEqual([
+      'capture.js',
+      'observe.js',
+    ]);
     await expect(readFile(first, 'utf8')).resolves.toBe('second');
   });
 });
