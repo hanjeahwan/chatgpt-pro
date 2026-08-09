@@ -647,11 +647,13 @@ export class PlaywrightBrowser {
    * The fixed CLI `reload` command is issued unconditionally on the monotonic
    * observation schedule without inspecting Copy, Stop, Submit, text, or any other
    * DOM completion signal. After the page reloads, the rehydrated conversation must
-   * again match the database-bound canonical identity and the persisted user turn
-   * anchor before the existing observation path continues.
+   * again match the database-bound canonical identity, the exact database-saved
+   * canonical URL (origin plus pathname, without query or fragment), and the unique
+   * persisted user turn anchor before the existing observation path continues.
    *
    * @param taskId Owning task identifier.
    * @param sessionName Owning Playwright named session.
+   * @param expectedConversationUrl Database-bound exact canonical conversation URL.
    * @param expectedConversationId Database-bound canonical identity.
    * @param expectedUserTurnId Persisted exact identity of the pending user turn.
    * @param observer Task-lease child-process observer.
@@ -662,6 +664,7 @@ export class PlaywrightBrowser {
   async reloadConversation(
     taskId: string,
     sessionName: string,
+    expectedConversationUrl: string,
     expectedConversationId: string,
     expectedUserTurnId: string,
     observer?: BrowserOperationObserver,
@@ -671,7 +674,7 @@ export class PlaywrightBrowser {
       sessionName,
       taskId,
       'verify-reload',
-      reloadVerificationScript(expectedConversationId, expectedUserTurnId),
+      reloadVerificationScript(expectedConversationUrl, expectedConversationId, expectedUserTurnId),
       'verify reloaded conversation identity',
       'reload-verified',
       observer,
@@ -3405,37 +3408,51 @@ function recoverConversationScript(canonicalUrl: string, expectedConversationId:
 /**
  * Builds the post-reload rehydration check for the bound pending conversation.
  *
- * The page function only asserts the canonical conversation identity and the exact
- * persisted user turn anchor after the fixed CLI `reload`; it never inspects Copy,
- * Stop, Submit, text, or any other completion signal.
+ * The page function only asserts the exact database-saved canonical conversation
+ * URL (origin plus pathname, without query or fragment), the canonical conversation
+ * identity, and the unique persisted user turn anchor after the fixed CLI `reload`;
+ * it never inspects Copy, Stop, Submit, text, or any other completion signal. A page
+ * that shares the conversation id but resolves to a different canonical URL fails.
  *
+ * @param expectedConversationUrl Database-bound exact canonical conversation URL.
  * @param expectedConversationId Database-bound canonical identity.
  * @param expectedUserTurnId Persisted exact identity of the pending user turn.
  * @returns A Playwright page function source.
  * @throws {Error} This pure source builder does not throw.
  */
-function reloadVerificationScript(expectedConversationId: string, expectedUserTurnId: string): string {
+function reloadVerificationScript(
+  expectedConversationUrl: string,
+  expectedConversationId: string,
+  expectedUserTurnId: string,
+): string {
   return `async (page) => {
+    const expectedConversationUrl = ${JSON.stringify(expectedConversationUrl)};
     const expectedConversationId = ${JSON.stringify(expectedConversationId)};
     const expectedUserTurnId = ${JSON.stringify(expectedUserTurnId)};
     const conversationIdOf = (pathname) => {
       const match = /\\/c\\/([^/?#]+)\\/?$/.exec(pathname);
       return match === null || match[1].startsWith('WEB:') ? null : match[1];
     };
+    const canonicalUrlOf = () => location.origin + location.pathname;
     await page.waitForFunction((target) => {
       const match = /\\/c\\/([^/?#]+)\\/?$/.exec(location.pathname);
       const urlOk = location.hostname === 'chatgpt.com' &&
-        match !== null && !match[1].startsWith('WEB:') && match[1] === target.expectedConversationId;
+        match !== null && !match[1].startsWith('WEB:') && match[1] === target.expectedConversationId &&
+        canonicalUrlOf() === target.expectedConversationUrl;
       const anchors = [...document.querySelectorAll('[data-testid^="conversation-turn-"][data-turn]')].filter((element) => {
         return element.getAttribute('data-turn') === 'user' &&
           element.getAttribute('data-testid') === target.expectedUserTurnId;
       });
       return urlOk && anchors.length === 1;
-    }, { expectedConversationId, expectedUserTurnId }, { timeout: 60000, polling: 500 });
+    }, { expectedConversationUrl, expectedConversationId, expectedUserTurnId }, { timeout: 60000, polling: 500 });
     const url = await page.evaluate(() => {
       return { hostname: location.hostname, pathname: location.pathname, origin: location.origin };
     });
-    if (url.hostname !== 'chatgpt.com' || conversationIdOf(url.pathname) !== expectedConversationId) {
+    if (
+      url.hostname !== 'chatgpt.com' ||
+      url.origin + url.pathname !== expectedConversationUrl ||
+      conversationIdOf(url.pathname) !== expectedConversationId
+    ) {
       throw new Error('conversation identity does not match the pending turn after reload');
     }
     return JSON.stringify({

@@ -2178,6 +2178,29 @@ describe('BEH-004 periodic reload during pending observation', () => {
     store.close();
   });
 
+  it('rejects a reloaded conversation that shares the id but resolves to a different canonical URL', async () => {
+    const fixture = await reloadServiceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const promptPath = join(fixture.root, 'reload-url-drift.md');
+    await writeFile(promptPath, 'reload url drift');
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+    fixture.browser.pendingWaitPolls = 10_000;
+    fixture.browser.nextReloadConversationUrlMismatchTaskId = task.taskId;
+
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 700_000, 20_000)).rejects.toMatchObject({
+      code: 'CONVERSATION_MISMATCH',
+    });
+    expect(fixture.browser.reloadConversationCalls).toBe(1);
+    expect(fixture.browser.reloadedConversationUrls).toEqual([`https://chatgpt.com/c/conversation-${task.taskId}`]);
+    expect(fixture.browser.observeResponseCalls).toBe(6);
+    const store = new StateStore(fixture.paths.database);
+    expect(store.requireTurn(task.taskId, turn.turnId)).toMatchObject({ status: 'pending', responsePath: null });
+    expect(store.listArtifacts(task.taskId, turn.turnId)).toEqual([]);
+    expect(store.getTaskOperation(task.taskId)).toBeNull();
+    store.close();
+  });
+
   it('returns pending at window expiry without reload when the window is shorter than one period', async () => {
     const fixture = await reloadServiceFixture();
     await fixture.service.setup();
@@ -2836,9 +2859,11 @@ class FakeBrowser implements CollabBrowser {
   observeResponseCalls = 0;
   readonly observedUserTurnIds: string[] = [];
   readonly reloadedConversations: string[] = [];
+  readonly reloadedConversationUrls: string[] = [];
   readonly reloadedUserTurnIds: string[] = [];
   reloadConversationCalls = 0;
   nextReloadConversationFailureTaskId: string | null = null;
+  nextReloadConversationUrlMismatchTaskId: string | null = null;
   onPendingPoll: (() => void) | null = null;
   onReload: (() => void) | null = null;
   downloadDelayMs = 0;
@@ -3063,15 +3088,17 @@ class FakeBrowser implements CollabBrowser {
    *
    * @param taskId Task identifier.
    * @param _sessionName Unused named session.
+   * @param expectedConversationUrl Database-bound exact canonical URL passed to the reload.
    * @param expectedConversationId Database-bound identity.
    * @param expectedUserTurnId Persisted user turn anchor passed to the reload.
    * @param observer Task-lease child-process observer.
-   * @returns The unchanged fake conversation identity.
+   * @returns The unchanged fake conversation identity, or a same-id URL mismatch when armed.
    * @throws {BrowserError} When the injected identity-drift failure is armed.
    */
   async reloadConversation(
     taskId: string,
     _sessionName: string,
+    expectedConversationUrl: string,
     expectedConversationId: string,
     expectedUserTurnId: string,
     observer?: BrowserOperationObserver,
@@ -3079,6 +3106,7 @@ class FakeBrowser implements CollabBrowser {
     this.observe(observer);
     this.reloadConversationCalls += 1;
     this.reloadedConversations.push(expectedConversationId);
+    this.reloadedConversationUrls.push(expectedConversationUrl);
     this.reloadedUserTurnIds.push(expectedUserTurnId);
     if (this.nextReloadConversationFailureTaskId === taskId) {
       this.nextReloadConversationFailureTaskId = null;
@@ -3089,9 +3117,16 @@ class FakeBrowser implements CollabBrowser {
       );
     }
     this.onReload?.();
+    const conversationUrl =
+      this.nextReloadConversationUrlMismatchTaskId === taskId
+        ? `https://chatgpt.com/g/g-p-123/c/${expectedConversationId}`
+        : `https://chatgpt.com/c/${expectedConversationId}`;
+    if (this.nextReloadConversationUrlMismatchTaskId === taskId) {
+      this.nextReloadConversationUrlMismatchTaskId = null;
+    }
     return Promise.resolve({
       conversationId: expectedConversationId,
-      conversationUrl: `https://chatgpt.com/c/${expectedConversationId}`,
+      conversationUrl,
     });
   }
 

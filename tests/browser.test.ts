@@ -1864,7 +1864,13 @@ describe('BEH-013 browser boundary support', () => {
       }),
     ]);
 
-    const result = await fixture.browser.reloadConversation('task-a', 'session-a', 'conversation-a', 'user-turn-a');
+    const result = await fixture.browser.reloadConversation(
+      'task-a',
+      'session-a',
+      'https://chatgpt.com/c/conversation-a',
+      'conversation-a',
+      'user-turn-a',
+    );
 
     expect(result).toEqual({
       conversationId: 'conversation-a',
@@ -1877,10 +1883,39 @@ describe('BEH-013 browser boundary support', () => {
     expect(source).toContain("kind: 'reload-verified'");
     expect(source).toContain('user-turn-a');
     expect(source).toContain('expectedConversationId');
+    expect(source).toContain('"https://chatgpt.com/c/conversation-a"');
+    expect(source).toContain('canonicalUrlOf() === target.expectedConversationUrl');
+    expect(source).toContain('url.origin + url.pathname !== expectedConversationUrl');
     expect(source).toContain('\'[data-testid^="conversation-turn-"][data-turn]\'');
     expect(source).not.toContain('copy-turn-action-button');
     expect(source).not.toContain('Stop answering');
     expectPageFunctionSyntax(source);
+  });
+
+  it('rejects a reloaded page that shares the conversation id but resolves to a different canonical URL', async () => {
+    const fixture = await executableReloadFixture({
+      hostname: 'chatgpt.com',
+      pathname: '/g/g-p-123/c/conversation-a',
+      origin: 'https://chatgpt.com',
+    });
+
+    const failure = await fixture.browser
+      .reloadConversation(
+        'task-a',
+        'session-a',
+        'https://chatgpt.com/c/conversation-a',
+        'conversation-a',
+        'user-turn-a',
+      )
+      .then(() => {
+        throw new Error('reload unexpectedly accepted a different canonical URL');
+      })
+      .catch((error: unknown) => {
+        return error;
+      });
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toContain('verify reloaded conversation identity');
+    expect((failure as Error).message).toContain('conversation identity');
   });
 
   it('closes a reused session when the start context fails definitely', async () => {
@@ -3162,6 +3197,84 @@ async function executableBrowserFixture(options: ArtifactPageOptions) {
     paths,
     root,
   };
+}
+
+/**
+ * Creates a browser runner that executes the generated reload verification function against
+ * a page-shaped stub reporting one fixed canonical URL and one matching user turn anchor.
+ *
+ * @param url Host, path, and origin reported by the stub location.
+ * @returns Browser, fixture root, and captured invocations.
+ * @throws {Error} If the fixture directory or generated script cannot be read.
+ */
+async function executableReloadFixture(url: {
+  readonly hostname: string;
+  readonly pathname: string;
+  readonly origin: string;
+}) {
+  const root = await mkdtemp(join(tmpdir(), 'collab-reload-browser-'));
+  const paths = collabPaths(root);
+  await ensureCollabDirectories(paths);
+  const invocations: BrowserCommandInvocation[] = [];
+  const anchor = {
+    getAttribute(name: string) {
+      if (name === 'data-testid') {
+        return 'conversation-turn-user-1';
+      }
+      return name === 'data-turn' ? 'user' : null;
+    },
+  };
+  const withReloadGlobals = (callback: unknown, argument: unknown): unknown => {
+    const globals = globalThis as unknown as Record<string, unknown>;
+    const previousLocation = globals.location;
+    const previousDocument = globals.document;
+    globals.location = { hostname: url.hostname, pathname: url.pathname, origin: url.origin };
+    globals.document = {
+      querySelectorAll() {
+        return [anchor];
+      },
+    };
+    try {
+      if (typeof callback !== 'function') {
+        throw new TypeError('fixture reload callback is not a function');
+      }
+      return Reflect.apply(callback, undefined, [argument]);
+    } finally {
+      if (previousLocation === undefined) {
+        delete globals.location;
+      } else {
+        globals.location = previousLocation;
+      }
+      if (previousDocument === undefined) {
+        delete globals.document;
+      } else {
+        globals.document = previousDocument;
+      }
+    }
+  };
+  const page = {
+    async waitForFunction(callback: unknown, argument: unknown) {
+      if (withReloadGlobals(callback, argument) !== true) {
+        throw new Error('reloaded page did not settle on the expected conversation identity');
+      }
+    },
+    async evaluate(callback: unknown) {
+      return withReloadGlobals(callback, undefined);
+    },
+  };
+  const browser = new PlaywrightBrowser(paths, root, async (invocation) => {
+    invocations.push(invocation);
+    if (invocation.arguments.includes('reload')) {
+      return output('reloaded current page');
+    }
+    if (invocation.arguments.includes('run-code')) {
+      const source = await scriptForInvocation(invocation);
+      const runPageFunction = new Function(`return (${source})`)() as (page: object) => Promise<string>;
+      return output(`### Ran Playwright code\n${JSON.stringify(await runPageFunction(page))}\n`);
+    }
+    return output('ok');
+  });
+  return { browser, invocations, paths, root };
 }
 
 /**

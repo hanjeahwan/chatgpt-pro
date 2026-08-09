@@ -64,6 +64,7 @@ export interface CollabBrowser {
   reloadConversation(
     taskId: string,
     sessionName: string,
+    expectedConversationUrl: string,
     expectedConversationId: string,
     expectedUserTurnId: string,
     observer?: BrowserOperationObserver,
@@ -879,13 +880,15 @@ export class CollabService {
               );
             }
             if (this.#now() >= nextReloadAt) {
-              await this.#browser.reloadConversation(
+              const reloaded = await this.#browser.reloadConversation(
                 taskId,
                 task.playwrightSession,
+                task.conversationUrl,
                 task.conversationId,
                 turn.userTurnIdentity,
                 observer,
               );
+              assertConversation(taskId, task.conversationId, task.conversationUrl, reloaded);
               nextReloadAt += OBSERVATION_RELOAD_PERIOD_MS;
               while (nextReloadAt <= this.#now()) {
                 nextReloadAt += OBSERVATION_RELOAD_PERIOD_MS;
