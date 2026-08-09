@@ -2013,6 +2013,36 @@ describe('BEH-013 browser boundary support', () => {
     expectPageFunctionSyntax(source);
   });
 
+  it('rebuilds a missing bound session directly at its canonical conversation', async () => {
+    const fixture = await browserFixture([
+      output('opened'),
+      output('state loaded'),
+      pageResult({
+        protocol,
+        kind: 'recover-conversation',
+        conversationId: 'conversation-a',
+        conversationUrl: 'https://chatgpt.com/c/conversation-a',
+      }),
+    ]);
+    await writeFile(fixture.paths.seedState, '{}');
+
+    await fixture.browser.recoverConversation(
+      'task-a',
+      'session-a',
+      'https://chatgpt.com/c/conversation-a',
+      'conversation-a',
+      true,
+    );
+
+    const commands = fixture.invocations.map((invocation) => {
+      return invocation.arguments.slice(4);
+    });
+    expect(commands[0]).toEqual(['open', 'about:blank', '--browser=chrome', '--headed']);
+    expect(commands[1]).toEqual(['state-load', fixture.paths.seedState]);
+    expect(commands[2]?.[0]).toBe('run-code');
+    expect(commands.flat()).not.toContain('https://chatgpt.com/projects');
+  });
+
   it('rejects a rebuilt conversation redirect that keeps the id under a different canonical path', async () => {
     const fixture = await executableConversationIdentityFixture({
       hostname: 'chatgpt.com',

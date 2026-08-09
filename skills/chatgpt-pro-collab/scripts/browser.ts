@@ -614,6 +614,7 @@ export class PlaywrightBrowser {
    * @param sessionName Owning Playwright named session.
    * @param conversationUrl Recorded canonical conversation URL.
    * @param expectedConversationId Database-bound canonical identity.
+   * @param rebuild Whether to recreate the caller-proven missing session from the shared seed first.
    * @param observer Task-lease child-process observer.
    * @returns The re-verified conversation identity and URL.
    * @throws {BrowserError} If the conversation cannot be reached or its identity differs.
@@ -624,8 +625,12 @@ export class PlaywrightBrowser {
     sessionName: string,
     conversationUrl: string,
     expectedConversationId: string,
+    rebuild: boolean = false,
     observer?: BrowserOperationObserver,
   ): Promise<{ readonly conversationId: string; readonly conversationUrl: string }> {
+    if (rebuild) {
+      await this.#rebuildTaskSession(taskId, sessionName, observer);
+    }
     const result = await this.#runCode<RecoverConversationProtocolResult>(
       sessionName,
       taskId,
@@ -1086,6 +1091,7 @@ export class PlaywrightBrowser {
    * @param sessionName Owning Playwright named session.
    * @param conversationUrl Recorded canonical conversation URL.
    * @param conversationId Database-bound canonical identity.
+   * @param rebuild Whether to recreate the caller-proven missing session from the shared seed first.
    * @param observer Task-lease child-process observer.
    * @returns Archived, provably not archived, or unknown with a real cause.
    * @throws {BrowserError} If the page cannot be observed at all.
@@ -1096,8 +1102,12 @@ export class PlaywrightBrowser {
     sessionName: string,
     conversationUrl: string,
     conversationId: string,
+    rebuild: boolean = false,
     observer?: BrowserOperationObserver,
   ): Promise<BrowserArchiveState> {
+    if (rebuild) {
+      await this.#rebuildTaskSession(taskId, sessionName, observer);
+    }
     const result = await this.#runCode<ObserveArchiveProtocolResult>(
       sessionName,
       taskId,
@@ -1111,6 +1121,50 @@ export class PlaywrightBrowser {
       return { status: result.status };
     }
     return { status: 'unknown', error: result.error ?? 'archive state could not be verified' };
+  }
+
+  /**
+   * Recreates a missing task session from the shared authentication seed without choosing a page.
+   *
+   * @param taskId Owning task identifier.
+   * @param sessionName Owning Playwright named session, already proven missing by the caller.
+   * @param observer Task-lease child-process observer.
+   * @returns Nothing after the seed is loaded into the new session.
+   * @throws {BrowserError} If opening, loading, or mandatory cleanup fails.
+   */
+  async #rebuildTaskSession(taskId: string, sessionName: string, observer?: BrowserOperationObserver): Promise<void> {
+    await ensureTaskDirectories(this.#paths, taskId);
+    let opened = false;
+    try {
+      await this.#invoke(
+        sessionName,
+        taskId,
+        ['open', 'about:blank', '--browser=chrome', '--headed'],
+        'open task browser',
+        observer,
+      );
+      opened = true;
+      await this.#invoke(
+        sessionName,
+        taskId,
+        ['state-load', this.#paths.seedState],
+        'load authentication state',
+        observer,
+      );
+    } catch (error) {
+      if (opened) {
+        try {
+          await this.#invoke(sessionName, taskId, ['close'], 'close failed task browser', observer);
+        } catch (closeError) {
+          throw new BrowserError(
+            'BROWSER_CLEANUP_FAILED',
+            'rebuild task session',
+            `${errorMessage(error)}; cleanup also failed: ${errorMessage(closeError)}`,
+          );
+        }
+      }
+      throw error;
+    }
   }
 
   /**

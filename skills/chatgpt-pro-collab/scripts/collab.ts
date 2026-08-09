@@ -68,6 +68,7 @@ export interface CollabBrowser {
     sessionName: string,
     conversationUrl: string,
     conversationId: string,
+    rebuild?: boolean,
     observer?: BrowserOperationObserver,
   ): Promise<{ readonly conversationId: string; readonly conversationUrl: string }>;
   reloadConversation(
@@ -170,6 +171,7 @@ export interface CollabBrowser {
     sessionName: string,
     conversationUrl: string,
     conversationId: string,
+    rebuild?: boolean,
     observer?: BrowserOperationObserver,
   ): Promise<BrowserArchiveState>;
   autoVerifySubmission(
@@ -533,17 +535,14 @@ export class CollabService {
     });
     const previousUserTurnIdentity = await previousUserTurnIdentityBefore(store, taskId, sendingTurn.id);
     if ((await this.#browser.sessionAvailability(task.playwrightSession)) === 'missing') {
-      const seedStatePath = await requireSeedState(this.#paths);
-      await this.#browser.startTask(taskId, task.playwrightSession, seedStatePath, true, observer);
-      if (task.conversationId !== null && task.conversationUrl !== null) {
-        await this.#browser.recoverConversation(
-          taskId,
-          task.playwrightSession,
-          task.conversationUrl,
-          task.conversationId,
-          observer,
-        );
-      }
+      await this.#restoreTaskPage(
+        taskId,
+        task.playwrightSession,
+        task.conversationId,
+        task.conversationUrl,
+        true,
+        observer,
+      );
     }
     if ((await this.#browser.sessionAvailability(task.playwrightSession)) === 'missing') {
       store.markSubmissionUnknownAndNeedsDecision(
@@ -1244,11 +1243,16 @@ export class CollabService {
       });
       return { taskId, conversationId: result.conversationId };
     }
+    const rebuild = (await this.#browser.sessionAvailability(task.playwrightSession)) === 'missing';
+    if (rebuild) {
+      await requireSeedState(this.#paths);
+    }
     const observed = await this.#browser.observeArchiveState(
       taskId,
       task.playwrightSession,
       conversationUrl,
       conversationId,
+      rebuild,
       observer,
     );
     if (observed.status === 'archived') {
@@ -1257,6 +1261,7 @@ export class CollabService {
         task.playwrightSession,
         conversationUrl,
         conversationId,
+        false,
         observer,
       );
       if (operation !== null) {
@@ -1375,6 +1380,41 @@ export class CollabService {
   }
 
   /**
+   * Restores a task session at its only valid page target.
+   *
+   * @param taskId Task identifier.
+   * @param sessionName Stable task session name.
+   * @param conversationId Bound conversation identity, or null before binding.
+   * @param conversationUrl Bound canonical URL, or null before binding.
+   * @param sessionMissing Whether the bound named session was proven missing.
+   * @param observer Task-lease child-process observer.
+   * @returns Nothing after the bound conversation or unbound Project composer is verified.
+   * @throws {Error} If the seed or target page cannot be verified.
+   */
+  async #restoreTaskPage(
+    taskId: string,
+    sessionName: string,
+    conversationId: string | null,
+    conversationUrl: string | null,
+    sessionMissing: boolean,
+    observer: BrowserOperationObserver,
+  ): Promise<void> {
+    const seedStatePath = await requireSeedState(this.#paths);
+    if (conversationId !== null && conversationUrl !== null) {
+      await this.#browser.recoverConversation(
+        taskId,
+        sessionName,
+        conversationUrl,
+        conversationId,
+        sessionMissing,
+        observer,
+      );
+      return;
+    }
+    await this.#browser.startTask(taskId, sessionName, seedStatePath, true, observer);
+  }
+
+  /**
    * Restores a verified safe composer for a known-unsubmitted send draft.
    *
    * Attempts the in-page cleanup first; when the page cannot be proven safe (for
@@ -1405,12 +1445,8 @@ export class CollabService {
     } catch {
       // The composer cannot be proven safe in-page; continue with the close-and-rebuild path.
     }
-    const seedStatePath = await requireSeedState(this.#paths);
     await this.#browser.closeTask(taskId, sessionName, observer);
-    await this.#browser.startTask(taskId, sessionName, seedStatePath, true, observer);
-    if (conversationId !== null && conversationUrl !== null) {
-      await this.#browser.recoverConversation(taskId, sessionName, conversationUrl, conversationId, observer);
-    }
+    await this.#restoreTaskPage(taskId, sessionName, conversationId, conversationUrl, true, observer);
     await this.#browser.cleanSendComposer(taskId, sessionName, conversationId, attachmentNames, observer);
   }
 
@@ -1448,39 +1484,19 @@ export class CollabService {
       return before;
     }
     if (task.status === 'closed') {
-      const seedStatePath = await requireSeedState(this.#paths);
-      await this.#browser.startTask(taskId, task.playwrightSession, seedStatePath, true, observer);
-      if (task.conversationId !== null && task.conversationUrl !== null) {
-        await this.#browser.recoverConversation(
-          taskId,
-          task.playwrightSession,
-          task.conversationUrl,
-          task.conversationId,
-          observer,
-        );
-      }
+      await this.#restoreTaskPage(
+        taskId,
+        task.playwrightSession,
+        task.conversationId,
+        task.conversationUrl,
+        browserStatus === 'missing',
+        observer,
+      );
       store.reactivateClosedTask(taskId);
       const after = await this.#browser.sessionAvailability(task.playwrightSession);
       return store.getStatus(taskId, after);
     }
-    const pageWorkPending =
-      browserStatus === 'missing' && task.status !== 'starting' && (pendingTurn !== undefined || operation !== null);
-    if (pageWorkPending) {
-      const seedStatePath = await requireSeedState(this.#paths);
-      await this.#browser.startTask(taskId, task.playwrightSession, seedStatePath, true, observer);
-      if (task.conversationId !== null && task.conversationUrl !== null) {
-        await this.#browser.recoverConversation(
-          taskId,
-          task.playwrightSession,
-          task.conversationUrl,
-          task.conversationId,
-          observer,
-        );
-      }
-      browserStatus = await this.#browser.sessionAvailability(task.playwrightSession);
-    }
     if (operation !== null && operation.kind === 'archive') {
-      const task = store.requireTask(taskId);
       if (task.conversationId === null || task.conversationUrl === null) {
         throw new CollabError(
           'CONVERSATION_NOT_ESTABLISHED',
@@ -1490,6 +1506,19 @@ export class CollabService {
       await this.#recoverArchive(store, taskId, operation, task.conversationId, task.conversationUrl, observer);
       const after = await this.#browser.sessionAvailability(task.playwrightSession);
       return store.getStatus(taskId, after);
+    }
+    const pageWorkPending =
+      browserStatus === 'missing' && task.status !== 'starting' && (pendingTurn !== undefined || operation !== null);
+    if (pageWorkPending) {
+      await this.#restoreTaskPage(
+        taskId,
+        task.playwrightSession,
+        task.conversationId,
+        task.conversationUrl,
+        true,
+        observer,
+      );
+      browserStatus = await this.#browser.sessionAvailability(task.playwrightSession);
     }
     if (pendingTurn !== undefined && (pendingTurn.status === 'pending' || pendingTurn.status === 'capturing')) {
       return store.getStatus(taskId, browserStatus);
@@ -1588,18 +1617,15 @@ export class CollabService {
       return store.getStatus(taskId, after);
     }
     if (browserStatus === 'missing') {
-      const seedStatePath = await requireSeedState(this.#paths);
-      await this.#browser.startTask(taskId, task.playwrightSession, seedStatePath, true, observer);
       const rebuilt = store.requireTask(taskId);
-      if (rebuilt.conversationId !== null && rebuilt.conversationUrl !== null) {
-        await this.#browser.recoverConversation(
-          taskId,
-          rebuilt.playwrightSession,
-          rebuilt.conversationUrl,
-          rebuilt.conversationId,
-          observer,
-        );
-      }
+      await this.#restoreTaskPage(
+        taskId,
+        rebuilt.playwrightSession,
+        rebuilt.conversationId,
+        rebuilt.conversationUrl,
+        true,
+        observer,
+      );
       const after = await this.#browser.sessionAvailability(task.playwrightSession);
       return store.getStatus(taskId, after);
     }
@@ -1665,17 +1691,7 @@ export class CollabService {
         const sessionName = task.playwrightSession;
         const resolvedAt = new Date().toISOString();
         if ((await this.#browser.sessionAvailability(sessionName)) === 'missing') {
-          const seedStatePath = await requireSeedState(this.#paths);
-          await this.#browser.startTask(taskId, sessionName, seedStatePath, true, observer);
-          if (task.conversationId !== null && task.conversationUrl !== null) {
-            await this.#browser.recoverConversation(
-              taskId,
-              sessionName,
-              task.conversationUrl,
-              task.conversationId,
-              observer,
-            );
-          }
+          await this.#restoreTaskPage(taskId, sessionName, task.conversationId, task.conversationUrl, true, observer);
         }
         if (verdict === 'submitted' && canonicalUrl !== null) {
           const verified = await this.#browser.resolveSubmittedConversation(
@@ -1789,15 +1805,7 @@ export class CollabService {
           const sessionName = task.playwrightSession;
           const resolvedAt = new Date().toISOString();
           if ((await this.#browser.sessionAvailability(sessionName)) === 'missing') {
-            const seedStatePath = await requireSeedState(this.#paths);
-            await this.#browser.startTask(taskId, sessionName, seedStatePath, true, observer);
-            await this.#browser.recoverConversation(
-              taskId,
-              sessionName,
-              task.conversationUrl,
-              task.conversationId,
-              observer,
-            );
+            await this.#restoreTaskPage(taskId, sessionName, task.conversationId, task.conversationUrl, true, observer);
           }
           const verified = await this.#browser.resolveFailedTurn(
             taskId,

@@ -1835,7 +1835,7 @@ describe('BEH-013 recovery matrix completion', () => {
     ]);
     expect(first.browserStatus).toBe('available');
     expect(second.browserStatus).toBe('available');
-    expect(fixture.browser.startCount).toBe(2);
+    expect(fixture.browser.startCount).toBe(1);
     expect(fixture.browser.recoveredConversations).toEqual([task.taskId]);
   });
 
@@ -1862,7 +1862,7 @@ describe('BEH-013 recovery matrix completion', () => {
 
     const status = await fixture.service.recover(taskId);
     expect(status).toMatchObject({ turnStatus: 'pending', browserStatus: 'available', nextAction: 'wait' });
-    expect(fixture.browser.startCount).toBe(1);
+    expect(fixture.browser.startCount).toBe(0);
     expect(fixture.browser.recoveredConversations).toEqual([taskId]);
     expect(fixture.browser.autoVerifications).toEqual([taskId]);
     const reopened = new StateStore(fixture.paths.database);
@@ -2036,6 +2036,44 @@ describe('BEH-008 local close and BEH-009 archive journal', () => {
       reopened.close();
     },
   );
+
+  it('rebuilds a missing interrupted archive directly at its canonical conversation before observing', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const promptPath = join(fixture.root, 'missing-archive-recovery.md');
+    await writeFile(promptPath, 'missing archive recovery');
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+    await fixture.service.wait(task.taskId, turn.turnId, 20_000, 20_000);
+    const store = new StateStore(fixture.paths.database);
+    store.createOperation({
+      id: 'missing-archive-op',
+      kind: 'archive',
+      step: 'archive',
+      taskId: task.taskId,
+      turnId: null,
+      sessionName: `chatgpt-pro-collab-${task.taskId}`,
+    });
+    store.markOperationEffectUnknown('missing-archive-op');
+    store.close();
+    fixture.browser.sessionAvailabilityResult = 'missing';
+    fixture.browser.nextArchiveState = 'archived';
+    fixture.browser.nextStartFailureCode = 'BROWSER_COMMAND_FAILED';
+
+    await expect(fixture.service.recover(task.taskId)).resolves.toMatchObject({
+      taskStatus: 'active',
+      browserStatus: 'available',
+      nextAction: 'none',
+    });
+
+    expect(fixture.browser.startCount).toBe(1);
+    expect(fixture.browser.archiveObservations).toEqual([task.taskId]);
+    expect(fixture.browser.archived).toEqual([]);
+    expect(fixture.browser.recoveredConversations).toEqual([task.taskId]);
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireOperation('missing-archive-op')).toMatchObject({ phase: 'committed' });
+    reopened.close();
+  });
 
   it('observes and restores an already archived conversation on a repeated archive', async () => {
     const fixture = await serviceFixture();
@@ -2336,14 +2374,10 @@ describe('BEH-008 closed task recovery to the same conversation', () => {
     store.close();
   });
 
-  it('keeps a closed task closed when the session rebuild fails and recovers on a later retry', async () => {
+  it('keeps an unbound closed task closed when the session rebuild fails and recovers on a later retry', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
     const task = await fixture.start();
-    const promptPath = join(fixture.root, 'closed-rebuild-fails.md');
-    await writeFile(promptPath, 'rebuild fails');
-    const turn = await fixture.service.send(task.taskId, promptPath, []);
-    await fixture.service.wait(task.taskId, turn.turnId, 20_000, 20_000);
     await fixture.service.close(task.taskId);
     fixture.browser.sessionAvailabilityResult = 'missing';
     fixture.browser.nextStartFailureCode = 'BROWSER_COMMAND_FAILED';
@@ -2354,10 +2388,9 @@ describe('BEH-008 closed task recovery to the same conversation', () => {
     store.close();
     expect(fixture.browser.recoveredConversations).toEqual([]);
 
-    fixture.browser.nextStartFailureCode = null;
     const recovered = await fixture.service.recover(task.taskId);
     expect(recovered).toMatchObject({ taskStatus: 'active', browserStatus: 'available', nextAction: 'none' });
-    expect(fixture.browser.recoveredConversations).toEqual([task.taskId]);
+    expect(fixture.browser.recoveredConversations).toEqual([]);
     const reopened = new StateStore(fixture.paths.database);
     expect(reopened.requireTask(task.taskId).status).toBe('active');
     reopened.close();
@@ -2380,7 +2413,7 @@ describe('BEH-008 closed task recovery to the same conversation', () => {
     ]);
     expect(first).toMatchObject({ taskStatus: 'active', browserStatus: 'available', nextAction: 'none' });
     expect(second).toMatchObject({ taskStatus: 'active', browserStatus: 'available', nextAction: 'none' });
-    expect(fixture.browser.startCount).toBe(2);
+    expect(fixture.browser.startCount).toBe(1);
     expect(fixture.browser.recoveredConversations).toEqual([task.taskId]);
     const store = new StateStore(fixture.paths.database);
     expect(store.requireTask(task.taskId).status).toBe('active');
@@ -2790,7 +2823,7 @@ describe('BEH-013 status, recover, and resolve-submission', () => {
 
     const recovered = await fixture.service.recover(task.taskId);
     expect(recovered).toMatchObject({ taskStatus: 'active', browserStatus: 'available', nextAction: 'wait' });
-    expect(fixture.browser.startCount).toBe(2);
+    expect(fixture.browser.startCount).toBe(1);
     expect(fixture.browser.recoveredConversations).toEqual([task.taskId]);
   });
 
@@ -2818,7 +2851,7 @@ describe('BEH-013 status, recover, and resolve-submission', () => {
 
     const status = await fixture.service.recover(task.taskId);
     expect(status).toMatchObject({ turnStatus: 'pending', browserStatus: 'available', nextAction: 'wait' });
-    expect(fixture.browser.startCount).toBe(2);
+    expect(fixture.browser.startCount).toBe(1);
     expect(fixture.browser.recoveredConversations).toEqual([task.taskId]);
   });
 
@@ -2834,7 +2867,7 @@ describe('BEH-013 status, recover, and resolve-submission', () => {
 
     const status = await fixture.service.recover(task.taskId);
     expect(status).toMatchObject({ taskStatus: 'active', browserStatus: 'available', nextAction: 'none' });
-    expect(fixture.browser.startCount).toBe(2);
+    expect(fixture.browser.startCount).toBe(1);
     expect(fixture.browser.recoveredConversations).toEqual([task.taskId]);
   });
 
@@ -3140,7 +3173,7 @@ describe('BEH-013 resolve-turn failed response resolution', () => {
     const status = await fixture.service.resolveTurn(taskId, turnId, 'failed');
 
     expect(status).toMatchObject({ turnStatus: null, browserStatus: 'available', nextAction: 'send' });
-    expect(fixture.browser.startCount).toBe(1);
+    expect(fixture.browser.startCount).toBe(0);
     expect(fixture.browser.recoveredConversations).toEqual([taskId]);
     expect(fixture.browser.resolvedFailedTurns).toEqual([taskId]);
   });
@@ -3751,6 +3784,7 @@ class FakeBrowser implements CollabBrowser {
    * @param _sessionName Unused named session.
    * @param conversationUrl Recorded canonical URL.
    * @param conversationId Database-bound identity.
+   * @param rebuild Whether the fake should recreate the missing named session.
    * @param observer Task-lease child-process observer.
    * @returns The recovered conversation identity.
    * @throws {BrowserError} While the injected one-shot identity mismatch is armed.
@@ -3760,9 +3794,13 @@ class FakeBrowser implements CollabBrowser {
     _sessionName: string,
     conversationUrl: string,
     conversationId: string,
+    rebuild?: boolean,
     observer?: BrowserOperationObserver,
   ) {
     this.observe(observer);
+    if (rebuild === true) {
+      this.sessionAvailabilityResult = 'available';
+    }
     if (this.nextRecoverConversationIdentityFailureTaskId === taskId) {
       this.nextRecoverConversationIdentityFailureTaskId = null;
       throw new BrowserError(
@@ -3884,6 +3922,7 @@ class FakeBrowser implements CollabBrowser {
    * @param _sessionName Unused named session.
    * @param _conversationUrl Unused canonical URL.
    * @param _conversationId Unused identity.
+   * @param rebuild Whether the fake should recreate the missing named session.
    * @param observer Task-lease child-process observer.
    * @returns The configured archive state.
    * @throws {Error} This fake observation does not throw.
@@ -3893,9 +3932,13 @@ class FakeBrowser implements CollabBrowser {
     _sessionName: string,
     _conversationUrl: string,
     _conversationId: string,
+    rebuild?: boolean,
     observer?: BrowserOperationObserver,
   ) {
     this.observe(observer);
+    if (rebuild === true) {
+      this.sessionAvailabilityResult = 'available';
+    }
     this.archiveObservations.push(taskId);
     if (this.nextArchiveStateUnknown === taskId) {
       this.nextArchiveStateUnknown = null;
