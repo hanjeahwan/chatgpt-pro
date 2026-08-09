@@ -2534,6 +2534,26 @@ describe('BEH-004 periodic reload during pending observation', () => {
 });
 
 describe('BEH-013 status, recover, and resolve-submission', () => {
+  it('reports a failed availability probe in status and blocks mutating recovery', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    fixture.browser.sessionAvailabilityError = new BrowserError(
+      'BROWSER_AVAILABILITY_FAILED',
+      'probe browser session',
+      'injected list failure',
+    );
+
+    await expect(fixture.service.status(task.taskId)).resolves.toMatchObject({
+      browserStatus: 'unknown',
+      error: expect.stringContaining('injected list failure'),
+    });
+    await expect(fixture.service.recover(task.taskId)).rejects.toMatchObject({
+      code: 'BROWSER_AVAILABILITY_FAILED',
+    });
+    expect(fixture.browser.startCount).toBe(1);
+  });
+
   it('returns a read-only status with browser availability and the safe next action', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
@@ -3132,6 +3152,7 @@ class FakeBrowser implements CollabBrowser {
   nextStartFailureCode: string | null = null;
   nextRecoverConversationIdentityFailureTaskId: string | null = null;
   sessionAvailabilityResult: 'available' | 'missing' | 'unknown' = 'available';
+  sessionAvailabilityError: Error | null = null;
   closeAvailabilityResult: 'available' | 'missing' | 'unknown' = 'missing';
   nextVerifySafeComposerFailureTaskId: string | null = null;
   readonly resolvedFailedTurns: string[] = [];
@@ -3353,9 +3374,12 @@ class FakeBrowser implements CollabBrowser {
    *
    * @param _sessionName Unused named session.
    * @returns The configured availability classification.
-   * @throws {Error} This fake probe does not throw.
+   * @throws {Error} When an availability failure is injected.
    */
   async sessionAvailability(_sessionName: string) {
+    if (this.sessionAvailabilityError !== null) {
+      throw this.sessionAvailabilityError;
+    }
     return this.sessionAvailabilityResult;
   }
 

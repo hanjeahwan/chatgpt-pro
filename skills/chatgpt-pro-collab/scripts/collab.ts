@@ -1324,12 +1324,17 @@ export class CollabService {
    * @param taskId Task identifier.
    * @returns The status snapshot and the single safe next action.
    * @throws {CollabError} If the task does not exist.
-   * @throws {Error} If the state store or availability probe fails.
+   * @throws {Error} If the state store fails; availability failures are returned as diagnostics.
    */
   async status(taskId: string): Promise<StatusRecord> {
     return this.#withStore(async (store) => {
       const task = store.requireTask(taskId);
-      const browserStatus = await this.#browser.sessionAvailability(task.playwrightSession);
+      let browserStatus: BrowserAvailability;
+      try {
+        browserStatus = await this.#browser.sessionAvailability(task.playwrightSession);
+      } catch (error) {
+        return store.getStatus(taskId, 'unknown', errorMessage(error));
+      }
       return store.getStatus(taskId, browserStatus);
     });
   }

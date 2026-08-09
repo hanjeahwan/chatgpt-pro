@@ -1858,10 +1858,16 @@ describe('BEH-013 browser boundary support', () => {
     await expect(absentFixture.browser.sessionAvailability('session-a')).resolves.toBe('missing');
 
     const malformedFixture = await browserFixture([output('session-a is probably open')]);
-    await expect(malformedFixture.browser.sessionAvailability('session-a')).resolves.toBe('unknown');
+    await expect(malformedFixture.browser.sessionAvailability('session-a')).rejects.toMatchObject({
+      code: 'PLAYWRIGHT_CONTRACT_DRIFT',
+      message: expect.stringContaining('session list is invalid'),
+    });
 
     const failingFixture = await browserFixture([new Error('cli unavailable')]);
-    await expect(failingFixture.browser.sessionAvailability('session-a')).resolves.toBe('unknown');
+    await expect(failingFixture.browser.sessionAvailability('session-a')).rejects.toMatchObject({
+      code: 'BROWSER_AVAILABILITY_FAILED',
+      message: expect.stringContaining('cli unavailable'),
+    });
   });
 
   it('rebuilds a session without opening when the named session already exists', async () => {

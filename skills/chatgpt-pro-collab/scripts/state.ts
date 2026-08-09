@@ -1802,11 +1802,12 @@ export class StateStore {
    *
    * @param taskId Task identifier.
    * @param browserStatus Availability probe result for the recorded session name.
+   * @param statusError Read-only probe diagnostic that takes precedence in this snapshot.
    * @returns Task, turn, operation, evidence, error, and the single safe next action.
    * @throws {StateError} If the task does not exist.
    * @throws {Error} If SQLite cannot execute or decode the query.
    */
-  getStatus(taskId: string, browserStatus: BrowserStatus): StatusRecord {
+  getStatus(taskId: string, browserStatus: BrowserStatus, statusError?: string): StatusRecord {
     return this.#transaction(() => {
       const task = this.requireTask(taskId);
       const turns = this.listTurns(taskId);
@@ -1829,7 +1830,7 @@ export class StateStore {
         operationPhase: operation?.phase ?? null,
         operationProgress: operation?.progress ?? null,
         evidence: operation?.evidence ?? null,
-        error: turn?.error ?? operation?.error ?? null,
+        error: statusError ?? turn?.error ?? operation?.error ?? null,
         nextAction: computeNextAction(task, turn, operation, browserStatus),
       };
     }, 'BEGIN');

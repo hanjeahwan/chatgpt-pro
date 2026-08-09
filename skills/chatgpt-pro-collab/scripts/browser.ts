@@ -18,6 +18,7 @@ const COMMAND_SPAWN_FAILED_EXIT_CODE = 127;
 const COMMAND_STOPPED_BEFORE_SPAWN_EXIT_CODE = 128;
 const COMMAND_ABORT_GRACE_MS = 100;
 const COMMAND_HOST_DEADLINE_MS = 10 * 60 * 1000;
+const AVAILABILITY_PROBE_DEADLINE_MS = 30_000;
 
 export interface BrowserCommandInvocation {
   readonly executable: string;
@@ -568,9 +569,8 @@ export class PlaywrightBrowser {
    *
    * @param sessionName Playwright named session recorded in the task row.
    * @param observer Optional lease child-process observer.
-   * @returns `available` for an open session, `missing` for deterministic absence,
-   *   and `unknown` when the CLI itself failed or its output cannot be parsed.
-   * @throws {Error} This probe converts CLI failures into the unknown classification.
+   * @returns `available` for an open session and `missing` for deterministic absence.
+   * @throws {BrowserError} If the CLI fails or its output cannot be parsed.
    */
   async sessionAvailability(sessionName: string, observer?: BrowserOperationObserver): Promise<BrowserAvailability> {
     let output: BrowserCommandOutput;
@@ -597,12 +597,16 @@ export class PlaywrightBrowser {
                 observer.commandSpawned(pid);
               },
             }),
-        signal: AbortSignal.timeout(COMMAND_HOST_DEADLINE_MS),
+        signal: AbortSignal.timeout(AVAILABILITY_PROBE_DEADLINE_MS),
       });
-    } catch {
-      return 'unknown';
+    } catch (error) {
+      throw new BrowserError('BROWSER_AVAILABILITY_FAILED', 'probe browser session', errorMessage(error));
     }
-    return parseSessionAvailability(output.stdout, sessionName);
+    const availability = parseSessionAvailability(output.stdout, sessionName);
+    if (availability === 'unknown') {
+      throw new BrowserError('PLAYWRIGHT_CONTRACT_DRIFT', 'probe browser session', 'session list is invalid');
+    }
+    return availability;
   }
 
   /**

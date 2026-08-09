@@ -347,6 +347,10 @@ describe('BEH-002, BEH-005, BEH-007, and BEH-008 state gates', () => {
     const store = new StateStore(join(root, 'state.sqlite'));
     seedActiveTask(store, 'task-a', 'session-a');
     expect(store.getStatus('task-a', 'available').nextAction).toBe('none');
+    expect(store.getStatus('task-a', 'unknown', 'probe failed')).toMatchObject({
+      browserStatus: 'unknown',
+      error: 'probe failed',
+    });
     expect(store.getStatus('task-a', 'missing').nextAction).toBe('recover');
 
     store.markTaskClosing('task-a');
