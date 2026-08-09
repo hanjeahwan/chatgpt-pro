@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { readFile, rename, rm } from 'node:fs/promises';
 import { basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -338,54 +338,58 @@ export class CollabService {
         }
 
         if (operation.step === 'seed') {
-          const seedValid = await seedStateValid(this.#paths);
-          if (!seedValid) {
-            if (operation.phase === 'prepared') {
-              operation = store.markOperationEffectUnknown(operation.id, {
-                observedAt: now(),
-                sessionName,
-                postcondition: 'state-save command released',
-              });
-              await this.#browser.setupSaveSeed(sessionName, seedPath, observer);
-            } else {
-              await this.#browser.setupOpen(sessionName, observer);
-              await this.#browser.setupSaveSeed(sessionName, seedPath, observer);
+          const candidateSeedPath = `${seedPath}.pending`;
+          const candidatePaths = { ...this.#paths, seedState: candidateSeedPath };
+          try {
+            let authenticated = false;
+            if (await seedStateValid(this.#paths)) {
+              authenticated = (await this.#browser.verifyAuthenticatedSeed(sessionName, seedPath, observer))
+                .authenticated;
             }
-          }
-          const validated = await seedStateValid(this.#paths);
-          if (!validated) {
-            throw new CollabError(
-              'SEED_NOT_AUTHENTICATED',
-              'saved authentication state is not a loadable ChatGPT storage state; run setup again and complete the login',
-            );
-          }
-          let verified = await this.#browser.verifyAuthenticatedSeed(sessionName, seedPath, observer);
-          if (!verified.authenticated) {
-            if (operation.phase === 'prepared') {
-              operation = store.markOperationEffectUnknown(operation.id, {
-                observedAt: now(),
-                sessionName,
-                postcondition: 'state-save command released after an interactive login',
-              });
-              await this.#browser.setupSaveSeed(sessionName, seedPath, observer);
-            } else if (operation.phase === 'effect-unknown') {
-              await this.#browser.setupOpen(sessionName, observer);
-              await this.#browser.setupSaveSeed(sessionName, seedPath, observer);
+            if (!authenticated) {
+              if (operation.phase === 'prepared') {
+                operation = store.markOperationEffectUnknown(operation.id, {
+                  observedAt: now(),
+                  sessionName,
+                  postcondition: 'state-save command released to a candidate authentication seed',
+                });
+              } else {
+                await this.#browser.setupOpen(sessionName, observer);
+              }
+              const saveCandidate = async (): Promise<boolean> => {
+                await rm(candidateSeedPath, { force: true });
+                await this.#browser.setupSaveSeed(sessionName, candidateSeedPath, observer);
+                if (!(await seedStateValid(candidatePaths))) {
+                  throw new CollabError(
+                    'SEED_NOT_AUTHENTICATED',
+                    'saved authentication state is not a loadable ChatGPT storage state; run setup again and complete the login',
+                  );
+                }
+                return (await this.#browser.verifyAuthenticatedSeed(sessionName, candidateSeedPath, observer))
+                  .authenticated;
+              };
+              authenticated = await saveCandidate();
+              if (!authenticated) {
+                await this.#browser.setupOpen(sessionName, observer);
+                authenticated = await saveCandidate();
+              }
+              if (!authenticated) {
+                throw new CollabError(
+                  'SEED_NOT_AUTHENTICATED',
+                  'saved authentication state did not produce an authenticated ChatGPT page; run setup again and complete the login',
+                );
+              }
+              await rename(candidateSeedPath, seedPath);
             }
-            verified = await this.#browser.verifyAuthenticatedSeed(sessionName, seedPath, observer);
+            operation = store.advanceOperationStep(operation.id, 'cleanup', {
+              observedAt: now(),
+              sessionName,
+              postcondition: 'authentication seed saved, loaded, and authenticated on the page',
+              seedValidated: true,
+            });
+          } finally {
+            await rm(candidateSeedPath, { force: true });
           }
-          if (!verified.authenticated) {
-            throw new CollabError(
-              'SEED_NOT_AUTHENTICATED',
-              'saved authentication state did not produce an authenticated ChatGPT page; run setup again and complete the login',
-            );
-          }
-          operation = store.advanceOperationStep(operation.id, 'cleanup', {
-            observedAt: now(),
-            sessionName,
-            postcondition: 'authentication seed saved, loaded, and authenticated on the page',
-            seedValidated: true,
-          });
         }
 
         if (operation.step === 'cleanup') {

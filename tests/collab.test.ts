@@ -844,6 +844,94 @@ describe('BEH-001 setup journal and interruption recovery', () => {
     expect(fixture.browser.setupClosedSessions).toEqual(fixture.browser.setupSessions);
   });
 
+  it('preserves the existing seed when state-save writes partially and fails', async () => {
+    const fixture = await serviceFixture();
+    const existingSeed = validSeedText();
+    await writeFile(fixture.paths.seedState, existingSeed);
+    fixture.browser.seedAuthenticated = false;
+    fixture.browser.savedSeedText = '{"cookies":';
+    fixture.browser.setupSaveFailureAfterWrite = new Error('injected interrupted state-save');
+
+    await expect(fixture.service.setup()).rejects.toThrow('injected interrupted state-save');
+
+    expect(await readFile(fixture.paths.seedState, 'utf8')).toBe(existingSeed);
+    await expect(readFile(`${fixture.paths.seedState}.pending`, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('preserves the existing seed when the saved candidate is structurally invalid', async () => {
+    const fixture = await serviceFixture();
+    const existingSeed = validSeedText();
+    await writeFile(fixture.paths.seedState, existingSeed);
+    fixture.browser.seedAuthenticated = false;
+    fixture.browser.savedSeedText = '{}';
+
+    await expect(fixture.service.setup()).rejects.toMatchObject({ code: 'SEED_NOT_AUTHENTICATED' });
+
+    expect(await readFile(fixture.paths.seedState, 'utf8')).toBe(existingSeed);
+    expect(fixture.browser.seedSavePaths).toEqual([`${fixture.paths.seedState}.pending`]);
+    await expect(readFile(`${fixture.paths.seedState}.pending`, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('preserves the existing seed when the saved candidate does not authenticate', async () => {
+    const fixture = await serviceFixture();
+    const existingSeed = validSeedText();
+    await writeFile(fixture.paths.seedState, existingSeed);
+    fixture.browser.seedAuthenticated = false;
+    fixture.browser.savedSeedAuthenticated = false;
+
+    await expect(fixture.service.setup()).rejects.toMatchObject({ code: 'SEED_NOT_AUTHENTICATED' });
+
+    expect(await readFile(fixture.paths.seedState, 'utf8')).toBe(existingSeed);
+    expect(fixture.browser.seedSavePaths).toEqual([
+      `${fixture.paths.seedState}.pending`,
+      `${fixture.paths.seedState}.pending`,
+    ]);
+    await expect(readFile(`${fixture.paths.seedState}.pending`, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('publishes a verified candidate over the existing seed', async () => {
+    const fixture = await serviceFixture();
+    const replacementSeed = validSeedText().replaceAll('test', 'replacement');
+    await writeFile(fixture.paths.seedState, validSeedText());
+    fixture.browser.seedAuthenticated = false;
+    fixture.browser.savedSeedText = replacementSeed;
+
+    await expect(fixture.service.setup()).resolves.toEqual({ seedPath: fixture.paths.seedState });
+
+    expect(await readFile(fixture.paths.seedState, 'utf8')).toBe(replacementSeed);
+    expect(fixture.browser.seedSavePaths).toEqual([`${fixture.paths.seedState}.pending`]);
+    await expect(readFile(`${fixture.paths.seedState}.pending`, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('finishes setup after a candidate was published before the seed journal advanced', async () => {
+    const fixture = await serviceFixture();
+    const publishedSeed = validSeedText().replaceAll('test', 'published');
+    await Promise.all([
+      writeFile(fixture.paths.seedState, publishedSeed),
+      writeFile(`${fixture.paths.seedState}.pending`, 'interrupted candidate'),
+    ]);
+    const store = new StateStore(fixture.paths.database);
+    store.createOperation({
+      id: 'setup-seed-published',
+      kind: 'setup',
+      step: 'seed',
+      taskId: null,
+      turnId: null,
+      sessionName: 'chatgpt-pro-collab-setup-published',
+    });
+    store.markOperationEffectUnknown('setup-seed-published');
+    store.close();
+
+    await fixture.service.setup();
+
+    expect(await readFile(fixture.paths.seedState, 'utf8')).toBe(publishedSeed);
+    expect(fixture.browser.seedSavePaths).toEqual([]);
+    await expect(readFile(`${fixture.paths.seedState}.pending`, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireOperation('setup-seed-published')).toMatchObject({ phase: 'committed' });
+    reopened.close();
+  });
+
   it('re-enters the login flow after an interruption before the seed was saved', async () => {
     const fixture = await serviceFixture();
     const store = new StateStore(fixture.paths.database);
@@ -3020,6 +3108,10 @@ class FakeBrowser implements CollabBrowser {
   readonly setupClosedSessions: string[] = [];
   setupOpenGate: Promise<void> | null = null;
   seedAuthenticated = true;
+  savedSeedAuthenticated = true;
+  savedSeedText = validSeedText();
+  setupSaveFailureAfterWrite: Error | null = null;
+  readonly seedSavePaths: string[] = [];
   seedVerifications = 0;
   nextSetupCloseResult: { readonly sessionClosed: boolean } | null = null;
   readonly cleanedComposers: string[] = [];
@@ -3123,8 +3215,12 @@ class FakeBrowser implements CollabBrowser {
     observer?: BrowserOperationObserver,
   ): Promise<{ readonly seedValidated: boolean }> {
     this.observe(observer);
-    await writeFile(seedStatePath, validSeedText());
-    this.seedAuthenticated = true;
+    this.seedSavePaths.push(seedStatePath);
+    await writeFile(seedStatePath, this.savedSeedText);
+    if (this.setupSaveFailureAfterWrite !== null) {
+      throw this.setupSaveFailureAfterWrite;
+    }
+    this.seedAuthenticated = this.savedSeedAuthenticated;
     return { seedValidated: true };
   }
 
