@@ -40,7 +40,11 @@ for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
       process.exit(128);
       return;
     }
-    command.kill(signal);
+    if (process.platform === 'win32' || command.pid === undefined) {
+      command.kill(signal);
+      return;
+    }
+    process.kill(-command.pid, signal);
   });
 }
 
@@ -55,6 +59,7 @@ function launchCommand(): void {
     cwd: process.cwd(),
     env: process.env,
     stdio: ['ignore', 'pipe', 'pipe'],
+    detached: process.platform !== 'win32',
   });
   proxyCommandOutput(command.stdout, process.stdout);
   proxyCommandOutput(command.stderr, process.stderr);

@@ -1619,7 +1619,7 @@ export function runBrowserCommand(invocation: BrowserCommandInvocation): Promise
       forcedAbort = setTimeout(() => {
         try {
           if (commandPid !== undefined) {
-            killIfAlive(commandPid, 'SIGKILL');
+            killIfAlive(process.platform === 'win32' ? commandPid : -commandPid, 'SIGKILL');
           }
         } catch (error) {
           commandObserverError ??= error;
@@ -1757,7 +1757,7 @@ export function runBrowserCommand(invocation: BrowserCommandInvocation): Promise
 /**
  * Sends a best-effort signal to a guarded command during forced deadline cleanup.
  *
- * @param pid Positive process identifier reported by the command gate.
+ * @param pid Process identifier, or a negative POSIX process-group identifier.
  * @param signal Termination signal selected by the host watchdog.
  * @returns Nothing after the signal succeeds or the process is already absent.
  * @throws {Error} Permission and invalid-signal failures are re-thrown.
@@ -1808,24 +1808,18 @@ function parseOpenPid(stdout: string, sessionName: string): number {
  * @param stdout Complete `list` stdout.
  * @param sessionName Recorded named session to match exactly.
  * @returns `available` for an open session, `missing` for deterministic absence.
- * @throws {BrowserError} If the output cannot be parsed as a session listing.
+ * @throws {Error} This parser does not throw.
  */
 function parseSessionAvailability(stdout: string, sessionName: string): BrowserAvailability {
-  if (stdout.includes('(no browsers)')) {
+  const sessions = parseSessionList(stdout);
+  if (sessions === null) {
+    return 'unknown';
+  }
+  const session = sessions.get(sessionName);
+  if (session === undefined) {
     return 'missing';
   }
-  const lines = stdout.trim().split(/\r?\n/u);
-  const matchIndex = lines.findIndex((line) => {
-    return line.includes(sessionName);
-  });
-  if (matchIndex < 0) {
-    return 'missing';
-  }
-  const block = lines.slice(Math.max(0, matchIndex - 1), matchIndex + 3).join('\n');
-  if (/\bopen\b/iu.test(block) && !/\bclosed\b|\bnot open\b/iu.test(block)) {
-    return 'available';
-  }
-  return 'missing';
+  return session.get('status') === 'open' ? 'available' : 'missing';
 }
 
 /**
@@ -1834,26 +1828,78 @@ function parseSessionAvailability(stdout: string, sessionName: string): BrowserA
  * @param stdout Complete `list` stdout.
  * @param sessionName Recorded named session to match exactly.
  * @returns The reported PID, or -1 when the output does not expose one.
- * @throws {BrowserError} If a PID-like value is present but invalid.
+ * @throws {BrowserError} If the listing is malformed or a reported PID is invalid.
  */
 function parseSessionPid(stdout: string, sessionName: string): number {
-  const lines = stdout.trim().split(/\r?\n/u);
-  const matchIndex = lines.findIndex((line) => {
-    return line.includes(sessionName);
-  });
-  if (matchIndex < 0) {
+  const sessions = parseSessionList(stdout);
+  if (sessions === null) {
+    throw new BrowserError('PLAYWRIGHT_CONTRACT_DRIFT', 'parse session list', 'session list is invalid');
+  }
+  const session = sessions.get(sessionName);
+  if (session === undefined) {
     return -1;
   }
-  const block = lines.slice(Math.max(0, matchIndex - 1), matchIndex + 3).join('\n');
-  const match = /pid\s*[:=]\s*(\d+)/iu.exec(block);
-  if (match === null) {
+  const reportedPid = session.get('pid');
+  if (reportedPid === undefined) {
     return -1;
   }
-  const pid = Number(match[1]);
+  const pid = Number(reportedPid);
   if (!Number.isSafeInteger(pid) || pid <= 0) {
     throw new BrowserError('PLAYWRIGHT_CONTRACT_DRIFT', 'parse session list', 'session PID is invalid');
   }
   return pid;
+}
+
+/**
+ * Parses the fixed CLI's raw browser blocks without fuzzy session-name matching.
+ *
+ * @param stdout Complete `list` stdout.
+ * @returns Exact session fields, an empty map for explicit absence, or null for unrecognized output.
+ * @throws {Error} This parser does not throw.
+ */
+function parseSessionList(stdout: string): ReadonlyMap<string, ReadonlyMap<string, string>> | null {
+  const lines = stdout.trim().split(/\r?\n/u);
+  if (lines.length === 1 && lines[0]?.trim() === '(no browsers)') {
+    return new Map();
+  }
+  if (lines.shift()?.trim() !== '### Browsers') {
+    return null;
+  }
+  if (lines.length === 1 && lines[0]?.trim() === '(no browsers)') {
+    return new Map();
+  }
+
+  const sessions = new Map<string, Map<string, string>>();
+  let fields: Map<string, string> | undefined;
+  for (const line of lines) {
+    const sessionMatch = /^- ([^:]+):$/u.exec(line);
+    if (sessionMatch !== null) {
+      const name = sessionMatch[1];
+      if (name === undefined || sessions.has(name)) {
+        return null;
+      }
+      fields = new Map();
+      sessions.set(name, fields);
+      continue;
+    }
+    const fieldMatch = /^  - ([a-z][a-z-]*): (.*)$/u.exec(line);
+    const key = fieldMatch?.[1];
+    const value = fieldMatch?.[2];
+    if (fields === undefined || key === undefined || value === undefined || fields.has(key)) {
+      return null;
+    }
+    fields.set(key, value);
+  }
+  if (sessions.size === 0) {
+    return null;
+  }
+  for (const session of sessions.values()) {
+    const status = session.get('status');
+    if (status !== 'open' && status !== 'closed') {
+      return null;
+    }
+  }
+  return sessions;
 }
 
 /**

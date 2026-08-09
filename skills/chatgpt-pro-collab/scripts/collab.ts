@@ -1108,6 +1108,13 @@ export class CollabService {
             const task = store.requireTask(taskId);
             store.markTaskClosing(taskId);
             const result = await this.#browser.closeTask(taskId, task.playwrightSession, observer);
+            const availability = await this.#browser.sessionAvailability(task.playwrightSession);
+            if (availability !== 'missing') {
+              throw new CollabError(
+                'BROWSER_SESSION_NOT_CLOSED',
+                `browser session could not be confirmed missing after close: ${availability}`,
+              );
+            }
             store.closeTask(taskId);
             return { taskId, wasOpen: result.wasOpen, alreadyClosed: false };
           });

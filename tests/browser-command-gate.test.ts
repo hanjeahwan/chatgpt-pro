@@ -124,6 +124,55 @@ describe('browser command side-effect gate', () => {
     await Promise.all([waitForPidExit(gatePid), waitForPidExit(commandPid)]);
   });
 
+  it('aborts a guarded command process group including its grandchild on POSIX', async () => {
+    if (process.platform === 'win32') {
+      return;
+    }
+    const root = await mkdtemp(join(tmpdir(), 'collab-command-group-abort-'));
+    const grandchildPidPath = join(root, 'grandchild-pid');
+    const grandchildSource = 'setInterval(() => {}, 1000)';
+    const commandSource = [
+      "const { spawn } = require('node:child_process');",
+      "const { writeFileSync } = require('node:fs');",
+      `const child = spawn(process.execPath, ['-e', ${JSON.stringify(grandchildSource)}], { stdio: 'ignore' });`,
+      `writeFileSync(${JSON.stringify(grandchildPidPath)}, String(child.pid));`,
+      'setInterval(() => {}, 1000);',
+    ].join('');
+    const controller = new AbortController();
+    let commandPid: number | undefined;
+    let grandchildPid: number | undefined;
+
+    try {
+      const completion = runBrowserCommand({
+        executable: process.execPath,
+        arguments: ['-e', commandSource],
+        cwd: root,
+        environment: process.env,
+        signal: controller.signal,
+        onCommandSpawned(pid) {
+          commandPid = pid;
+        },
+      });
+      await waitForPath(grandchildPidPath);
+      grandchildPid = Number(await readFile(grandchildPidPath, 'utf8'));
+      controller.abort();
+
+      await expect(completion).rejects.toBeInstanceOf(BrowserCommandAbortedError);
+      if (commandPid === undefined || !Number.isSafeInteger(grandchildPid)) {
+        throw new Error('process-group abort test did not observe both process identifiers');
+      }
+      await Promise.all([waitForPidExit(commandPid), waitForPidExit(grandchildPid)]);
+    } finally {
+      if (grandchildPid !== undefined) {
+        try {
+          process.kill(grandchildPid, 'SIGKILL');
+        } catch {
+          // The expected path has already terminated the grandchild.
+        }
+      }
+    }
+  });
+
   it('threads artifact download cancellation through PlaywrightBrowser and reaps both processes', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collab-artifact-command-abort-'));
     const paths = collabPaths(root);

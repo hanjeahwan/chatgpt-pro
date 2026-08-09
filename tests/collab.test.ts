@@ -1690,6 +1690,26 @@ describe('BEH-008 local close and BEH-009 archive journal', () => {
     expect(fixture.browser.closed).toEqual([task.taskId]);
   });
 
+  it.each(['available', 'unknown'] as const)(
+    'keeps a task closing while its browser session is %s after close',
+    async (availability) => {
+      const fixture = await serviceFixture();
+      await fixture.service.setup();
+      const task = await fixture.start();
+      fixture.browser.closeAvailabilityResult = availability;
+
+      await expect(fixture.service.close(task.taskId)).rejects.toMatchObject({
+        code: 'BROWSER_SESSION_NOT_CLOSED',
+      });
+      const store = new StateStore(fixture.paths.database);
+      expect(store.requireTask(task.taskId)).toMatchObject({ status: 'closing', closedAt: null });
+      store.close();
+
+      fixture.browser.closeAvailabilityResult = 'missing';
+      await expect(fixture.service.close(task.taskId)).resolves.toMatchObject({ alreadyClosed: false });
+    },
+  );
+
   it('journals the archive click with canonical identity evidence', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
@@ -2976,6 +2996,7 @@ class FakeBrowser implements CollabBrowser {
   nextStartFailureCode: string | null = null;
   nextRecoverConversationIdentityFailureTaskId: string | null = null;
   sessionAvailabilityResult: 'available' | 'missing' | 'unknown' = 'available';
+  closeAvailabilityResult: 'available' | 'missing' | 'unknown' = 'missing';
   nextVerifySafeComposerFailureTaskId: string | null = null;
   readonly resolvedFailedTurns: string[] = [];
   readonly resolvedFailedTurnUrls: string[] = [];
@@ -3664,6 +3685,7 @@ class FakeBrowser implements CollabBrowser {
   closeTask(taskId: string, _sessionName: string, observer?: BrowserOperationObserver) {
     this.observe(observer);
     this.closed.push(taskId);
+    this.sessionAvailabilityResult = this.closeAvailabilityResult;
     return Promise.resolve({ wasOpen: true });
   }
 

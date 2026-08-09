@@ -66,7 +66,7 @@ describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
 
   it('verifies a seed in a distinct named session even when the interactive setup session is logged in', async () => {
     const fixture = await browserFixture([
-      output('Sessions:\n  - name: chatgpt-pro-collab-setup-live\n    state: open\n    pid: 100\n'),
+      output('### Browsers\n- chatgpt-pro-collab-setup-live:\n  - status: open\n  - pid: 100\n'),
       output('verification opened'),
       output('seed loaded'),
       output('navigated to chatgpt.com'),
@@ -108,7 +108,7 @@ describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
 
   it('closes a leftover verification session before verifying a fresh seed', async () => {
     const fixture = await browserFixture([
-      output('Sessions:\n  - name: chatgpt-pro-collab-setup-live-verify\n    state: open\n    pid: 200\n'),
+      output('### Browsers\n- chatgpt-pro-collab-setup-live-verify:\n  - status: open\n  - pid: 200\n'),
       output('leftover closed'),
       output('verification opened'),
       output('seed loaded'),
@@ -1827,17 +1827,18 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
 
 describe('BEH-013 browser boundary support', () => {
   it('classifies the global session listing deterministically', async () => {
-    const fixture = await browserFixture([output('  (no browsers)\n')]);
+    const fixture = await browserFixture([output('### Browsers\n  (no browsers)\n')]);
     await expect(fixture.browser.sessionAvailability('session-a')).resolves.toBe('missing');
     expect(fixture.invocations[0]?.arguments).toEqual(['-y', '@playwright/cli@0.1.17', '--raw', 'list']);
 
-    const openFixture = await browserFixture([
-      output(`Sessions:\n  - name: session-a\n    state: open\n    pid: 4123\n`),
-    ]);
+    const openFixture = await browserFixture([output(`### Browsers\n- session-a:\n  - status: open\n  - pid: 4123\n`)]);
     await expect(openFixture.browser.sessionAvailability('session-a')).resolves.toBe('available');
 
-    const absentFixture = await browserFixture([output('Sessions:\n  - name: other\n    state: open\n')]);
+    const absentFixture = await browserFixture([output('### Browsers\n- session-a-verify:\n  - status: open\n')]);
     await expect(absentFixture.browser.sessionAvailability('session-a')).resolves.toBe('missing');
+
+    const malformedFixture = await browserFixture([output('session-a is probably open')]);
+    await expect(malformedFixture.browser.sessionAvailability('session-a')).resolves.toBe('unknown');
 
     const failingFixture = await browserFixture([new Error('cli unavailable')]);
     await expect(failingFixture.browser.sessionAvailability('session-a')).resolves.toBe('unknown');
@@ -1846,7 +1847,9 @@ describe('BEH-013 browser boundary support', () => {
   it('rebuilds a session without opening when the named session already exists', async () => {
     await writeFile(join((await browserFixture([])).paths.seedState), '{}');
     const fixture = await browserFixture([
-      output('Sessions:\n  - name: session-a\n    state: open\n    pid: 4123\n'),
+      output(
+        '### Browsers\n- session-a-verify:\n  - status: open\n  - pid: 9000\n- session-a:\n  - status: open\n  - pid: 4123\n',
+      ),
       output('navigated to projects'),
       pageResult({
         protocol,
@@ -1860,7 +1863,7 @@ describe('BEH-013 browser boundary support', () => {
         powerMin: 0,
         powerMax: 4,
       }),
-      output('Sessions:\n  - name: session-a\n    state: open\n    pid: 4123\n'),
+      output('### Browsers\n- session-a:\n  - status: open\n  - pid: 4123\n'),
     ]);
     await writeFile(fixture.paths.seedState, '{}');
 
@@ -2005,7 +2008,7 @@ describe('BEH-013 browser boundary support', () => {
 
   it('closes a reused session when the start context fails definitely', async () => {
     const fixture = await browserFixture([
-      output('Sessions:\n  - name: session-a\n    state: open\n    pid: 4123\n'),
+      output('### Browsers\n- session-a:\n  - status: open\n  - pid: 4123\n'),
       output('navigated to projects'),
       pageResult({
         protocol,
