@@ -29,7 +29,7 @@ node "<skill-directory>/scripts/collab.ts" start <taskId>
 
 ## 3. 准备本轮输入
 
-先把本轮文字输入写入单独的 prompt 文件，再明确列出本轮所需附件。少量文件直接上传；大量文件由宿主 Agent 先生成一个归档，Collab 不扫描或补充归档内容。
+先把本轮文字输入写入单独的有效 UTF-8 prompt 文件，并确保全文首尾均无空白，包括终止换行，再明确列出本轮所需附件。Collab 不 trim 或改写 prompt；首尾空白会在任何状态持久化或浏览器动作前以 `PROMPT_NOT_VERBATIM_PROVABLE` 拒绝。少量文件直接上传；大量文件由宿主 Agent 先生成一个归档，Collab 不扫描或补充归档内容。
 
 每个新 task 在尚未绑定 conversation 时，为首条 user message 发起的每次 `send` 都必须把以下固定协作合同与宿主选定的当前任务合成同一个 prompt 文件；将当前任务紧接在末尾的“当前任务：”之后，并在同一次 `send` 中携带本轮附件。首次提交前确定失败时，后续显式 `send` 仍须使用完整合同；`unknown-submission` 按第 5 节裁决，不另行发送。不要让 `start` 或额外的 `send` 单独提交启动声明；conversation 绑定后的后续 prompt 依赖已有上下文，不再重复该合同。
 
