@@ -1803,30 +1803,32 @@ export class StateStore {
    * @throws {Error} If SQLite cannot execute or decode the query.
    */
   getStatus(taskId: string, browserStatus: BrowserStatus): StatusRecord {
-    const task = this.requireTask(taskId);
-    const turns = this.listTurns(taskId);
-    const unfinished = turns.filter((turn) => {
-      return turn.status === 'sending' || turn.status === 'pending' || turn.status === 'capturing';
-    });
-    const unresolved = turns.find((turn) => {
-      return turn.status === 'unknown-submission';
-    });
-    const turn = unresolved ?? unfinished.at(-1) ?? null;
-    const operation = this.getUncommittedTaskOperation(taskId);
-    return {
-      taskId,
-      taskStatus: task.status,
-      turnId: turn?.id ?? null,
-      turnStatus: turn?.status ?? null,
-      browserStatus,
-      operationKind: operation?.kind ?? null,
-      operationStep: operation?.step ?? null,
-      operationPhase: operation?.phase ?? null,
-      operationProgress: operation?.progress ?? null,
-      evidence: operation?.evidence ?? null,
-      error: turn?.error ?? operation?.error ?? null,
-      nextAction: computeNextAction(task, turn, operation, browserStatus),
-    };
+    return this.#transaction(() => {
+      const task = this.requireTask(taskId);
+      const turns = this.listTurns(taskId);
+      const unfinished = turns.filter((turn) => {
+        return turn.status === 'sending' || turn.status === 'pending' || turn.status === 'capturing';
+      });
+      const unresolved = turns.find((turn) => {
+        return turn.status === 'unknown-submission';
+      });
+      const turn = unresolved ?? unfinished.at(-1) ?? null;
+      const operation = this.getUncommittedTaskOperation(taskId);
+      return {
+        taskId,
+        taskStatus: task.status,
+        turnId: turn?.id ?? null,
+        turnStatus: turn?.status ?? null,
+        browserStatus,
+        operationKind: operation?.kind ?? null,
+        operationStep: operation?.step ?? null,
+        operationPhase: operation?.phase ?? null,
+        operationProgress: operation?.progress ?? null,
+        evidence: operation?.evidence ?? null,
+        error: turn?.error ?? operation?.error ?? null,
+        nextAction: computeNextAction(task, turn, operation, browserStatus),
+      };
+    }, 'BEGIN');
   }
 
   /**
@@ -1977,14 +1979,15 @@ export class StateStore {
   }
 
   /**
-   * Serializes a state gate and rolls back every thrown transition.
+   * Runs one SQLite transaction and rolls back every thrown operation.
    *
    * @param operation Synchronous SQLite work that must commit as one unit.
+   * @param begin SQLite transaction mode; deferred reads use plain `BEGIN`.
    * @returns The operation result after `COMMIT` succeeds.
    * @throws {Error} Re-throws the operation or SQLite transaction failure.
    */
-  #transaction<T>(operation: () => T): T {
-    this.#database.exec('BEGIN IMMEDIATE');
+  #transaction<T>(operation: () => T, begin: 'BEGIN' | 'BEGIN IMMEDIATE' = 'BEGIN IMMEDIATE'): T {
+    this.#database.exec(begin);
     try {
       const result = operation();
       this.#database.exec('COMMIT');

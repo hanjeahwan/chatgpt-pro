@@ -2,6 +2,7 @@ import { execFile, spawn } from 'node:child_process';
 import { access, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { promisify } from 'node:util';
 
 import { describe, expect, it } from 'vitest';
@@ -11,6 +12,31 @@ import { StateStore } from '../skills/chatgpt-pro-collab/scripts/state.ts';
 const execFileAsync = promisify(execFile);
 
 describe('VER-011 SQLite cross-process concurrency', () => {
+  it('reads task and operation status from one SQLite snapshot', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-status-snapshot-'));
+    const databasePath = join(root, 'state.sqlite');
+    const initialized = new StateStore(databasePath);
+    initialized.createStartingTask('task-a', 'session-a', 'start-op');
+    initialized.close();
+    const writer = new DatabaseSync(databasePath);
+    const reader = new InterleavedStatusStore(databasePath, () => {
+      writer.exec(`
+        BEGIN IMMEDIATE;
+        UPDATE task SET status = 'active' WHERE id = 'task-a';
+        UPDATE operation SET phase = 'committed', committed_at = updated_at WHERE id = 'start-op';
+        COMMIT;
+      `);
+    });
+
+    expect(reader.getStatus('task-a', 'available')).toMatchObject({
+      taskStatus: 'starting',
+      operationKind: 'start',
+      operationPhase: 'prepared',
+    });
+    reader.close();
+    writer.close();
+  });
+
   it('rolls back a subprocess killed after the first artifact insert in the capture transaction', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collab-capture-transaction-'));
     const databasePath = join(root, 'state.sqlite');
@@ -312,6 +338,34 @@ describe('VER-011 SQLite cross-process concurrency', () => {
     reopened.close();
   });
 });
+
+class InterleavedStatusStore extends StateStore {
+  readonly #beforeTurns: () => void;
+
+  /**
+   * Opens a reader that commits a competing transaction between status queries.
+   *
+   * @param databasePath Shared SQLite database path.
+   * @param beforeTurns Competing writer invoked before the turn query.
+   * @throws {Error} If SQLite cannot open the reader.
+   */
+  constructor(databasePath: string, beforeTurns: () => void) {
+    super(databasePath);
+    this.#beforeTurns = beforeTurns;
+  }
+
+  /**
+   * Commits the competing state transition before continuing the status read.
+   *
+   * @param taskId Task whose turns are listed.
+   * @returns Turns visible to the reader snapshot.
+   * @throws {Error} If the competing write or turn query fails.
+   */
+  override listTurns(taskId: string): ReturnType<StateStore['listTurns']> {
+    this.#beforeTurns();
+    return super.listTurns(taskId);
+  }
+}
 
 /**
  * Resolves one spawned worker after either ordinary or signal termination.
