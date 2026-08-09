@@ -141,6 +141,11 @@ interface StartFailedProtocolResult extends ProtocolResult {
   readonly message: string;
 }
 
+interface SeedVerificationProtocolResult extends ProtocolResult {
+  readonly kind: 'seed-verification';
+  readonly authenticated: boolean;
+}
+
 interface UploadReadyProtocolResult extends ProtocolResult {
   readonly kind: 'upload-ready';
 }
@@ -358,7 +363,8 @@ export class PlaywrightBrowser {
    * Loads an existing seed into an isolated verification session and verifies the authenticated page.
    *
    * The structural storage-state check is not enough: the seed must actually load in a fresh,
-   * independent browser context and the ChatGPT page must show no login controls. The
+   * independent browser context and the ChatGPT page must expose either one authenticated
+   * composer or explicit visible login controls. The
    * verification always runs in a distinct named session (`<setupSession>-verify`) so the
    * interactive setup session's own authentication can never mask an invalid seed, and that
    * verification session is always closed after success, unauthenticated, and error paths.
@@ -410,19 +416,23 @@ export class PlaywrightBrowser {
         observer,
       );
       await this.#invoke(verificationSession, verificationId, ['goto', CHATGPT_URL], 'open chatgpt.com', observer);
-      try {
-        await this.#runCodeWithoutResult(
-          verificationSession,
-          verificationId,
-          'verify-seed',
-          authenticatedPageScript(),
+      const verdict = await this.#runCode<SeedVerificationProtocolResult>(
+        verificationSession,
+        verificationId,
+        'verify-seed',
+        authenticatedPageScript(),
+        'verify seed',
+        'seed-verification',
+        observer,
+      );
+      if (typeof verdict.authenticated !== 'boolean') {
+        throw new BrowserError(
+          'BROWSER_PROTOCOL_ERROR',
           'verify seed',
-          observer,
+          'seed-verification result omitted the authentication verdict',
         );
-        authenticated = true;
-      } catch {
-        // The seed did not produce an authenticated page: a normal unauthenticated verdict.
       }
+      authenticated = verdict.authenticated;
     } catch (error) {
       hardFailure = error;
     }
@@ -2150,14 +2160,29 @@ function authenticatedPageScript(): string {
       };
       const onChatGpt = location.hostname === 'chatgpt.com' && /^https?:$/.test(location.protocol);
       const composers = [...document.querySelectorAll('#prompt-textarea')].filter(visible);
-      const composerOk = composers.length === 1;
       const authControls = [...document.querySelectorAll('a, button')].filter((element) => {
         const label = (element.textContent || '').trim();
-        const href = element instanceof HTMLAnchorElement ? element.getAttribute('href') || '' : '';
-        return visible(element) && (label === 'Log in' || label === 'Sign up' || href.includes('/auth/login'));
+        return visible(element) && (label === 'Log in' || label === 'Sign up');
       });
-      return onChatGpt && composerOk && authControls.length === 0;
+      return onChatGpt && (authControls.length > 0 || composers.length === 1);
     }, undefined, { timeout: 60000, polling: 500 });
+    const authenticated = await page.evaluate(() => {
+      const visible = (element) => {
+        if (!(element instanceof HTMLElement)) return false;
+        const style = getComputedStyle(element);
+        return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
+      };
+      const authControls = [...document.querySelectorAll('a, button')].filter((element) => {
+        const label = (element.textContent || '').trim();
+        return visible(element) && (label === 'Log in' || label === 'Sign up');
+      });
+      if (authControls.length > 0) return false;
+      const onChatGpt = location.hostname === 'chatgpt.com' && /^https?:$/.test(location.protocol);
+      const composers = [...document.querySelectorAll('#prompt-textarea')].filter(visible);
+      if (onChatGpt && composers.length === 1) return true;
+      throw new Error('seed verification page changed after the authentication verdict');
+    });
+    return JSON.stringify({ protocol: '${PROTOCOL}', kind: 'seed-verification', authenticated });
   }`;
 }
 
@@ -2195,20 +2220,23 @@ function startVerificationScript(contextMarker: string): string {
       throw lastError;
     };
 
-    try {
-      await page.waitForFunction(() => {
-        const authControls = [...document.querySelectorAll('a, button')].filter((element) => {
+    const authenticationRequired = async () => {
+      return evaluate(() => {
+        const visible = (element) => {
+          if (!(element instanceof HTMLElement)) return false;
+          const style = getComputedStyle(element);
+          return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
+        };
+        return [...document.querySelectorAll('a, button')].some((element) => {
           const label = (element.textContent || '').trim();
-          const href = element instanceof HTMLAnchorElement ? element.getAttribute('href') || '' : '';
-          return (label === 'Log in' || label === 'Sign up' || href.includes('/auth/login')) &&
-            element instanceof HTMLElement && element.getClientRects().length > 0;
+          return visible(element) && (label === 'Log in' || label === 'Sign up');
         });
-        return authControls.length === 0;
-      }, undefined, { timeout: 60000, polling: 250 });
-    } catch {
-      return fail('PAGE_CONTRACT_DRIFT', 'authenticated ChatGPT Web page was not observed; run setup again if the session expired');
-    }
+      });
+    };
 
+    if (await authenticationRequired()) {
+      return fail('AUTHENTICATION_REQUIRED', 'visible login controls prove the authentication seed expired; run setup again');
+    }
     try {
       await page.waitForFunction((target) => {
         const visible = (element) => {
@@ -2224,6 +2252,9 @@ function startVerificationScript(contextMarker: string): string {
         });
       }, targetProject, { timeout: 30000, polling: 250 });
     } catch {
+      if (await authenticationRequired()) {
+        return fail('AUTHENTICATION_REQUIRED', 'visible login controls prove the authentication seed expired; run setup again');
+      }
       return fail('PROJECT_NOT_FOUND', 'no Project exactly named chatgpt-pro-collab was found; check the signed-in account and create or organize the chatgpt-pro-collab Project manually');
     }
     let rowInfo = { status: 'drift', reason: 'target Project row disappeared after it was observed' };
@@ -4381,6 +4412,7 @@ function isDefiniteStartFailure(error: unknown): boolean {
       'FIXED_TARGET_UNAVAILABLE',
       'SELECTION_UNCONFIRMED',
       'PAGE_CONTRACT_DRIFT',
+      'AUTHENTICATION_REQUIRED',
     ].includes(error.code)
   );
 }

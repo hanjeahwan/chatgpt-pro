@@ -341,8 +341,9 @@ export class CollabService {
           const candidateSeedPath = `${seedPath}.pending`;
           const candidatePaths = { ...this.#paths, seedState: candidateSeedPath };
           try {
-            let authenticated = false;
-            if (await seedStateValid(this.#paths)) {
+            const seedValid = await seedStateValid(this.#paths);
+            let authenticated = seedValid && operation.evidence?.seedValidated === true;
+            if (!authenticated && seedValid) {
               authenticated = (await this.#browser.verifyAuthenticatedSeed(sessionName, seedPath, observer))
                 .authenticated;
             }

@@ -974,9 +974,35 @@ describe('BEH-001 setup journal and interruption recovery', () => {
       evidence: { seedValidated: true, sessionClosed: true },
     });
     reopened.close();
-    expect(fixture.browser.seedVerifications).toBe(2);
+    expect(fixture.browser.seedVerifications).toBe(1);
     expect(fixture.browser.setupSessions).toEqual([]);
     expect(fixture.browser.setupClosedSessions).toEqual(['chatgpt-pro-collab-setup-halfway']);
+  });
+
+  it('replaces a missing seed instead of trusting stale validation evidence', async () => {
+    const fixture = await serviceFixture();
+    const store = new StateStore(fixture.paths.database);
+    store.createOperation({
+      id: 'setup-seed-missing',
+      kind: 'setup',
+      step: 'seed',
+      taskId: null,
+      turnId: null,
+      sessionName: 'chatgpt-pro-collab-setup-missing',
+      evidence: {
+        observedAt: new Date().toISOString(),
+        sessionName: 'chatgpt-pro-collab-setup-missing',
+        seedValidated: true,
+      },
+    });
+    store.close();
+
+    await expect(fixture.service.setup()).resolves.toEqual({ seedPath: fixture.paths.seedState });
+    expect(fixture.browser.seedSavePaths).toEqual([`${fixture.paths.seedState}.pending`]);
+    expect(fixture.browser.seedVerifications).toBe(1);
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireOperation('setup-seed-missing')).toMatchObject({ phase: 'committed' });
+    reopened.close();
   });
 
   it('re-enters the interactive login flow when an existing seed does not authenticate', async () => {
@@ -1506,6 +1532,30 @@ describe('BEH-002 caller-provided task start', () => {
     expect(reopened.requireTask(taskId)).toMatchObject({ status: 'active' });
     reopened.close();
   });
+
+  it.each(['start', 'recover'] as const)(
+    'keeps an expired-seed start recoverable through %s after setup refreshes authentication',
+    async (resumeCommand) => {
+      const fixture = await serviceFixture();
+      await fixture.service.setup();
+      const taskId = randomUUID();
+      fixture.browser.nextStartFailureCode = 'AUTHENTICATION_REQUIRED';
+
+      await expect(fixture.service.start(taskId)).rejects.toMatchObject({ code: 'AUTHENTICATION_REQUIRED' });
+      const interrupted = new StateStore(fixture.paths.database);
+      expect(interrupted.requireTask(taskId)).toMatchObject({ status: 'starting' });
+      expect(interrupted.getUncommittedTaskOperation(taskId)).toMatchObject({ kind: 'start', phase: 'effect-unknown' });
+      interrupted.close();
+
+      fixture.browser.seedAuthenticated = false;
+      await fixture.service.setup();
+      if (resumeCommand === 'start') {
+        await expect(fixture.service.start(taskId)).resolves.toMatchObject({ taskId });
+      } else {
+        await expect(fixture.service.recover(taskId)).resolves.toMatchObject({ taskId, taskStatus: 'active' });
+      }
+    },
+  );
 
   it('marks a definitely failed start failed and commits the journal', async () => {
     const fixture = await serviceFixture();

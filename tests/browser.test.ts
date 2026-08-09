@@ -84,7 +84,7 @@ describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
     ]);
   });
 
-  it('verifies a seed in a distinct named session even when the interactive setup session is logged in', async () => {
+  it('preserves a seed verification command failure and still closes its isolated session', async () => {
     const fixture = await browserFixture([
       output('### Browsers\n- chatgpt-pro-collab-setup-live:\n  - status: open\n  - pid: 100\n'),
       output('verification opened'),
@@ -97,7 +97,10 @@ describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
 
     await expect(
       fixture.browser.verifyAuthenticatedSeed('chatgpt-pro-collab-setup-live', fixture.paths.seedState),
-    ).resolves.toEqual({ authenticated: false });
+    ).rejects.toMatchObject({
+      code: 'BROWSER_COMMAND_FAILED',
+      message: expect.stringContaining('fixture verify-seed failed'),
+    });
 
     const sessionArgs = fixture.invocations.flatMap((invocation) => {
       return invocation.arguments[2]?.startsWith('-s=') ? [invocation.arguments[2]] : [];
@@ -133,7 +136,7 @@ describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
       output('verification opened'),
       output('seed loaded'),
       output('navigated to chatgpt.com'),
-      output('verify-seed passed'),
+      pageResult({ protocol, kind: 'seed-verification', authenticated: true }),
       output('verification closed'),
     ]);
     await writeFile(fixture.paths.seedState, '{}');
@@ -180,7 +183,7 @@ describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
       output('verification opened'),
       output('seed loaded'),
       output('navigated to chatgpt.com'),
-      output('verify-seed passed'),
+      pageResult({ protocol, kind: 'seed-verification', authenticated: true }),
       new Error('fixture close failed'),
     ]);
     await writeFile(fixture.paths.seedState, '{}');
@@ -256,7 +259,7 @@ describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
       output('verification opened'),
       output('seed loaded'),
       output('navigated to chatgpt.com'),
-      new Error('fixture verify-seed failed'),
+      pageResult({ protocol, kind: 'seed-verification', authenticated: false }),
       new Error('fixture close failed'),
     ]);
     await writeFile(fixture.paths.seedState, '{}');
@@ -295,7 +298,7 @@ describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
       output('verification opened'),
       output('seed loaded'),
       output('navigated to chatgpt.com'),
-      output('verify-seed passed'),
+      pageResult({ protocol, kind: 'seed-verification', authenticated: true }),
       output('verification closed'),
     ]);
     await writeFile(fixture.paths.seedState, '{}');
@@ -310,13 +313,13 @@ describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
     expect(source).toContain("label === 'Log in'");
     expectPageFunctionSyntax(source);
 
-    const runAuthScript = new Function(`return (${source})`)() as (page: object) => Promise<void>;
+    const runAuthScript = new Function(`return (${source})`)() as (page: object) => Promise<string>;
 
     await expect(
       runAuthScript(
         submissionPageFixture({ pathname: '/', hostname: 'chatgpt.com', composerCount: 1, authControls: [] }).page,
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(JSON.stringify({ protocol, kind: 'seed-verification', authenticated: true }));
 
     await expect(
       runAuthScript(submissionPageFixture({ pathname: '/', hostname: 'about:blank', composerCount: 0 }).page),
@@ -335,7 +338,7 @@ describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
           authControls: ['Log in'],
         }).page,
       ),
-    ).rejects.toThrow(/fixture waitForFunction deadline exceeded/);
+    ).resolves.toBe(JSON.stringify({ protocol, kind: 'seed-verification', authenticated: false }));
 
     await expect(
       runAuthScript(
@@ -347,6 +350,23 @@ describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
         }).page,
       ),
     ).rejects.toThrow(/fixture waitForFunction deadline exceeded/);
+  });
+
+  it('rejects a malformed seed verification envelope instead of treating it as authenticated', async () => {
+    const fixture = await browserFixture([
+      output('  (no browsers)'),
+      output('verification opened'),
+      output('seed loaded'),
+      output('navigated to chatgpt.com'),
+      pageResult({ protocol, kind: 'seed-verification' }),
+      output('verification closed'),
+    ]);
+    await writeFile(fixture.paths.seedState, '{}');
+
+    await expect(
+      fixture.browser.verifyAuthenticatedSeed('chatgpt-pro-collab-setup-live', fixture.paths.seedState),
+    ).rejects.toMatchObject({ code: 'BROWSER_PROTOCOL_ERROR' });
+    expect(fixture.invocations.at(-1)?.arguments).toContain('close');
   });
 
   it('uses the fixed CLI prefix, task output directory, and shared seed without persistence', async () => {
@@ -655,13 +675,35 @@ describe('BEH-002 fixed Project and GPT-5.6 Sol Power 5/5 start context', () => 
     expect(fixture.invocations.at(-1)?.arguments).toContain('close');
   });
 
-  it('rejects with PAGE_CONTRACT_DRIFT when the authenticated page is not observed', async () => {
+  it('rejects with AUTHENTICATION_REQUIRED when visible login controls prove the seed expired', async () => {
     const fixture = await executableStartFixture({ authenticated: false });
     await writeFile(fixture.paths.seedState, '{}');
 
     const failure = await startTaskFailure(fixture);
-    expect(failure.code).toBe('PAGE_CONTRACT_DRIFT');
+    expect(failure.code).toBe('AUTHENTICATION_REQUIRED');
     expect(fixture.invocations.at(-1)?.arguments).toContain('close');
+  });
+
+  it('closes a reused session when visible login controls prove the seed expired', async () => {
+    const fixture = await browserFixture([
+      output('### Browsers\n- session-a:\n  - status: open\n'),
+      output('navigated to projects'),
+      pageResult({
+        protocol,
+        kind: 'start-failed',
+        errorCode: 'AUTHENTICATION_REQUIRED',
+        message: 'visible login controls prove the authentication seed expired',
+      }),
+      output('session closed'),
+    ]);
+    await writeFile(fixture.paths.seedState, '{}');
+
+    await expect(fixture.browser.startTask('task-a', 'session-a', fixture.paths.seedState, true)).rejects.toMatchObject(
+      {
+        code: 'AUTHENTICATION_REQUIRED',
+      },
+    );
+    expect(fixture.invocations.at(-1)?.arguments.slice(4)).toEqual(['close']);
   });
 
   it('rejects with SELECTION_UNCONFIRMED when the model selection resets the Power readback', async () => {

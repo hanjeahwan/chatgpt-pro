@@ -16,7 +16,7 @@
 ### BEH-001 一次登录设置
 
 - **触发与前置条件**：用户执行 `setup`，本机可以打开 ChatGPT Web。
-- **可观察行为**：Collab 打开一次交互式登录流程，并在用户完成登录后保留可供后续任务加载的本地认证源；`setup` 完成后关闭本次设置使用的浏览器。`setup` 在认证源保存前后被中断时，后续同一命令先核对持久状态：认证源未保存时重新进入登录流程；认证源已经有效时只完成尚未完成的 setup session 清理，不要求用户重复登录。
+- **可观察行为**：Collab 打开一次交互式登录流程，并在用户完成登录后保留可供后续任务加载的本地认证源；`setup` 完成后关闭本次设置使用的浏览器。`setup` 在认证源保存前后被中断时，后续同一命令先核对持久状态：认证源未保存时重新进入登录流程；认证源已经有效时只完成尚未完成的 setup session 清理，不要求用户重复登录。同一次 setup 已用隔离 session 证明现有 seed 已认证时，后续 seed 步骤复用该 operation evidence，不重复验证；只有页面明确显示可见 `Log in` 或 `Sign up` 才判定 seed 未认证，CLI、超时、协议或页面合同异常保留原错误。
 - **验收条件**：完成一次人工登录后，两个后续任务都能在不再次要求用户登录的情况下进入已登录的 ChatGPT Web。认证源保存前中断不会留下成功记录，保存后但浏览器关闭前中断可由后续 `setup` 清理；恢复不删除有效认证源，也不把无法验证的认证源报告为成功。
 - **状态**：已确认。
 
@@ -24,7 +24,7 @@
 
 - **触发与前置条件**：宿主预先生成一个在其协作范围内稳定且唯一的 canonical lowercase UUID v4 `taskId`，执行 `start(taskId)`，且 BEH-001 的认证源可用。
 - **可观察行为**：Collab 为该 `taskId` 创建独立浏览器进程、独立 browser context 和独立会话目录；只读加载 BEH-001 的认证源后，在现有 Project 中精确定位唯一名为 `chatgpt-pro-collab` 的 Project，进入该 Project 的空白新 conversation composer，并把模型固定选择为 `GPT-5.6 Sol`、Power 固定设置为第五级（`5/5`）。Collab 只有在重新读取页面并确认 Project、模型和 Power 都正确后才返回同一个 `taskId`；首次成功发送时，任务固定绑定由该 Project composer 建立的新 conversation。相同 `taskId` 的重复或并发 `start` 只在 task 仍为 `starting`，或已完成启动但尚未绑定 conversation 时恢复或返回同一次启动，不创建第二个 task、browser context 或新 conversation composer；task 已绑定 conversation、正在关闭、已经关闭、失败或与持久状态冲突时返回冲突。Collab 不自动创建或修改 Project，也不创建 task 认证状态副本。
-- **验收条件**：成功返回时，页面位于唯一 `chatgpt-pro-collab` Project 的新 conversation composer，模型回读为 `GPT-5.6 Sol`，唯一 Power slider 的当前值等于最大值且表示第五级（`5/5`），且页面尚无 user turn；任意两个不同 `taskId` 的活动任务具有不同的浏览器进程、browser context 和会话目录，首次发送后在同一 Project 中建立不同 conversation；启动新任务不因其他未关闭任务而拒绝。在浏览器创建、认证加载、Project 导航或固定模型与 Power 确认前后中断时，使用同一 `taskId` 重试可核对并继续同一次启动。Project 缺失或不唯一时，错误建议用户检查登录账号以及手动创建或整理 `chatgpt-pro-collab` Project；固定模型或 Power 不可用、选择失败或结果无法回读时，错误指出无法确认的固定目标。所有失败都不返回成功结果，且不得调用 Project 创建或修改操作。
+- **验收条件**：成功返回时，页面位于唯一 `chatgpt-pro-collab` Project 的新 conversation composer，模型回读为 `GPT-5.6 Sol`，唯一 Power slider 的当前值等于最大值且表示第五级（`5/5`），且页面尚无 user turn；任意两个不同 `taskId` 的活动任务具有不同的浏览器进程、browser context 和会话目录，首次发送后在同一 Project 中建立不同 conversation；启动新任务不因其他未关闭任务而拒绝。在浏览器创建、认证加载、Project 导航或固定模型与 Power 确认前后中断时，使用同一 `taskId` 重试可核对并继续同一次启动。启动页面明确显示可见登录控件时返回 `AUTHENTICATION_REQUIRED` 并关闭新建或复用的过期 session，task 保持 `starting` 且 start operation 保持 `effect-unknown`；用户重新执行 setup 后，可用同一 `taskId` 继续 `start` 或 `recover`。Project 缺失或不唯一时，错误建议用户检查登录账号以及手动创建或整理 `chatgpt-pro-collab` Project；固定模型或 Power 不可用、选择失败或结果无法回读时，错误指出无法确认的固定目标。所有失败都不返回成功结果，且不得调用 Project 创建或修改操作。
 - **状态**：已确认。
 
 ### BEH-003 发送明确输入
