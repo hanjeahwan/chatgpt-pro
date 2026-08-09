@@ -77,6 +77,7 @@ export interface CollabBrowser {
     expectedConversationUrl: string,
     expectedConversationId: string,
     expectedUserTurnId: string,
+    signal: AbortSignal,
     observer?: BrowserOperationObserver,
   ): Promise<{ readonly conversationId: string; readonly conversationUrl: string }>;
   send(
@@ -94,6 +95,7 @@ export interface CollabBrowser {
     expectedConversationId: string,
     expectedUserTurnId: string,
     observationWindowMs: number,
+    signal: AbortSignal,
     observer?: BrowserOperationObserver,
   ): Promise<BrowserObservationResult>;
   captureResponse(
@@ -918,14 +920,27 @@ export class CollabService {
               return { status: 'pending' as const, taskId, turnId };
             }
             if (remainingObservationMs > 0 && remainingUntilReloadMs === 0) {
-              const reloaded = await this.#browser.reloadConversation(
-                taskId,
-                task.playwrightSession,
-                task.conversationUrl,
-                task.conversationId,
-                userTurnIdentity,
-                observer,
-              );
+              const reloadSignal = AbortSignal.timeout(remainingObservationMs);
+              let reloaded: { readonly conversationId: string; readonly conversationUrl: string };
+              try {
+                reloaded = await this.#browser.reloadConversation(
+                  taskId,
+                  task.playwrightSession,
+                  task.conversationUrl,
+                  task.conversationId,
+                  userTurnIdentity,
+                  reloadSignal,
+                  observer,
+                );
+              } catch (error) {
+                if (!reloadSignal.aborted && remainingMilliseconds(observationDeadline, this.#now) > 0) {
+                  throw error;
+                }
+                return { status: 'pending' as const, taskId, turnId };
+              }
+              if (reloadSignal.aborted || remainingMilliseconds(observationDeadline, this.#now) === 0) {
+                return { status: 'pending' as const, taskId, turnId };
+              }
               assertConversation(taskId, task.conversationId, task.conversationUrl, reloaded);
               nextReloadAt += OBSERVATION_RELOAD_PERIOD_MS;
               while (nextReloadAt <= this.#now()) {
@@ -935,14 +950,30 @@ export class CollabService {
                 ? { status: 'pending' as const, taskId, turnId }
                 : null;
             }
-            const observed = await this.#browser.observeResponse(
-              taskId,
-              task.playwrightSession,
-              task.conversationId,
-              userTurnIdentity,
-              Math.min(remainingObservationMs, remainingUntilReloadMs),
-              observer,
-            );
+            const sliceDeadline = Math.min(observationDeadline, nextReloadAt);
+            const sliceEndsObservation = observationDeadline <= nextReloadAt;
+            const observationBudgetMs = remainingMilliseconds(sliceDeadline, this.#now);
+            const observationSignal = AbortSignal.timeout(observationBudgetMs);
+            let observed: BrowserObservationResult;
+            try {
+              observed = await this.#browser.observeResponse(
+                taskId,
+                task.playwrightSession,
+                task.conversationId,
+                userTurnIdentity,
+                observationBudgetMs,
+                observationSignal,
+                observer,
+              );
+            } catch (error) {
+              if (!observationSignal.aborted && remainingMilliseconds(sliceDeadline, this.#now) > 0) {
+                throw error;
+              }
+              return sliceEndsObservation ? { status: 'pending' as const, taskId, turnId } : null;
+            }
+            if (observationSignal.aborted || remainingMilliseconds(sliceDeadline, this.#now) === 0) {
+              return sliceEndsObservation ? { status: 'pending' as const, taskId, turnId } : null;
+            }
             if (observed.status === 'pending') {
               return remainingMilliseconds(observationDeadline, this.#now) === 0
                 ? { status: 'pending' as const, taskId, turnId }

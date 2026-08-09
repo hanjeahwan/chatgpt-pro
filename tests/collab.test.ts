@@ -2567,28 +2567,25 @@ describe('BEH-012 returned file capture and recoverable publication', () => {
     store.close();
   });
 
-  it('never returns a successful pending after completion was observed even across the observation deadline', async () => {
-    const fixture = await reloadServiceFixture();
+  it('returns pending when a completed observation settles after the host deadline', async () => {
+    const fixture = await serviceFixture();
     await fixture.service.setup();
     const task = await fixture.start();
-    const promptPath = join(fixture.root, 'late-files.md');
-    await writeFile(promptPath, 'late files');
-    fixture.browser.responseArtifacts.push({
-      sourceUrl: 'sandbox:/mnt/data/late.txt',
-      label: 'late.txt',
-    });
-    fixture.browser.onObserveBudget = (budgetMs) => {
-      fixture.clock.advance(budgetMs);
-    };
+    const promptPath = join(fixture.root, 'late-observation.md');
+    await writeFile(promptPath, 'late observation');
+    fixture.browser.observeDelayMs = 50;
     const turn = await fixture.service.send(task.taskId, promptPath, []);
 
-    const completed = await fixture.service.wait(task.taskId, turn.turnId, 1, 20_000);
-    expect(completed).toMatchObject({ status: 'completed', artifactPaths: [expect.any(String)] });
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 1, 20_000)).resolves.toEqual({
+      status: 'pending',
+      taskId: task.taskId,
+      turnId: turn.turnId,
+    });
+    expect(fixture.browser.observeAbortCount).toBe(1);
     expect(fixture.browser.observeResponseBudgets).toEqual([1]);
-    const artifactPaths = (completed as unknown as { artifactPaths: string[] }).artifactPaths;
-    expect(await readFile(artifactPaths[0] ?? '', 'utf8')).toBe('artifact for sandbox:/mnt/data/late.txt');
     const store = new StateStore(fixture.paths.database);
-    expect(store.requireTurn(task.taskId, turn.turnId).status).toBe('completed');
+    expect(store.requireTurn(task.taskId, turn.turnId).status).toBe('pending');
+    expect(store.getTaskOperation(task.taskId)).toBeNull();
     store.close();
   });
 });
@@ -2679,6 +2676,34 @@ describe('BEH-004 periodic reload during pending observation', () => {
     const store = new StateStore(fixture.paths.database);
     expect(store.requireTurn(task.taskId, turn.turnId)).toMatchObject({ status: 'pending', responsePath: null });
     expect(store.listArtifacts(task.taskId, turn.turnId)).toEqual([]);
+    store.close();
+  });
+
+  it('returns pending when reload consumes the last host observation budget', async () => {
+    const fixture = await reloadServiceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const promptPath = join(fixture.root, 'reload-deadline.md');
+    await writeFile(promptPath, 'reload deadline');
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+    fixture.browser.pendingWaitPolls = 1;
+    fixture.browser.onPendingPoll = null;
+    fixture.browser.onObserveBudget = (budgetMs) => {
+      fixture.clock.advance(budgetMs);
+    };
+    fixture.browser.reloadDelayMs = 50;
+
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 300_001, 20_000)).resolves.toEqual({
+      status: 'pending',
+      taskId: task.taskId,
+      turnId: turn.turnId,
+    });
+    expect(fixture.browser.reloadConversationCalls).toBe(1);
+    expect(fixture.browser.reloadAbortCount).toBe(1);
+    expect(fixture.browser.observeResponseCalls).toBe(1);
+    const store = new StateStore(fixture.paths.database);
+    expect(store.requireTurn(task.taskId, turn.turnId).status).toBe('pending');
+    expect(store.getTaskOperation(task.taskId)).toBeNull();
     store.close();
   });
 
@@ -3643,6 +3668,8 @@ class FakeBrowser implements CollabBrowser {
   cleanSendComposerFailuresRemaining = 0;
   pendingWaitPolls = 0;
   waitPollDelayMs = 0;
+  observeDelayMs = 0;
+  observeAbortCount = 0;
   captureDelayMs = 0;
   captureNeverSettles = false;
   captureAbortCount = 0;
@@ -3653,6 +3680,8 @@ class FakeBrowser implements CollabBrowser {
   readonly reloadedConversationUrls: string[] = [];
   readonly reloadedUserTurnIds: string[] = [];
   reloadConversationCalls = 0;
+  reloadDelayMs = 0;
+  reloadAbortCount = 0;
   nextReloadConversationFailureTaskId: string | null = null;
   nextReloadConversationUrlMismatchTaskId: string | null = null;
   onPendingPoll: (() => void) | null = null;
@@ -3907,6 +3936,7 @@ class FakeBrowser implements CollabBrowser {
    * @param expectedConversationUrl Database-bound exact canonical URL passed to the reload.
    * @param expectedConversationId Database-bound identity.
    * @param expectedUserTurnId Persisted user turn anchor passed to the reload.
+   * @param signal Host observation cancellation.
    * @param observer Task-lease child-process observer.
    * @returns The unchanged fake conversation identity, or a same-id URL mismatch when armed.
    * @throws {BrowserError} When the injected identity-drift failure is armed.
@@ -3917,6 +3947,7 @@ class FakeBrowser implements CollabBrowser {
     expectedConversationUrl: string,
     expectedConversationId: string,
     expectedUserTurnId: string,
+    signal: AbortSignal,
     observer?: BrowserOperationObserver,
   ) {
     this.observe(observer);
@@ -3924,6 +3955,11 @@ class FakeBrowser implements CollabBrowser {
     this.reloadedConversations.push(expectedConversationId);
     this.reloadedConversationUrls.push(expectedConversationUrl);
     this.reloadedUserTurnIds.push(expectedUserTurnId);
+    if (this.reloadDelayMs > 0) {
+      await abortableCaptureDelay(this.reloadDelayMs, signal, () => {
+        this.reloadAbortCount += 1;
+      });
+    }
     if (this.nextReloadConversationFailureTaskId === taskId) {
       this.nextReloadConversationFailureTaskId = null;
       throw new BrowserError(
@@ -4180,6 +4216,7 @@ class FakeBrowser implements CollabBrowser {
    * @param expectedConversationId Database-bound identity.
    * @param expectedUserTurnId Persisted user turn anchor.
    * @param observationWindowMs Finite observation slice budget passed by the wait schedule.
+   * @param signal Host observation cancellation.
    * @param observer Task-lease child-process observer.
    * @returns Fake copied response and unchanged conversation.
    * @throws {Error} This fake wait does not throw.
@@ -4190,6 +4227,7 @@ class FakeBrowser implements CollabBrowser {
     expectedConversationId: string,
     expectedUserTurnId: string,
     observationWindowMs: number,
+    signal: AbortSignal,
     observer?: BrowserOperationObserver,
   ) {
     this.observe(observer);
@@ -4197,6 +4235,11 @@ class FakeBrowser implements CollabBrowser {
     this.observeResponseBudgets.push(observationWindowMs);
     this.onObserveBudget?.(observationWindowMs);
     this.observedUserTurnIds.push(expectedUserTurnId);
+    if (this.observeDelayMs > 0) {
+      await abortableCaptureDelay(this.observeDelayMs, signal, () => {
+        this.observeAbortCount += 1;
+      });
+    }
     if (this.pendingWaitPolls > 0) {
       this.pendingWaitPolls -= 1;
       await new Promise<void>((resolve) => {

@@ -1289,12 +1289,14 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
       }),
     ]);
 
+    const observationController = new AbortController();
     const observed = await fixture.browser.observeResponse(
       'task-a',
       'session-a',
       'conversation-a',
       'conversation-turn-user',
       5000,
+      observationController.signal,
     );
     const controller = new AbortController();
     const captured = await fixture.browser.captureResponse(
@@ -1314,6 +1316,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
       response: 'full response\n```ts\nconst value = 1;\n```',
       artifacts: [{ sourceUrl: 'sandbox:/mnt/data/result.txt', label: 'result.txt' }],
     });
+    expect(fixture.invocations[0]?.signal).toBe(observationController.signal);
     expect(fixture.invocations[1]?.signal).toBe(controller.signal);
     expect(observationSource).toContain('stableCompletedPolls < 6');
     expect(observationSource).toContain("kind: 'observe', status: 'pending'");
@@ -1343,7 +1346,14 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     const fixture = await executableCompletionFixture({ assistantTurnId: 'conversation-turn-t1', stopVisible: false });
 
     await expect(
-      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'conversation-turn-user', 5000),
+      fixture.browser.observeResponse(
+        'task-a',
+        'session-a',
+        'conversation-a',
+        'conversation-turn-user',
+        5000,
+        new AbortController().signal,
+      ),
     ).resolves.toEqual({
       status: 'completed',
       conversationId: 'conversation-a',
@@ -1357,7 +1367,14 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     const fixture = await executableCompletionFixture({ stopVisible: true });
 
     await expect(
-      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'conversation-turn-user', 5000),
+      fixture.browser.observeResponse(
+        'task-a',
+        'session-a',
+        'conversation-a',
+        'conversation-turn-user',
+        5000,
+        new AbortController().signal,
+      ),
     ).resolves.toEqual({
       status: 'pending',
     });
@@ -1368,7 +1385,14 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     const fixture = await executableCompletionFixture({ stopVisible: false });
 
     await expect(
-      fixture.browser.observeResponse('task-a', 'session-a', 'conversation-a', 'unknown-anchor', 5000),
+      fixture.browser.observeResponse(
+        'task-a',
+        'session-a',
+        'conversation-a',
+        'unknown-anchor',
+        5000,
+        new AbortController().signal,
+      ),
     ).rejects.toThrow(/persisted user turn anchor is absent or not unique/);
   });
 
@@ -2083,12 +2107,14 @@ describe('BEH-013 browser boundary support', () => {
       }),
     ]);
 
+    const controller = new AbortController();
     const result = await fixture.browser.reloadConversation(
       'task-a',
       'session-a',
       'https://chatgpt.com/c/conversation-a',
       'conversation-a',
       'user-turn-a',
+      controller.signal,
     );
 
     expect(result).toEqual({
@@ -2098,6 +2124,8 @@ describe('BEH-013 browser boundary support', () => {
     expect(fixture.invocations[0]?.arguments).toEqual(
       expect.arrayContaining([expect.stringContaining('--raw'), 'reload']),
     );
+    expect(fixture.invocations[0]?.signal).toBe(controller.signal);
+    expect(fixture.invocations[1]?.signal).toBe(controller.signal);
     const source = await scriptForInvocation(fixture.invocations[1]);
     expect(source).toContain("kind: 'reload-verified'");
     expect(source).toContain('user-turn-a');
@@ -2124,6 +2152,7 @@ describe('BEH-013 browser boundary support', () => {
       'https://chatgpt.com/c/conversation-a',
       'conversation-a',
       'conversation-turn-user-1',
+      new AbortController().signal,
     );
 
     expect(result).toEqual({
@@ -2146,6 +2175,7 @@ describe('BEH-013 browser boundary support', () => {
         'https://chatgpt.com/c/conversation-a',
         'conversation-a',
         'user-turn-a',
+        new AbortController().signal,
       )
       .then(() => {
         throw new Error('reload unexpectedly accepted a different canonical URL');

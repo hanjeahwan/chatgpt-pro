@@ -651,6 +651,7 @@ export class PlaywrightBrowser {
    * @param expectedConversationUrl Database-bound exact canonical conversation URL.
    * @param expectedConversationId Database-bound canonical identity.
    * @param expectedUserTurnId Persisted exact identity of the pending user turn.
+   * @param signal Host cancellation bounded by the observation deadline.
    * @param observer Task-lease child-process observer.
    * @returns The re-verified conversation identity and URL.
    * @throws {BrowserError} If the reload command fails or the rehydrated identity drifts.
@@ -662,9 +663,20 @@ export class PlaywrightBrowser {
     expectedConversationUrl: string,
     expectedConversationId: string,
     expectedUserTurnId: string,
+    signal: AbortSignal,
     observer?: BrowserOperationObserver,
   ): Promise<{ readonly conversationId: string; readonly conversationUrl: string }> {
-    await this.#invoke(sessionName, taskId, ['reload'], 'reload pending conversation', observer);
+    await this.#invoke(
+      sessionName,
+      taskId,
+      ['reload'],
+      'reload pending conversation',
+      observer,
+      undefined,
+      undefined,
+      undefined,
+      signal,
+    );
     const result = await this.#runCode<ReloadVerifiedProtocolResult>(
       sessionName,
       taskId,
@@ -673,6 +685,7 @@ export class PlaywrightBrowser {
       'verify reloaded conversation identity',
       'reload-verified',
       observer,
+      signal,
     );
     return { conversationId: result.conversationId, conversationUrl: result.conversationUrl };
   }
@@ -866,6 +879,7 @@ export class PlaywrightBrowser {
    * @param expectedConversationId Database-bound conversation identity.
    * @param expectedUserTurnId Persisted exact identity of the submitted user turn.
    * @param observationWindowMs Remaining finite observation budget.
+   * @param signal Host cancellation bounded by the same observation slice.
    * @param observer Task-lease child-process observer.
    * @returns Pending, or the re-observed completed conversation identity.
    * @throws {BrowserError} If the session exits, the user anchor is absent or not unique,
@@ -878,6 +892,7 @@ export class PlaywrightBrowser {
     expectedConversationId: string,
     expectedUserTurnId: string,
     observationWindowMs: number,
+    signal: AbortSignal,
     observer?: BrowserOperationObserver,
   ): Promise<BrowserObservationResult> {
     const result = await this.#runCode<ObservationProtocolResult>(
@@ -888,6 +903,7 @@ export class PlaywrightBrowser {
       'observe response completion',
       'observe',
       observer,
+      signal,
     );
     if (result.status === 'pending') {
       return { status: 'pending' };
