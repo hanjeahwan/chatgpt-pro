@@ -1,19 +1,29 @@
 # ChatGPT Pro Collab
 
-ChatGPT Pro Collab 是一个给本地 Agent 使用的协作 Skill。你把任务交给本地 Agent；本地 Agent 选择必要的 prompt 和附件，通过这个 Skill 调用 ChatGPT Pro Web，再把 Pro 的原始回复和文件带回本地验证、修改或继续追问。
+ChatGPT Pro Collab 是连接本地 Agent 与 ChatGPT Pro Web 的双向协作 Skill。任意一方都可以主导分析和方案：本地 Agent 可以把明确任务交给 Pro；Pro 也可以在自己的沙盒中分析、生成 patch 或文件，再要求本地 Agent apply、测试并回传结果。
 
-它不是独立聊天客户端，也不是让 ChatGPT Pro 直接操作本地仓库。Collab 只负责连接两端、维护会话和保存记录；是否采用 Pro 的结果，仍由本地 Agent 和你决定。
+双方权限并不对称：Pro 不能直接访问或修改本地仓库，本地 Agent 始终负责本地文件范围、执行和验证。Collab 只负责连接两端、维护会话和保存记录；是否采用 Pro 的结果，仍由本地 Agent 和你决定。
 
 ![Codeartz AI 猫代表本地 Agent，把任务和附件送入独立 ChatGPT Pro 会话，并取回原始回复与文件](assets/chatgpt-pro-collab-readme-illustrations/01-collaboration-loop.png)
 
 ## 谁负责什么
 
-| 角色               | 职责                                                                      |
-| ------------------ | ------------------------------------------------------------------------- |
-| 你                 | 提出目标，决定允许发送的文件，并决定是否继续、应用、归档或关闭任务        |
-| 本地 Agent         | 理解仓库、准备 prompt 和附件、调用 Skill、验证 Pro 输出，并按你的要求实施 |
-| ChatGPT Pro Collab | 管理隔离浏览器、conversation、多轮等待、文件捕获、中断恢复和审计记录      |
-| ChatGPT Pro        | 只根据收到的 prompt 和附件完成有界协作任务，不假设能直接访问本地环境      |
+| 角色               | 职责                                                                         |
+| ------------------ | ---------------------------------------------------------------------------- |
+| 你                 | 提出目标，决定允许发送的文件，并决定是否继续、应用、归档或关闭任务           |
+| 本地 Agent         | 理解仓库、准备输入；也可执行 Pro 提出的本地操作、apply patch、测试并回传结果 |
+| ChatGPT Pro Collab | 管理隔离浏览器、conversation、多轮等待、文件捕获、中断恢复和审计记录         |
+| ChatGPT Pro        | 在收到的上下文和沙盒内分析、主导方案、生成 patch 或文件，并提出验证需求      |
+
+## 两种主导方式
+
+**本地 Agent 主导：** 本地 Agent 已有实现方向，把具体审查、研究或生成任务交给 Pro；取回结果后由本地 Agent 判断和集成。
+
+**ChatGPT Pro 主导：** 本地 Agent 提供问题与必要上下文，Pro 决定分析路径，在沙盒中生成 patch 或其他产物；本地 Agent 取回产物，在真实工作区 apply、运行测试，再把错误、diff 或验证结果发回同一 Pro conversation。
+
+```text
+本地问题与上下文 → Pro 沙盒分析与产物 → 本地 apply 与验证 → 结果回传 Pro → 继续收敛
+```
 
 ## 适合什么场景
 
@@ -45,13 +55,17 @@ Agent 会打开独立浏览器。你只需在浏览器中完成登录；验证�
 
 > 使用 ChatGPT Pro Collab 审查当前实现的恢复逻辑。只发送 `src/recovery.ts` 和 `tests/recovery.test.ts`。等待完成后先总结 findings，不要直接修改代码。
 
+如果希望 Pro 主导，可以这样说：
+
+> 让 ChatGPT Pro 主导修复当前恢复问题。只发送相关实现与测试；允许 Pro 在沙盒生成 patch。本地 Agent 取回后先检查并 apply，运行测试，再把结果回传 Pro 继续收敛。
+
 本地 Agent 会：
 
 1. 生成新的 `taskId`，启动独立 Pro browser session。
 2. 把固定协作合同、当前任务和明确选择的附件作为首条消息发送。
 3. 保存返回的 `turnId`，在有限观察窗口内等待。
-4. 读取原始 `response.md` 和返回文件，结合本地事实验证结果。
-5. 向你报告结论；只有获得相应授权后才修改或集成。
+4. 读取原始 `response.md`、patch 和其他返回文件。
+5. 按你的授权在真实工作区检查、apply 和测试，再把验证结果发回同一 conversation，或向你报告最终结论。
 
 ### 继续同一个 conversation
 
@@ -89,7 +103,7 @@ Collab 会持久保存 task、turn、operation 和页面证据。进程中断或
 - 本地 Agent 只发送当前任务明确选择的 prompt 和附件；大量文件会先由 Agent 打包并核对成员。
 - Prompt 在 Web 与本地审计副本之间保持逐字一致，因此文件首尾不能有空白，包括终止换行。
 - `wait` 到期会返回 `pending`，不会停止 Pro 生成；连续 300000ms 未捕获时会 reload 同一 conversation。
-- 完成后返回未经改写的 `responsePath` 和按回复顺序保存的 `artifactPaths`。
+- 完成后返回未经改写的 `responsePath` 和按回复顺序保存的 `artifactPaths`；artifact 可以是 Pro 沙盒生成的 patch、源码、报告或其他文件。
 - 普通 `https:` 链接不会下载；只有回复中的 `sandbox:` 文件进入 artifact 捕获。
 - Collab 不扫描或理解仓库，不应用 Pro 回复，也不执行、提交、合并或发布代码。
 
