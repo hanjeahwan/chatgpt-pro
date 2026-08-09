@@ -17,6 +17,7 @@ const COMMAND_PID_NOTIFICATION_FAILED_EXIT_CODE = 70;
 const COMMAND_SPAWN_FAILED_EXIT_CODE = 127;
 const COMMAND_STOPPED_BEFORE_SPAWN_EXIT_CODE = 128;
 const COMMAND_ABORT_GRACE_MS = 100;
+const COMMAND_HOST_DEADLINE_MS = 10 * 60 * 1000;
 
 export interface BrowserCommandInvocation {
   readonly executable: string;
@@ -325,6 +326,7 @@ export class PlaywrightBrowser {
       'await-login',
       loginWaitScript(),
       'wait for interactive login',
+      null,
     );
   }
 
@@ -506,6 +508,7 @@ export class PlaywrightBrowser {
             PLAYWRIGHT_MCP_ALLOW_UNRESTRICTED_FILE_ACCESS: 'true',
             PLAYWRIGHT_MCP_OUTPUT_DIR: join(taskDirectory(this.#paths, taskId), 'playwright'),
           },
+          signal: AbortSignal.timeout(COMMAND_HOST_DEADLINE_MS),
         }).then((listed) => {
           return parseSessionPid(listed.stdout, sessionName);
         });
@@ -557,6 +560,7 @@ export class PlaywrightBrowser {
           PLAYWRIGHT_MCP_ALLOW_UNRESTRICTED_FILE_ACCESS: 'true',
           PLAYWRIGHT_MCP_OUTPUT_DIR: join(taskDirectory(this.#paths, 'playwright-probe'), 'playwright'),
         },
+        signal: AbortSignal.timeout(COMMAND_HOST_DEADLINE_MS),
       });
     } catch {
       return 'unknown';
@@ -1327,7 +1331,8 @@ export class PlaywrightBrowser {
    * @param beforeCommandRelease Called after the gate is durably observed and immediately before command release.
    * @param onCommandStarted Called after a command PID or equivalent conservative start evidence is observed.
    * @param onCommandNotSpawned Called only when the gate proves the guarded command did not spawn.
-   * @param signal Host cancellation that safely terminates the gate and guarded command.
+   * @param signal Host cancellation that safely terminates the gate and guarded command;
+   *   null is reserved for the interactive login wait.
    * @returns Captured stdout and stderr.
    * @throws {BrowserError} If `npx` exits unsuccessfully or cannot start.
    */
@@ -1340,7 +1345,7 @@ export class PlaywrightBrowser {
     beforeCommandRelease?: () => void,
     onCommandStarted?: () => void,
     onCommandNotSpawned?: () => void,
-    signal?: AbortSignal,
+    signal: AbortSignal | null = AbortSignal.timeout(COMMAND_HOST_DEADLINE_MS),
   ): Promise<BrowserCommandOutput> {
     const outputDirectory = join(taskDirectory(this.#paths, taskId), 'playwright');
     try {
@@ -1387,7 +1392,7 @@ export class PlaywrightBrowser {
                 beforeCommandRelease();
               },
             }),
-        ...(signal === undefined ? {} : { signal }),
+        ...(signal === null ? {} : { signal }),
       });
     } catch (error) {
       throw new BrowserError('BROWSER_COMMAND_FAILED', operation, errorMessage(error));
@@ -1442,6 +1447,7 @@ export class PlaywrightBrowser {
    * @param action Audit-friendly script filename label.
    * @param source Page function source.
    * @param operation Concrete operation for failures.
+   * @param signal Host cancellation, or null only for the interactive login wait.
    * @returns Nothing after the page function completes.
    * @throws {BrowserError} If the command fails.
    * @throws {Error} If the script file cannot be written.
@@ -1452,9 +1458,20 @@ export class PlaywrightBrowser {
     action: string,
     source: string,
     operation: string,
+    signal?: AbortSignal | null,
   ): Promise<void> {
     const scriptPath = await savePlaywrightScript(this.#paths, taskId, action, source);
-    await this.#invoke(sessionName, taskId, ['run-code', '--filename', scriptPath], operation);
+    await this.#invoke(
+      sessionName,
+      taskId,
+      ['run-code', '--filename', scriptPath],
+      operation,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      signal,
+    );
   }
 
   /**
@@ -1618,7 +1635,7 @@ export function runBrowserCommand(invocation: BrowserCommandInvocation): Promise
         invocation.onCommandSpawned?.(reportedCommandPid);
       } catch (error) {
         commandObserverError = error;
-        child.kill('SIGTERM');
+        abortCommand();
       }
     });
     child.on('error', (error) => {

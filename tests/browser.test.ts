@@ -35,6 +35,21 @@ class CommandStartedError extends Error {}
 class CommandNotSpawnedError extends Error {}
 
 describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
+  it('bounds non-interactive browser commands without timing out interactive login', async () => {
+    const fixture = await browserFixture([
+      output('  (no browsers)'),
+      output('setup browser opened'),
+      output('interactive login completed'),
+    ]);
+
+    await fixture.browser.setupOpen('chatgpt-pro-collab-setup-live');
+
+    expect(fixture.invocations).toHaveLength(3);
+    expect(fixture.invocations[0]?.signal).toBeDefined();
+    expect(fixture.invocations[1]?.signal).toBeDefined();
+    expect(fixture.invocations[2]?.signal).toBeUndefined();
+  });
+
   it('verifies a seed in a distinct named session even when the interactive setup session is logged in', async () => {
     const fixture = await browserFixture([
       output('### Browsers\n- chatgpt-pro-collab-setup-live:\n  - status: open\n  - pid: 100\n'),

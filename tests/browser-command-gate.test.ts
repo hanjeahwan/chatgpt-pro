@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { access, mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -166,6 +167,67 @@ describe('browser command side-effect gate', () => {
       await Promise.all([waitForPidExit(commandPid), waitForPidExit(grandchildPid)]);
     } finally {
       for (const pid of [commandPid, grandchildPid]) {
+        if (pid !== undefined) {
+          try {
+            process.kill(pid, 'SIGKILL');
+          } catch {
+            // The expected path has already terminated the process.
+          }
+        }
+      }
+    }
+  });
+
+  it('force-aborts a guarded command that ignores SIGTERM when its command observer fails', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-command-observer-failure-'));
+    const readyPath = join(root, 'command-ready');
+    let gatePid: number | undefined;
+    let commandPid: number | undefined;
+    let deadlineTimer: NodeJS.Timeout | undefined;
+
+    try {
+      const completion = runBrowserCommand({
+        executable: process.execPath,
+        arguments: [
+          '-e',
+          `process.on('SIGTERM', () => {}); require('node:fs').writeFileSync(${JSON.stringify(readyPath)}, 'ready'); setInterval(() => {}, 1000)`,
+        ],
+        cwd: root,
+        environment: process.env,
+        onChildSpawned(pid) {
+          gatePid = pid;
+        },
+        onCommandSpawned(pid) {
+          commandPid = pid;
+          const readyDeadline = Date.now() + 2000;
+          while (!existsSync(readyPath)) {
+            if (Date.now() >= readyDeadline) {
+              throw new Error('guarded command did not install its SIGTERM handler');
+            }
+            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+          }
+          throw new Error('fixture command observer failed');
+        },
+      });
+      const boundedCompletion = Promise.race([
+        completion,
+        new Promise<never>((_resolve, reject) => {
+          deadlineTimer = setTimeout(() => {
+            reject(new Error('command observer failure did not settle the guarded command'));
+          }, 1000);
+        }),
+      ]);
+
+      await expect(boundedCompletion).rejects.toThrow('fixture command observer failed');
+      if (gatePid === undefined || commandPid === undefined) {
+        throw new Error('observer failure test did not observe both process identifiers');
+      }
+      await Promise.all([waitForPidExit(gatePid), waitForPidExit(commandPid)]);
+    } finally {
+      if (deadlineTimer !== undefined) {
+        clearTimeout(deadlineTimer);
+      }
+      for (const pid of [gatePid, commandPid]) {
         if (pid !== undefined) {
           try {
             process.kill(pid, 'SIGKILL');
