@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -578,13 +578,24 @@ describe('BEH-013 failed-response and capture-abandonment state gate', () => {
     seedActiveTask(store, 'task-a', 'session-a');
     pendingTurn(store, 'task-a', 'turn-a');
     const responsePath = join(root, 'response.md');
-    const artifactPath = join(root, 'artifact.txt');
+    const completedArtifactPath = join(root, 'completed.txt');
+    const pendingArtifactPath = join(root, 'pending.txt');
     store.freezeCapture('task-a', 'turn-a', responsePath, [
-      { sourceUrl: 'sandbox:/mnt/data/artifact.txt', label: 'artifact.txt' },
+      { sourceUrl: 'sandbox:/mnt/data/completed.txt', label: 'completed.txt' },
+      { sourceUrl: 'sandbox:/mnt/data/pending.txt', label: 'pending.txt' },
     ]);
     await writeFile(responsePath, 'published response');
-    store.setArtifactDestination('task-a', 'turn-a', 1, 'artifact.txt', artifactPath);
-    store.recordArtifactError('task-a', 'turn-a', 1, 'download unavailable');
+    store.setArtifactDestination('task-a', 'turn-a', 1, 'completed.txt', completedArtifactPath);
+    await writeFile(completedArtifactPath, 'completed artifact');
+    store.completeArtifact('task-a', 'turn-a', 1);
+    store.setArtifactDestination('task-a', 'turn-a', 2, 'pending.txt', pendingArtifactPath);
+    store.recordArtifactError('task-a', 'turn-a', 2, 'download unavailable');
+    const frozenResponse = await readFile(responsePath);
+    const frozenArtifacts = store.listArtifacts('task-a', 'turn-a');
+    expect(frozenArtifacts).toMatchObject([
+      { status: 'completed', localPath: completedArtifactPath, error: null },
+      { status: 'pending', localPath: pendingArtifactPath, error: 'download unavailable' },
+    ]);
 
     const failed = store.failTurnWithResolution('task-a', 'turn-a', {
       adjudication: 'failed',
@@ -602,9 +613,8 @@ describe('BEH-013 failed-response and capture-abandonment state gate', () => {
       resolvedAt: '2026-08-09T00:00:00.000Z',
       sourceStatus: 'capturing',
     });
-    expect(store.listArtifacts('task-a', 'turn-a')).toMatchObject([
-      { status: 'pending', localPath: artifactPath, error: 'download unavailable' },
-    ]);
+    await expect(readFile(responsePath)).resolves.toEqual(frozenResponse);
+    expect(store.listArtifacts('task-a', 'turn-a')).toEqual(frozenArtifacts);
     store.beginSendTurn('task-a', 'turn-b', '/next.md', [], 'operation-b');
     store.close();
   });

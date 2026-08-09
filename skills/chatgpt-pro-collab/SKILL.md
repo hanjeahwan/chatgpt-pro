@@ -76,7 +76,7 @@ node "<skill-directory>/scripts/collab.ts" wait <taskId> <turnId> <observationWi
 
 `wait` 观察期间，同一 turn 连续 300000ms 仍未捕获时，Collab 会在该次等待内自动 reload 当前 conversation 以重新水合页面，再继续观察与捕获；触发只由时间决定，不检查页面完成信号，reload 不终止远端生成、不改变 turn 状态，观察窗口到期仍正常返回 `pending`。不要把 reload 或 repeated `pending` 当作失败依据；只有用户明确确认失败时才执行下面的裁决。
 
-只有用户明确说明该 Pro response 已失败或终止时，才裁决原 turn：
+只有用户明确说明该 Pro response 已失败或终止，或永久无法完成 capturing 且决定放弃时，才裁决原 turn：
 
 ```sh
 node "<skill-directory>/scripts/collab.ts" resolve-turn <taskId> <turnId> failed
