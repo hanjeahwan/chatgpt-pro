@@ -280,6 +280,26 @@ describe('BEH-002, BEH-005, BEH-007, and BEH-008 state gates', () => {
     reopened.close();
   });
 
+  it('retains the latest recorded evidence while the current operation has none', () => {
+    const databasePath = join(tmpdir(), `collab-status-evidence-${crypto.randomUUID()}.sqlite`);
+    const store = new StateStore(databasePath);
+    const evidence = {
+      observedAt: '2026-08-09T00:00:00.000Z',
+      sessionName: 'session-a',
+      postcondition: 'start session verified',
+    };
+    store.createStartingTask('task-a', 'session-a', 'start-operation-a');
+    store.finishStartTask('task-a', 'start-operation-a', 'active', evidence);
+    store.beginSendTurn('task-a', 'turn-a', '/prompt.md', [], 'send-operation-a');
+
+    expect(store.getStatus('task-a', 'available')).toMatchObject({
+      operationKind: 'send',
+      operationPhase: 'prepared',
+      evidence,
+    });
+    store.close();
+  });
+
   it('reports only the latest terminal turn failure after active work has settled', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collab-terminal-turn-status-'));
     const store = new StateStore(join(root, 'state.sqlite'));

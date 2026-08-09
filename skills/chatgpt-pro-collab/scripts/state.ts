@@ -1884,6 +1884,13 @@ export class StateStore {
       });
       const turn = unresolved ?? unfinished.at(-1) ?? null;
       const operation = this.getUncommittedTaskOperation(taskId);
+      const operations = this.listOperations(taskId);
+      const evidence =
+        operation?.evidence ??
+        operations.findLast((candidate) => {
+          return candidate.evidence !== null;
+        })?.evidence ??
+        null;
       const artifactError =
         turn?.status === 'capturing'
           ? this.listArtifacts(taskId, turn.id).find((artifact) => {
@@ -1894,7 +1901,7 @@ export class StateStore {
       let terminalError = latestTurn?.status === 'failed' ? latestTurn.error : null;
       if (task.status === 'failed' && latestTurn === null) {
         terminalError =
-          this.listOperations(taskId).findLast((candidate) => {
+          operations.findLast((candidate) => {
             return candidate.phase === 'committed' && candidate.error !== null;
           })?.error ?? null;
       }
@@ -1908,7 +1915,7 @@ export class StateStore {
         operationStep: operation?.step ?? null,
         operationPhase: operation?.phase ?? null,
         operationProgress: operation?.progress ?? null,
-        evidence: operation?.evidence ?? null,
+        evidence,
         error: statusError ?? turn?.error ?? operation?.error ?? artifactError ?? terminalError,
         nextAction: computeNextAction(task, turn, operation, browserStatus),
       };
