@@ -70,4 +70,9 @@ describe('VER-012 runtime prerequisites', () => {
     const help = execFileSync('npx', ['-y', '@playwright/cli@0.1.17', '--help'], { encoding: 'utf8' });
     expect(help).toContain('playwright-cli');
   });
+
+  it('accepts an empty or populated fixed Playwright CLI browser list', () => {
+    const list = execFileSync('npx', ['-y', '@playwright/cli@0.1.17', '--raw', 'list'], { encoding: 'utf8' }).trim();
+    expect(list === '(no browsers)' || list.startsWith('### Browsers\n')).toBe(true);
+  });
 });

@@ -224,14 +224,15 @@
 
 ### SQLite 合同
 
-SQLite 只保存协调状态和文件索引，不保存 prompt、response 或返回文件正文。目标 schema 包含四张表：
+SQLite 只保存协调状态和文件索引，不保存 prompt、response 或返回文件正文。目标 schema 包含五张表：
 
-| 表          | 主键                        | 必要字段                                                                                                                                                                       |
-| ----------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `task`      | `id`                        | `playwright_session`、`conversation_id`、`conversation_url`、`status`、browser-operation lease 字段、`created_at`、`updated_at`、`closed_at`                                   |
-| `turn`      | `task_id, id`               | `status`、`prompt_path`、`attachments_json`、可空 `user_turn_identity`、`response_path`、`error`、`created_at`、`updated_at`                                                   |
-| `artifact`  | `task_id, turn_id, ordinal` | `source_url`、`label`、`filename`、`local_path`、`status`、`error`、`created_at`、`updated_at`                                                                                 |
-| `operation` | `id`                        | `kind`、`step`、`phase`、`progress`、可空 `task_id`、可空 `turn_id`、`session_name`、`evidence_json`、`resolution_source`、`error`、`created_at`、`updated_at`、`committed_at` |
+| 表            | 主键                        | 必要字段                                                                                                                                                                       |
+| ------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `task`        | `id`                        | `playwright_session`、`conversation_id`、`conversation_url`、`status`、browser-operation lease 字段、`created_at`、`updated_at`、`closed_at`                                   |
+| `setup_lease` | `singleton`                 | `browser_operation_token`、`browser_operation_pid`、可空 `browser_operation_child_pid`、可空 `browser_operation_command_pid`                                                   |
+| `turn`        | `task_id, id`               | `status`、`prompt_path`、`attachments_json`、可空 `user_turn_identity`、`response_path`、`artifact_set_recorded`、`error`、`created_at`、`updated_at`                          |
+| `artifact`    | `task_id, turn_id, ordinal` | `source_url`、`label`、`filename`、`local_path`、`status`、`error`、`created_at`、`updated_at`                                                                                 |
+| `operation`   | `id`                        | `kind`、`step`、`phase`、`progress`、可空 `task_id`、可空 `turn_id`、`session_name`、`evidence_json`、`resolution_source`、`error`、`created_at`、`updated_at`、`committed_at` |
 
 `task.status` 只允许 `starting | active | closing | closed | failed`；`turn.status` 只允许 `sending | pending | capturing | completed | failed | unknown-submission`；`artifact.status` 只允许 `pending | completed`。`pending`、`capturing` 和 `completed` turn 必须有唯一 `user_turn_identity`，其他状态允许为空。`operation.kind` 只允许 `setup | start | send | archive`；`step` 按 kind 只允许 `setup: login | seed | cleanup`、`start: session | project | configuration`、`send: draft | submit`、`archive: archive | restore`；`progress` 是当前 step 已验证的非负序号。`operation.phase` 只允许 `prepared | effect-unknown | needs-decision | committed`，`resolution_source` 只允许空值、`automatic` 或 `human`。`turn.task_id` 与 artifact 的 task/turn 组合使用外键关联，session name 唯一，单个 turn 的 `source_url` 唯一；每个 task 同时最多一个未 `committed` operation，全局同时最多一个未 `committed` setup operation。所有时间使用 ISO 8601 UTC 字符串；附件数组和 evidence 按稳定 schema 编码为 JSON 字符串。
 
@@ -305,8 +306,8 @@ operation journal 只承载可能因进程退出而丢失确认的浏览器副�
 
 - **覆盖对象**：BEH-001。
 - **前置条件**：可交互登录的 Pro 账号、干净认证目录，以及满足 BEH-002 启动前提的现有 Project、模型与 Power 控件。
-- **执行或检查**：使用固定 Playwright CLI 登录并 `state-save`；分别在 seed 发布前、seed 验证后但 setup session 关闭前终止进程，再执行 `setup`；最后从同一 seed state 同时执行 `start task-a` 与 `start task-b`。
-- **通过证据**：seed 发布前中断不产生成功认证状态；seed 验证后的重试不要求重复登录，只关闭记录的 setup session；两个非持久 task session 均已登录且未再次请求登录；seed 文件未被 task 改写。
+- **执行或检查**：使用固定 Playwright CLI 登录并 `state-save`；分别在 seed 发布前、seed 验证后但 setup session 关闭前终止进程，再执行 `setup`；最后从同一 seed state 同时执行 `start task-a` 与 `start task-b`。确定性进程夹具另让 setup owner 在 command 忽略 graceful signal 且 command PID 尚未写入 lease 时退出，并制造 dead owner 已记录且仍在运行的 gate 与 command 后再次执行 `setup`。
+- **通过证据**：seed 发布前中断不产生成功认证状态；seed 验证后的重试不要求重复登录，只关闭记录的 setup session；owner 退出后，专用 gate 有界终止实际持有的 command；后续 `setup` 不向 dead owner 记录的 PID 发送信号，只等待 gate 与 command 退出后沿原 journal 恢复；两个非持久 task session 均已登录且未再次请求登录；seed 文件未被 task 改写。
 - **证明边界**：不证明认证长期不过期。
 - **必需性**：必需。
 
@@ -404,8 +405,8 @@ operation journal 只承载可能因进程退出而丢失确认的浏览器副�
 
 - **覆盖对象**：BEH-001–BEH-013 的运行前提。
 - **前置条件**：Node.js v22.19.0、当前受支持 Node、npm/npx 和网络可用。
-- **执行或检查**：分别在最低与当前 Node 执行版本检查、`node:sqlite` DatabaseSync 内存库 smoke test 和最小 `.ts` 入口 smoke test；执行固定 Playwright CLI help 与无 browser 的 raw `list`。
-- **通过证据**：两个 Node 版本的 smoke test、`npx -y @playwright/cli@0.1.17 --help` 与 `npx -y @playwright/cli@0.1.17 --raw list` 退出码均为 0，list 结果可确定表达当前没有 browser。
+- **执行或检查**：分别在最低与当前 Node 执行版本检查、`node:sqlite` DatabaseSync 内存库 smoke test 和最小 `.ts` 入口 smoke test；执行固定 Playwright CLI help 与 raw `list`，不要求共享运行环境中没有 browser。
+- **通过证据**：两个 Node 版本的 smoke test、`npx -y @playwright/cli@0.1.17 --help` 与 `npx -y @playwright/cli@0.1.17 --raw list` 退出码均为 0；list 输出为 `(no browsers)` 或可解析的 `### Browsers` 列表。
 - **证明边界**：不证明登录、storage state、页面 selector 或归档工具。
 - **必需性**：必需。
 
