@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,6 +7,9 @@ import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
+
+import { PlaywrightBrowser } from '../skills/chatgpt-pro-collab/scripts/browser.ts';
+import { collabPaths } from '../skills/chatgpt-pro-collab/scripts/session.ts';
 
 const [nodeMajor, nodeMinor] = process.versions.node.split('.').map((part) => {
   return Number(part);
@@ -71,8 +75,10 @@ describe('VER-012 runtime prerequisites', () => {
     expect(help).toContain('playwright-cli');
   });
 
-  it('accepts an empty or populated fixed Playwright CLI browser list', () => {
-    const list = execFileSync('npx', ['-y', '@playwright/cli@0.1.17', '--raw', 'list'], { encoding: 'utf8' }).trim();
-    expect(list === '(no browsers)' || list.startsWith('### Browsers\n')).toBe(true);
+  it('parses the fixed Playwright CLI browser list through the production boundary', async () => {
+    const host = await mkdtemp(join(tmpdir(), 'collab-browser-list-'));
+    const browser = new PlaywrightBrowser(collabPaths(host), host);
+
+    await expect(browser.sessionAvailability(`runtime-probe-${randomUUID()}`)).resolves.toBe('missing');
   });
 });
