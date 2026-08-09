@@ -2568,12 +2568,15 @@ describe('BEH-012 returned file capture and recoverable publication', () => {
   });
 
   it('returns pending when a completed observation settles after the host deadline', async () => {
-    const fixture = await serviceFixture();
+    const fixture = await reloadServiceFixture();
     await fixture.service.setup();
     const task = await fixture.start();
     const promptPath = join(fixture.root, 'late-observation.md');
     await writeFile(promptPath, 'late observation');
     fixture.browser.observeDelayMs = 50;
+    fixture.browser.onObserveBudget = (budgetMs) => {
+      fixture.clock.advance(budgetMs);
+    };
     const turn = await fixture.service.send(task.taskId, promptPath, []);
 
     await expect(fixture.service.wait(task.taskId, turn.turnId, 1, 20_000)).resolves.toEqual({
