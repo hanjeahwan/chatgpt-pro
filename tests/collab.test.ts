@@ -2282,6 +2282,55 @@ describe('BEH-004 periodic reload during pending observation', () => {
     expect(finalStore.requireTurn(task.taskId, turn.turnId).status).toBe('completed');
     finalStore.close();
   });
+
+  it('performs the first page observation even when the wait lease exhausts the observation window', async () => {
+    const fixture = await reloadServiceFixture((paths, advance) => {
+      return new ClockAdvancingWaitLeaseStore(paths.database, () => {
+        advance(5);
+      });
+    });
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const promptPath = join(fixture.root, 'exhausted-window.md');
+    await writeFile(promptPath, 'exhausted window');
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 1, 20_000)).resolves.toMatchObject({
+      status: 'completed',
+      turnId: turn.turnId,
+    });
+    expect(fixture.browser.observeResponseCalls).toBe(1);
+    expect(fixture.browser.observeResponseBudgets).toEqual([1]);
+    expect(fixture.browser.reloadConversationCalls).toBe(0);
+    const store = new StateStore(fixture.paths.database);
+    expect(store.requireTurn(task.taskId, turn.turnId).status).toBe('completed');
+    store.close();
+  });
+
+  it('caps every observation slice at the next reload boundary and reloads there instead of consuming the whole window', async () => {
+    const fixture = await reloadServiceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const promptPath = join(fixture.root, 'slice-cadence.md');
+    await writeFile(promptPath, 'slice cadence');
+    const turn = await fixture.service.send(task.taskId, promptPath, []);
+    fixture.browser.pendingWaitPolls = 10_000;
+    fixture.browser.onPendingPoll = null;
+    fixture.browser.onObserveBudget = (budgetMs) => {
+      fixture.clock.advance(budgetMs);
+    };
+
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 700_000, 20_000)).resolves.toEqual({
+      status: 'pending',
+      taskId: task.taskId,
+      turnId: turn.turnId,
+    });
+    expect(fixture.browser.observeResponseBudgets).toEqual([300_000, 300_000, 100_000]);
+    expect(fixture.browser.reloadConversationCalls).toBe(2);
+    const store = new StateStore(fixture.paths.database);
+    expect(store.requireTurn(task.taskId, turn.turnId).status).toBe('pending');
+    store.close();
+  });
 });
 
 describe('BEH-013 status, recover, and resolve-submission', () => {
@@ -2814,6 +2863,44 @@ class FailTaskAfterArchiveLeaseStore extends StateStore {
   }
 }
 
+class ClockAdvancingWaitLeaseStore extends StateStore {
+  readonly #advance: () => void;
+
+  /**
+   * Advances the shared test clock at the wait lease boundary.
+   *
+   * @param databasePath State database path.
+   * @param advance Test clock advance callback.
+   * @throws {Error} This constructor does not perform I/O.
+   */
+  constructor(databasePath: string, advance: () => void) {
+    super(databasePath);
+    this.#advance = advance;
+  }
+
+  /**
+   * Simulates local wait overhead consuming wall-clock time before the first observation.
+   *
+   * @param taskId Task whose browser lease is acquired.
+   * @param operation Browser operation name.
+   * @param token Unique lease token.
+   * @param ownerPid Lease owner process identifier.
+   * @returns Nothing after the lease acquisition advances the clock.
+   * @throws {Error} If acquisition fails.
+   */
+  override acquireTaskOperation(
+    taskId: string,
+    operation: string,
+    token: string,
+    ownerPid: number = process.pid,
+  ): void {
+    super.acquireTaskOperation(taskId, operation, token, ownerPid);
+    if (operation === 'wait') {
+      this.#advance();
+    }
+  }
+}
+
 class FakeBrowser implements CollabBrowser {
   readonly paths: ReturnType<typeof collabPaths>;
   readonly conversations = new Map<string, string>();
@@ -2857,6 +2944,7 @@ class FakeBrowser implements CollabBrowser {
   captureNeverSettles = false;
   captureAbortCount = 0;
   observeResponseCalls = 0;
+  readonly observeResponseBudgets: number[] = [];
   readonly observedUserTurnIds: string[] = [];
   readonly reloadedConversations: string[] = [];
   readonly reloadedConversationUrls: string[] = [];
@@ -2865,6 +2953,7 @@ class FakeBrowser implements CollabBrowser {
   nextReloadConversationFailureTaskId: string | null = null;
   nextReloadConversationUrlMismatchTaskId: string | null = null;
   onPendingPoll: (() => void) | null = null;
+  onObserveBudget: ((budgetMs: number) => void) | null = null;
   onReload: (() => void) | null = null;
   downloadDelayMs = 0;
   downloadFailureDelayMs = 0;
@@ -3357,7 +3446,7 @@ class FakeBrowser implements CollabBrowser {
    * @param _sessionName Unused named session.
    * @param expectedConversationId Database-bound identity.
    * @param expectedUserTurnId Persisted user turn anchor.
-   * @param _observationWindowMs Unused finite observation budget.
+   * @param observationWindowMs Finite observation slice budget passed by the wait schedule.
    * @param observer Task-lease child-process observer.
    * @returns Fake copied response and unchanged conversation.
    * @throws {Error} This fake wait does not throw.
@@ -3367,11 +3456,13 @@ class FakeBrowser implements CollabBrowser {
     _sessionName: string,
     expectedConversationId: string,
     expectedUserTurnId: string,
-    _observationWindowMs: number,
+    observationWindowMs: number,
     observer?: BrowserOperationObserver,
   ) {
     this.observe(observer);
     this.observeResponseCalls += 1;
+    this.observeResponseBudgets.push(observationWindowMs);
+    this.onObserveBudget?.(observationWindowMs);
     this.observedUserTurnIds.push(expectedUserTurnId);
     if (this.pendingWaitPolls > 0) {
       this.pendingWaitPolls -= 1;
@@ -3701,10 +3792,13 @@ async function serviceFixture() {
  * Creates a service fixture whose monotonic wait clock and fake browser polls share one
  * test-controlled time base, so the 300000ms reload schedule runs deterministically.
  *
+ * @param storeFactory Optional state store factory receiving the shared clock.
  * @returns Fixture with the controllable clock, fake browser, and service.
  * @throws {Error} If the temporary fixture cannot be created.
  */
-async function reloadServiceFixture() {
+async function reloadServiceFixture(
+  storeFactory?: (paths: ReturnType<typeof collabPaths>, advance: (ms: number) => void) => StateStore,
+) {
   const root = await mkdtemp(join(tmpdir(), 'collab-reload-'));
   const paths = collabPaths(root);
   await ensureCollabDirectories(paths);
@@ -3725,9 +3819,13 @@ async function reloadServiceFixture() {
   const service = new CollabService(
     paths,
     browser,
-    () => {
-      return new StateStore(paths.database);
-    },
+    storeFactory === undefined
+      ? () => {
+          return new StateStore(paths.database);
+        }
+      : () => {
+          return storeFactory(paths, clock.advance);
+        },
     () => {
       id += 1;
       return `id-${id}`;

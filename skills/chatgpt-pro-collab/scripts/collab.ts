@@ -806,14 +806,19 @@ export class CollabService {
   /**
    * Observes within one finite window, then captures within one independent finite deadline.
    *
+   * Every positive observation window performs at least one page observation even when local
+   * wait overhead has exhausted the window: the first observation is never skipped for an
+   * early pending return or a reload, and a completed first observation still captures.
    * While the pending turn stays uncaptured, the same monotonic schedule unconditionally
    * reloads the bound canonical conversation every 300000ms of uncaptured time inside the
-   * observation budget; reload time counts against the original observation deadline and
-   * never terminates generation, changes turn state, or sends a continuation. The reload
-   * cadence stays anchored to the observation start: a reload's own duration counts toward
-   * the current period and never re-anchors the next trigger from reload completion. A
-   * reload that exhausts the observation budget returns pending without observing further.
-   * Capturing retries skip the reload schedule.
+   * observation budget. Each observation slice is capped at the smaller of the remaining
+   * observation budget and the time until the next reload, so no slice crosses the cadence
+   * and the next action at a reached boundary is the reload. Reload time counts against the
+   * original observation deadline and never terminates generation, changes turn state, or
+   * sends a continuation. The reload cadence stays anchored to the observation start: a
+   * reload's own duration counts toward the current period and never re-anchors the next
+   * trigger from reload completion. A reload that exhausts the observation budget returns
+   * pending without observing further. Capturing retries skip the reload schedule.
    *
    * @param taskId Active task identifier.
    * @param turnId Submitted turn identifier.
@@ -842,6 +847,7 @@ export class CollabService {
       }
       const initialTurn = store.requireTurn(taskId, turnId);
       let captureDeadline = initialTurn.status === 'capturing' ? waitStartedAt + captureTimeoutMs : null;
+      let observedOnce = false;
 
       while (true) {
         const result = await this.#withTaskOperation(store, taskId, 'wait', async (observer) => {
@@ -869,17 +875,18 @@ export class CollabService {
           let expectedAssistantTurnId: string | null = null;
           const captureWasPending = turn.status === 'pending';
           if (turn.status === 'pending') {
-            const remainingObservationMs = remainingMilliseconds(observationDeadline, this.#now);
-            if (remainingObservationMs === 0) {
-              return { status: 'pending' as const, taskId, turnId };
-            }
             if (turn.userTurnIdentity === null) {
               throw new CollabError(
                 'TRANSCRIPT_INCONSISTENT',
                 `pending turn has no persisted user turn identity: ${turnId}`,
               );
             }
-            if (this.#now() >= nextReloadAt) {
+            const remainingObservationMs = remainingMilliseconds(observationDeadline, this.#now);
+            const remainingUntilReloadMs = remainingMilliseconds(nextReloadAt, this.#now);
+            if (remainingObservationMs === 0 && observedOnce) {
+              return { status: 'pending' as const, taskId, turnId };
+            }
+            if (remainingObservationMs > 0 && remainingUntilReloadMs === 0) {
               const reloaded = await this.#browser.reloadConversation(
                 taskId,
                 task.playwrightSession,
@@ -902,9 +909,10 @@ export class CollabService {
               task.playwrightSession,
               task.conversationId,
               turn.userTurnIdentity,
-              remainingObservationMs,
+              Math.max(1, Math.min(remainingObservationMs, remainingUntilReloadMs)),
               observer,
             );
+            observedOnce = true;
             if (observed.status === 'pending') {
               return remainingMilliseconds(observationDeadline, this.#now) === 0
                 ? { status: 'pending' as const, taskId, turnId }
