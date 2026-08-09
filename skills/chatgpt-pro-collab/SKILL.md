@@ -110,7 +110,7 @@ node "<skill-directory>/scripts/collab.ts" status <taskId>
   node "<skill-directory>/scripts/collab.ts" resolve-submission <taskId> <turnId> not-submitted
   ```
 
-  `submitted` 必须提供无 query、fragment 和凭据的 `https://chatgpt.com/c/<conversationId>` canonical URL；Collab 验证其属于唯一 `chatgpt-pro-collab` Project、与已保存 prompt 及附件名称一致且唯一后，才把原 turn 置为 `pending`。`not-submitted` 只在页面恢复为安全 composer（已绑定 conversation 或唯一目标 Project 的空白 composer）且锚点之后没有匹配提交时，才把原 turn 置为 `failed`，之后由宿主显式重新 `send`。两个分支都不会自动发送消息。
+  `submitted` 必须提供无 query、fragment 和凭据的 `https://chatgpt.com/c/<conversationId>` 或 `https://chatgpt.com/g/g-p-<project>/c/<conversationId>` canonical URL；Collab 验证其属于唯一 `chatgpt-pro-collab` Project、与已保存 prompt 及附件名称一致且唯一后，才把原 turn 置为 `pending`。`not-submitted` 只在页面恢复为安全 composer（已绑定 conversation 或唯一目标 Project 的空白 composer）且锚点之后没有匹配提交时，才把原 turn 置为 `failed`，之后由宿主显式重新 `send`。输出丢失后可原样重试相同裁决；不同 verdict 或 submitted URL 会返回冲突，两个分支都不会自动发送消息。
 
 ## 6. 管理生命周期
 

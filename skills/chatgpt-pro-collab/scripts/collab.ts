@@ -1629,6 +1629,28 @@ export class CollabService {
       return this.#withTaskOperation(store, taskId, 'resolve-submission', async (observer) => {
         const task = store.requireTask(taskId);
         const turn = store.requireTurn(taskId, turnId);
+        const recordedResolution = store.listOperations(taskId).find((operation) => {
+          return (
+            operation.kind === 'send' &&
+            operation.turnId === turnId &&
+            operation.phase === 'committed' &&
+            operation.resolutionSource === 'human' &&
+            operation.evidence.decision !== undefined
+          );
+        });
+        if (recordedResolution !== undefined) {
+          if (
+            recordedResolution.evidence.decision !== verdict ||
+            (verdict === 'submitted' && recordedResolution.evidence.canonicalUrl !== canonicalUrl)
+          ) {
+            throw new CollabError(
+              'SUBMISSION_RESOLUTION_CONFLICT',
+              `submission was already resolved as ${recordedResolution.evidence.decision}: ${turnId}`,
+            );
+          }
+          const browserStatus = await this.#browser.sessionAvailability(task.playwrightSession);
+          return store.getStatus(taskId, browserStatus);
+        }
         if (turn.status !== 'unknown-submission') {
           throw new CollabError('TURN_NOT_RESOLVABLE', `turn is ${turn.status}: ${turnId}`);
         }
@@ -2199,7 +2221,7 @@ async function previousUserTurnIdentityBefore(
  * Validates the strict canonical conversation URL contract before any browser action.
  *
  * @param value Conversation URL supplied by the adjudication caller.
- * @returns The normalized `https://chatgpt.com/c/<conversationId>` URL.
+ * @returns The normalized plain or Project-scoped canonical conversation URL.
  * @throws {CollabError} If the URL is absent or violates the canonical grammar.
  */
 function requireCanonicalConversationUrl(value: string | undefined): string {
@@ -2210,19 +2232,24 @@ function requireCanonicalConversationUrl(value: string | undefined): string {
   try {
     url = new URL(value);
   } catch {
-    throw new CollabError('USAGE', 'conversationUrl must be a canonical https://chatgpt.com/c/<conversationId> URL');
+    throw new CollabError('USAGE', 'conversationUrl must be a canonical chatgpt.com conversation URL');
   }
-  if (url.protocol !== 'https:' || url.hostname !== 'chatgpt.com') {
+  if (url.protocol !== 'https:' || url.hostname !== 'chatgpt.com' || url.port !== '') {
     throw new CollabError('USAGE', 'conversationUrl must be on https://chatgpt.com');
   }
   if (url.username !== '' || url.password !== '' || url.search !== '' || url.hash !== '') {
     throw new CollabError('USAGE', 'conversationUrl must not contain credentials, query, or fragment');
   }
-  const match = /^\/c\/([^/?#]+)\/?$/u.exec(url.pathname);
-  if (match === null || match[1] === undefined || match[1].startsWith('WEB:')) {
-    throw new CollabError('USAGE', 'conversationUrl must be a canonical /c/<conversationId> path');
+  const plainMatch = /^\/c\/([^/?#]+)\/?$/u.exec(url.pathname);
+  const projectMatch = /^\/g\/g-p-[^/?#]+\/c\/([^/?#]+)\/?$/u.exec(url.pathname);
+  const conversationId = plainMatch?.[1] ?? projectMatch?.[1];
+  if (conversationId === undefined || conversationId.startsWith('WEB:')) {
+    throw new CollabError(
+      'USAGE',
+      'conversationUrl must be a canonical /c/<conversationId> or /g/g-p-<project>/c/<conversationId> path',
+    );
   }
-  return `${url.origin}/c/${match[1]}`;
+  return `https://chatgpt.com${url.pathname.replace(/\/$/u, '')}`;
 }
 
 export interface CliIo {

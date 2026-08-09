@@ -2692,7 +2692,7 @@ describe('BEH-013 status, recover, and resolve-submission', () => {
     reopened.close();
   });
 
-  it('binds a submitted adjudication to the unique user turn with human evidence', async () => {
+  it('binds a Project-scoped submitted adjudication and repeats it without browser side effects', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
     const taskId = 'adjudicated-task';
@@ -2707,22 +2707,44 @@ describe('BEH-013 status, recover, and resolve-submission', () => {
     store.close();
     await savePromptCopy(fixture.paths, taskId, turnId, Buffer.from('resolved prompt'));
 
-    const status = await fixture.service.resolveSubmission(
-      taskId,
-      turnId,
-      'submitted',
-      'https://chatgpt.com/c/conversation-adjudicated-task',
-    );
+    const canonicalUrl = 'https://chatgpt.com/g/g-p-project-a/c/conversation-adjudicated-task';
+    const status = await fixture.service.resolveSubmission(taskId, turnId, 'submitted', `${canonicalUrl}/`);
     expect(status).toMatchObject({ turnStatus: 'pending', nextAction: 'wait' });
-    const reopened = new StateStore(fixture.paths.database);
+    let reopened = new StateStore(fixture.paths.database);
     const resolved = reopened.requireTurn(taskId, turnId);
     expect(resolved).toMatchObject({ status: 'pending', userTurnIdentity: `user-turn-${taskId}` });
     expect(reopened.requireOperation('send-op')).toMatchObject({
       phase: 'committed',
       resolutionSource: 'human',
-      evidence: { decision: 'submitted', promptVerbatimMatch: true, attachmentNamesMatch: true },
+      evidence: {
+        decision: 'submitted',
+        canonicalUrl,
+        promptVerbatimMatch: true,
+        attachmentNamesMatch: true,
+      },
     });
     reopened.close();
+
+    await expect(fixture.service.resolveSubmission(taskId, turnId, 'submitted', canonicalUrl)).resolves.toMatchObject({
+      turnStatus: 'pending',
+      nextAction: 'wait',
+    });
+    reopened = new StateStore(fixture.paths.database);
+    const responsePath = join(fixture.root, 'adjudicated-response.md');
+    reopened.freezeCapture(taskId, turnId, responsePath, []);
+    reopened.close();
+    await expect(fixture.service.resolveSubmission(taskId, turnId, 'submitted', canonicalUrl)).resolves.toMatchObject({
+      turnStatus: 'capturing',
+      nextAction: 'wait',
+    });
+    await writeFile(responsePath, 'done');
+    reopened = new StateStore(fixture.paths.database);
+    reopened.completeTurn(taskId, turnId, responsePath);
+    reopened.close();
+    await expect(fixture.service.resolveSubmission(taskId, turnId, 'submitted', canonicalUrl)).resolves.toMatchObject({
+      turnStatus: null,
+      nextAction: 'none',
+    });
     expect(fixture.browser.resolvedSubmissions).toEqual([taskId]);
   });
 
@@ -2750,7 +2772,40 @@ describe('BEH-013 status, recover, and resolve-submission', () => {
     });
     expect(reopened.requireOperation('send-op')).toMatchObject({ phase: 'committed', resolutionSource: 'human' });
     reopened.close();
+    await expect(fixture.service.resolveSubmission(taskId, turnId, 'not-submitted')).resolves.toMatchObject({
+      turnStatus: null,
+      nextAction: 'none',
+    });
     expect(fixture.browser.safeComposersVerified).toEqual([taskId]);
+  });
+
+  it('rejects a repeated human adjudication when its verdict or submitted URL changes', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const taskId = 'adjudication-conflict-task';
+    const turnId = 'adjudication-conflict-turn';
+    const promptPath = join(fixture.root, 'adjudication-conflict.md');
+    await writeFile(promptPath, 'resolved prompt');
+    const store = new StateStore(fixture.paths.database);
+    seedActiveTask(store, taskId, `chatgpt-pro-collab-${taskId}`);
+    store.beginSendTurn(taskId, turnId, promptPath, [], 'send-op');
+    store.advanceSendToSubmitEffectUnknown('send-op');
+    store.markSubmissionUnknownAndNeedsDecision(taskId, turnId, 'send-op', 'submission unresolved');
+    store.close();
+    await savePromptCopy(fixture.paths, taskId, turnId, Buffer.from('resolved prompt'));
+    await fixture.service.resolveSubmission(taskId, turnId, 'submitted', 'https://chatgpt.com/c/conversation-a/');
+    await expect(
+      fixture.service.resolveSubmission(taskId, turnId, 'submitted', 'https://chatgpt.com/c/conversation-a'),
+    ).resolves.toMatchObject({ turnStatus: 'pending', nextAction: 'wait' });
+
+    await expect(
+      fixture.service.resolveSubmission(taskId, turnId, 'submitted', 'https://chatgpt.com/c/conversation-b'),
+    ).rejects.toMatchObject({ code: 'SUBMISSION_RESOLUTION_CONFLICT' });
+    await expect(fixture.service.resolveSubmission(taskId, turnId, 'not-submitted')).rejects.toMatchObject({
+      code: 'SUBMISSION_RESOLUTION_CONFLICT',
+    });
+    expect(fixture.browser.resolvedSubmissions).toEqual([taskId]);
+    expect(fixture.browser.safeComposersVerified).toEqual([]);
   });
 
   it('rejects a non-canonical adjudication URL before any browser action', async () => {
@@ -2771,6 +2826,12 @@ describe('BEH-013 status, recover, and resolve-submission', () => {
         'submitted',
         'https://chatgpt.com/c/conversation-a?query=1',
       ),
+    ).rejects.toMatchObject({ code: 'USAGE' });
+    await expect(
+      fixture.service.resolveSubmission(task.taskId, turn.turnId, 'submitted', 'https://chatgpt.com:444/c/x'),
+    ).rejects.toMatchObject({ code: 'USAGE' });
+    await expect(
+      fixture.service.resolveSubmission(task.taskId, turn.turnId, 'submitted', 'https://chatgpt.com/c/WEB:x'),
     ).rejects.toMatchObject({ code: 'USAGE' });
     expect(fixture.browser.resolvedSubmissions).toEqual([]);
   });
