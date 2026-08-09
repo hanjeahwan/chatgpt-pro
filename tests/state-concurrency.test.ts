@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
 
 import { StateStore } from '../skills/chatgpt-pro-collab/scripts/state.ts';
+import { seedActiveTask } from './support/state.ts';
 
 const execFileAsync = promisify(execFile);
 
@@ -192,7 +193,7 @@ describe('VER-011 SQLite cross-process concurrency', () => {
     const databasePath = join(root, 'state.sqlite');
     const readyPath = join(root, 'ready');
     const store = new StateStore(databasePath);
-    store.createTask('task-a', 'session-a');
+    seedActiveTask(store, 'task-a', 'session-a');
     store.close();
     const workerPath = join(import.meta.dirname, 'support', 'orphan-start-worker.ts');
     const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 3000)'], { stdio: 'ignore' });
@@ -228,7 +229,7 @@ describe('VER-011 SQLite cross-process concurrency', () => {
     const databasePath = join(root, 'state.sqlite');
     const readyPath = join(root, 'ready');
     const store = new StateStore(databasePath);
-    store.createTask('task-a', 'session-a');
+    seedActiveTask(store, 'task-a', 'session-a');
     store.close();
     const workerPath = join(import.meta.dirname, 'support', 'operation-lease-worker.ts');
     const worker = execFileAsync(process.execPath, [workerPath, databasePath, readyPath]);
@@ -249,7 +250,7 @@ describe('VER-011 SQLite cross-process concurrency', () => {
     const databasePath = join(root, 'state.sqlite');
     const readyPath = join(root, 'ready');
     const store = new StateStore(databasePath);
-    store.createTask('task-a', 'session-a');
+    seedActiveTask(store, 'task-a', 'session-a');
     store.close();
     const workerPath = join(import.meta.dirname, 'support', 'orphan-operation-worker.ts');
 
@@ -272,7 +273,7 @@ describe('VER-011 SQLite cross-process concurrency', () => {
     const databasePath = join(root, 'state.sqlite');
     const readyPath = join(root, 'ready');
     const store = new StateStore(databasePath);
-    store.createTask('task-a', 'session-a');
+    seedActiveTask(store, 'task-a', 'session-a');
     store.close();
     const workerPath = join(import.meta.dirname, 'support', 'orphan-send-worker.ts');
     const gatePath = join(

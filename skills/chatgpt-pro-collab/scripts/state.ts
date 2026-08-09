@@ -282,36 +282,6 @@ export class StateStore {
   }
 
   /**
-   * Records a task reservation before its browser is started.
-   *
-   * @param taskId Caller-provided canonical task identifier.
-   * @param playwrightSession Unique Playwright CLI session name.
-   * @param status Initial lifecycle status; `starting` for a caller-provided start reservation.
-   * @returns The inserted task record.
-   * @throws {StateError} If either identifier already exists.
-   * @throws {Error} If SQLite rejects the write.
-   */
-  createTask(taskId: string, playwrightSession: string, status: TaskStatus = 'active'): TaskRecord {
-    const now = new Date().toISOString();
-    try {
-      this.#database
-        .prepare(
-          `INSERT INTO task (
-            id, playwright_session, conversation_id, conversation_url,
-            status, created_at, updated_at, closed_at
-          ) VALUES (?, ?, NULL, NULL, ?, ?, ?, NULL)`,
-        )
-        .run(taskId, playwrightSession, status, now, now);
-    } catch (error) {
-      if (!isSqliteConstraint(error)) {
-        throw error;
-      }
-      throw new StateError('TASK_CONFLICT', `task or Playwright session already exists: ${errorMessage(error)}`);
-    }
-    return this.requireTask(taskId);
-  }
-
-  /**
    * Reserves a starting task and its start operation in one transaction.
    *
    * @param taskId Caller-provided canonical task identifier.
@@ -816,88 +786,6 @@ export class StateStore {
   }
 
   /**
-   * Reserves the only unfinished turn allowed for one active task.
-   *
-   * @param taskId Owning task identifier.
-   * @param turnId Collision-resistant turn identifier.
-   * @param promptPath Absolute host prompt path retained for audit.
-   * @param attachmentPaths Ordered absolute attachment paths retained for audit.
-   * @returns The inserted `sending` turn.
-   * @throws {StateError} If the task is inactive, a turn conflicts, or another turn is unfinished.
-   * @throws {Error} If SQLite cannot commit the reservation.
-   */
-  beginTurn(taskId: string, turnId: string, promptPath: string, attachmentPaths: readonly string[]): TurnRecord {
-    return this.#transaction(() => {
-      return this.#insertTurn(taskId, turnId, promptPath, attachmentPaths);
-    });
-  }
-
-  /**
-   * Commits a confirmed browser submission and binds the task's conversation and user turn identity.
-   *
-   * @param taskId Owning task identifier.
-   * @param turnId Submission-attempt turn identifier.
-   * @param conversationId Canonical ChatGPT conversation identifier.
-   * @param conversationUrl Canonical `/c/<id>` URL observed after submission.
-   * @param userTurnIdentity Exact DOM identity of the submitted user turn.
-   * @returns The updated pending turn.
-   * @throws {StateError} If the lifecycle transition or conversation identity is inconsistent.
-   * @throws {Error} If SQLite cannot commit both updates atomically.
-   */
-  markTurnPending(
-    taskId: string,
-    turnId: string,
-    conversationId: string,
-    conversationUrl: string,
-    userTurnIdentity: string,
-  ): TurnRecord {
-    return this.#transaction(() => {
-      const task = this.requireActiveTask(taskId);
-      const turn = this.requireTurn(taskId, turnId);
-      if (turn.status !== 'unknown-submission' && turn.status !== 'sending') {
-        throw new StateError(
-          'TURN_STATE_CONFLICT',
-          `turn is ${turn.status}, expected sending or unknown-submission: ${turnId}`,
-        );
-      }
-      if (
-        task.conversationId !== null &&
-        (task.conversationId !== conversationId ||
-          conversationIdOf(task.conversationUrl) !== conversationIdOf(conversationUrl))
-      ) {
-        throw new StateError('CONVERSATION_MISMATCH', `task is already bound to a different conversation: ${taskId}`);
-      }
-
-      const now = new Date().toISOString();
-      this.#database
-        .prepare(
-          `UPDATE task
-           SET conversation_id = ?, conversation_url = ?, updated_at = ?
-           WHERE id = ?`,
-        )
-        .run(conversationId, conversationUrl, now, taskId);
-      try {
-        this.#database
-          .prepare(
-            `UPDATE turn
-             SET status = 'pending', user_turn_identity = ?, error = NULL, updated_at = ?
-             WHERE task_id = ? AND id = ?`,
-          )
-          .run(userTurnIdentity, now, taskId, turnId);
-      } catch (error) {
-        if (!isSqliteConstraint(error)) {
-          throw error;
-        }
-        throw new StateError(
-          'USER_TURN_IDENTITY_CONFLICT',
-          `user turn identity already belongs to another turn: ${userTurnIdentity}`,
-        );
-      }
-      return this.requireTurn(taskId, turnId);
-    });
-  }
-
-  /**
    * Fails a proven pending turn and records the complete human response adjudication.
    *
    * The user-provided terminal failure fact is never inferred: the transition only
@@ -974,68 +862,6 @@ export class StateStore {
       userTurnIdentity: candidate.userTurnIdentity,
       stop: candidate.stop,
     };
-  }
-
-  /**
-   * Records a known pre-submission failure while preserving the prompt transcript.
-   *
-   * @param taskId Owning task identifier.
-   * @param turnId Sending turn identifier.
-   * @param reason Concrete failed operation and cause.
-   * @returns The updated failed turn.
-   * @throws {StateError} If the turn is not currently `sending`.
-   * @throws {Error} If SQLite cannot commit the transition.
-   */
-  failSendingTurn(taskId: string, turnId: string, reason: string): TurnRecord {
-    return this.#transaction(() => {
-      return this.#finishSendingTurnRow(taskId, turnId, 'failed', reason);
-    });
-  }
-
-  /**
-   * Persists the conservative interruption state before any browser submission side effect.
-   *
-   * @param taskId Owning task identifier.
-   * @param turnId Sending turn identifier.
-   * @returns The turn protected against an orphaned CLI parent.
-   * @throws {StateError} If the turn is not currently `sending`.
-   * @throws {Error} If SQLite cannot commit the transition.
-   */
-  markSubmissionAttempting(taskId: string, turnId: string): TurnRecord {
-    return this.#finishSendingTurn(
-      taskId,
-      turnId,
-      'unknown-submission',
-      'browser submission attempt started but has not been reconciled',
-    );
-  }
-
-  /**
-   * Reclassifies a persisted submission attempt after the browser proves no message was submitted.
-   *
-   * @param taskId Owning task identifier.
-   * @param turnId Ambiguous turn identifier.
-   * @param reason Concrete pre-submission failure.
-   * @returns The updated failed turn.
-   * @throws {StateError} If the turn is not currently `unknown-submission`.
-   * @throws {Error} If SQLite cannot commit the transition.
-   */
-  failSubmissionAttempt(taskId: string, turnId: string, reason: string): TurnRecord {
-    return this.#finishUnknownSubmissionTurn(taskId, turnId, 'failed', reason);
-  }
-
-  /**
-   * Records a browser submission whose side effect cannot be proven either way.
-   *
-   * @param taskId Owning task identifier.
-   * @param turnId Submission-attempt turn identifier.
-   * @param reason Concrete ambiguity at the submission boundary.
-   * @returns The updated unknown-submission turn.
-   * @throws {StateError} If the turn is not currently `unknown-submission`.
-   * @throws {Error} If SQLite cannot commit the transition.
-   */
-  markUnknownSubmission(taskId: string, turnId: string, reason: string): TurnRecord {
-    return this.#finishUnknownSubmissionTurn(taskId, turnId, 'unknown-submission', reason);
   }
 
   /**
@@ -1879,28 +1705,6 @@ export class StateStore {
   }
 
   /**
-   * Completes the only legal transition out of `sending` after a failed browser boundary.
-   *
-   * @param taskId Owning task identifier.
-   * @param turnId Sending turn identifier.
-   * @param status Failure classification.
-   * @param reason Concrete operation and cause.
-   * @returns The updated turn.
-   * @throws {StateError} If the turn is not `sending`.
-   * @throws {Error} If SQLite cannot commit the transition.
-   */
-  #finishSendingTurn(
-    taskId: string,
-    turnId: string,
-    status: 'failed' | 'unknown-submission',
-    reason: string,
-  ): TurnRecord {
-    return this.#transaction(() => {
-      return this.#finishSendingTurnRow(taskId, turnId, status, reason);
-    });
-  }
-
-  /**
    * Completes one sending-turn row transition inside the caller's immediate transaction.
    *
    * @param taskId Owning task identifier.
@@ -1926,28 +1730,6 @@ export class StateStore {
       .prepare('UPDATE turn SET status = ?, error = ?, updated_at = ? WHERE task_id = ? AND id = ?')
       .run(status, reason, now, taskId, turnId);
     return this.requireTurn(taskId, turnId);
-  }
-
-  /**
-   * Reconciles the durable ambiguity marker after a browser submission attempt returns.
-   *
-   * @param taskId Owning task identifier.
-   * @param turnId Unknown-submission turn identifier.
-   * @param status Reconciled terminal classification.
-   * @param reason Concrete browser result.
-   * @returns The updated turn.
-   * @throws {StateError} If the turn is not `unknown-submission`.
-   * @throws {Error} If SQLite cannot commit the transition.
-   */
-  #finishUnknownSubmissionTurn(
-    taskId: string,
-    turnId: string,
-    status: 'failed' | 'unknown-submission',
-    reason: string,
-  ): TurnRecord {
-    return this.#transaction(() => {
-      return this.#finishUnknownSubmissionTurnRow(taskId, turnId, status, reason);
-    });
   }
 
   /**
@@ -2001,21 +1783,6 @@ export class StateStore {
       throw error;
     }
   }
-}
-
-/**
- * Extracts the canonical conversation identity from a plain or project-scoped canonical URL.
- *
- * @param url Canonical conversation URL, plain `/c/<id>` or project-scoped.
- * @returns The trailing conversation identifier, or null when the URL is not canonical.
- * @throws {Error} This pure parser does not throw for string inputs.
- */
-function conversationIdOf(url: string | null): string | null {
-  if (url === null) {
-    return null;
-  }
-  const match = /\/c\/([^/?#]+)\/?$/u.exec(url);
-  return match === null || match[1] === undefined || match[1].startsWith('WEB:') ? null : match[1];
 }
 
 /**

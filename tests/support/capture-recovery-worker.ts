@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { StateError, StateStore } from '../../skills/chatgpt-pro-collab/scripts/state.ts';
+import { seedActiveTask } from './state.ts';
 
 type Checkpoint = 'capturing-frozen' | 'response-published' | 'artifact-published' | 'partial-artifacts';
 
@@ -23,10 +24,17 @@ if (mode === 'interrupt-freeze') {
     throw new Error('interrupt-freeze requires a ready path');
   }
   const store = new StateStore(databasePath);
-  store.createTask(taskId, 'session-a');
-  store.beginTurn(taskId, turnId, '/prompt.md', []);
-  store.markSubmissionAttempting(taskId, turnId);
-  store.markTurnPending(taskId, turnId, 'conversation-a', 'https://chatgpt.com/c/conversation-a', 'user-turn-a');
+  seedActiveTask(store, taskId, 'session-a');
+  store.beginSendTurn(taskId, turnId, '/prompt.md', [], 'send-operation');
+  store.advanceSendToSubmitEffectUnknown('send-operation');
+  store.commitSubmittedTurn(
+    taskId,
+    turnId,
+    'conversation-a',
+    'https://chatgpt.com/c/conversation-a',
+    'user-turn-a',
+    'send-operation',
+  );
   const artifacts = sourceUrls.map((sourceUrl) => {
     return { sourceUrl, label: sourceUrl.slice(sourceUrl.lastIndexOf('/') + 1) };
   });
@@ -52,10 +60,17 @@ if (mode === 'interrupt-freeze') {
     throw new Error('prepare requires a checkpoint and ready path');
   }
   const store = new StateStore(databasePath);
-  store.createTask(taskId, 'session-a');
-  store.beginTurn(taskId, turnId, '/prompt.md', []);
-  store.markSubmissionAttempting(taskId, turnId);
-  store.markTurnPending(taskId, turnId, 'conversation-a', 'https://chatgpt.com/c/conversation-a', 'user-turn-a');
+  seedActiveTask(store, taskId, 'session-a');
+  store.beginSendTurn(taskId, turnId, '/prompt.md', [], 'send-operation');
+  store.advanceSendToSubmitEffectUnknown('send-operation');
+  store.commitSubmittedTurn(
+    taskId,
+    turnId,
+    'conversation-a',
+    'https://chatgpt.com/c/conversation-a',
+    'user-turn-a',
+    'send-operation',
+  );
   store.freezeCapture(
     taskId,
     turnId,

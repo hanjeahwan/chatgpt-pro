@@ -11,8 +11,9 @@ if (databasePath === undefined || readyPath === undefined || gatePath === undefi
 
 const store = new StateStore(databasePath);
 store.acquireTaskOperation('task-a', 'send', 'orphan-send-owner');
-store.beginTurn('task-a', 'turn-a', '/prompt.md', []);
-store.markSubmissionAttempting('task-a', 'turn-a');
+store.beginSendTurn('task-a', 'turn-a', '/prompt.md', [], 'send-operation');
+store.advanceSendToSubmitEffectUnknown('send-operation');
+store.markSubmissionUnknownAndNeedsDecision('task-a', 'turn-a', 'send-operation', 'submission result was interrupted');
 
 const gate = spawn(process.execPath, [gatePath, process.execPath, '-e', 'setTimeout(() => {}, 1500)'], {
   stdio: ['pipe', 'pipe', 'pipe', 'pipe'],

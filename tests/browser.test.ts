@@ -23,6 +23,7 @@ import { completionPageFixture, type CompletionPageOptions } from './support/com
 import { projectSendPageFixture } from './support/project-send-page-fixture.ts';
 import { resolveTurnPageFixture, type ResolveTurnPageOptions } from './support/resolve-turn-page-fixture.ts';
 import { startPageFixture, type StartPageOptions } from './support/start-page-fixture.ts';
+import { seedActiveTask } from './support/state.ts';
 import { submissionPageFixture } from './support/submission-page-fixture.ts';
 
 const protocol = 'chatgpt-pro-collab/v1';
@@ -34,36 +35,6 @@ class CommandStartedError extends Error {}
 class CommandNotSpawnedError extends Error {}
 
 describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
-  it('saves the shared authentication seed before closing the one-time setup session', async () => {
-    const fixture = await browserFixture([
-      output('  (no browsers)'),
-      output('setup opened'),
-      output('login observed'),
-      output('state saved'),
-      output('setup closed'),
-      output('  (no browsers)'),
-    ]);
-
-    await expect(fixture.browser.setup()).resolves.toBe(fixture.paths.seedState);
-
-    expect(
-      fixture.invocations.map((invocation) => {
-        return invocation.arguments.slice(4);
-      }),
-    ).toEqual([
-      [],
-      ['open', 'https://chatgpt.com/', '--browser=chrome', '--headed'],
-      ['run-code', '--filename', expect.any(String)],
-      ['state-save', fixture.paths.seedState],
-      ['close'],
-      [],
-    ]);
-    const sessions = fixture.invocations.flatMap((invocation) => {
-      return invocation.arguments[2]?.startsWith('-s=') ? [invocation.arguments[2]] : [];
-    });
-    expect(new Set(sessions).size).toBe(1);
-  });
-
   it('verifies a seed in a distinct named session even when the interactive setup session is logged in', async () => {
     const fixture = await browserFixture([
       output('### Browsers\n- chatgpt-pro-collab-setup-live:\n  - status: open\n  - pid: 100\n'),
@@ -361,7 +332,6 @@ describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
       powerNow: 4,
       powerMin: 0,
       powerMax: 4,
-      persistent: false,
     });
     expect(fixture.invocations[0]?.arguments).toEqual([
       '-y',
@@ -1233,7 +1203,6 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     expect(observed).toMatchObject({ status: 'completed' });
     expect(captured).toMatchObject({
       response: 'full response\n```ts\nconst value = 1;\n```',
-      responseHtml: '<p>full response</p>',
       artifacts: [{ sourceUrl: 'sandbox:/mnt/data/result.txt', label: 'result.txt' }],
     });
     expect(fixture.invocations[1]?.signal).toBe(controller.signal);
@@ -1326,7 +1295,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
         5000,
         firstController.signal,
       ),
-    ).resolves.toMatchObject({ sourceUrl, suggestedFilename: 'bundle.zip' });
+    ).resolves.toEqual({ suggestedFilename: 'bundle.zip' });
     expect(fixture.invocations[0]?.signal).toBe(firstController.signal);
     const source = await lastScript(fixture.invocations);
     await fixture.browser.downloadArtifact(
@@ -1462,7 +1431,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
         5000,
         new AbortController().signal,
       ),
-    ).resolves.toMatchObject({ sourceUrl, suggestedFilename: 'target.txt' });
+    ).resolves.toEqual({ suggestedFilename: 'target.txt' });
     expect(fixture.events).not.toContain('copy:later');
     await expect(readFile(temporaryPath, 'utf8')).resolves.toBe('downloaded target.txt');
   });
@@ -1512,7 +1481,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
         5000,
         new AbortController().signal,
       ),
-    ).resolves.toMatchObject({ sourceUrl, suggestedFilename: 'bundle.zip' });
+    ).resolves.toEqual({ suggestedFilename: 'bundle.zip' });
     expect(fixture.events).toContain(expectedEvent);
     await expect(readFile(temporaryPath, 'utf8')).resolves.toBe('downloaded bundle.zip');
   });
@@ -1607,7 +1576,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
         5000,
         new AbortController().signal,
       ),
-    ).resolves.toMatchObject({ sourceUrl: secondSource, suggestedFilename: 'readme.txt' });
+    ).resolves.toEqual({ suggestedFilename: 'readme.txt' });
     expect(fixture.events).toContain('download:artifact');
     expect(
       fixture.events.some((event) => {
@@ -1652,15 +1621,16 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     await ensureTaskDirectories(fixture.paths, 'task-a');
     const targetResponsePath = responsePath(fixture.paths, 'task-a', 'turn-a');
     const store = new StateStore(fixture.paths.database);
-    store.createTask('task-a', 'session-a');
-    store.beginTurn('task-a', 'turn-a', '/prompt.md', []);
-    store.markSubmissionAttempting('task-a', 'turn-a');
-    store.markTurnPending(
+    seedActiveTask(store, 'task-a', 'session-a');
+    store.beginSendTurn('task-a', 'turn-a', '/prompt.md', [], 'operation-a');
+    store.advanceSendToSubmitEffectUnknown('operation-a');
+    store.commitSubmittedTurn(
       'task-a',
       'turn-a',
       'conversation-a',
       'https://chatgpt.com/c/conversation-a',
       'conversation-turn-user-1',
+      'operation-a',
     );
     store.freezeCapture('task-a', 'turn-a', targetResponsePath, [{ sourceUrl, label: 'result' }]);
     store.close();
@@ -1693,15 +1663,16 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     await ensureTaskDirectories(fixture.paths, 'task-a');
     const targetResponsePath = responsePath(fixture.paths, 'task-a', 'turn-a');
     const store = new StateStore(fixture.paths.database);
-    store.createTask('task-a', 'session-a');
-    store.beginTurn('task-a', 'turn-a', '/prompt.md', []);
-    store.markSubmissionAttempting('task-a', 'turn-a');
-    store.markTurnPending(
+    seedActiveTask(store, 'task-a', 'session-a');
+    store.beginSendTurn('task-a', 'turn-a', '/prompt.md', [], 'operation-a');
+    store.advanceSendToSubmitEffectUnknown('operation-a');
+    store.commitSubmittedTurn(
       'task-a',
       'turn-a',
       'conversation-a',
       'https://chatgpt.com/c/conversation-a',
       'conversation-turn-user-1',
+      'operation-a',
     );
     store.freezeCapture('task-a', 'turn-a', targetResponsePath, [
       { sourceUrl: first, label: 'first' },
@@ -1879,7 +1850,6 @@ describe('BEH-013 browser boundary support', () => {
       powerNow: 4,
       powerMin: 0,
       powerMax: 4,
-      persistent: false,
     });
     expect(
       fixture.invocations.flatMap((invocation) => {

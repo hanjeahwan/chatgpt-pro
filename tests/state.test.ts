@@ -6,44 +6,54 @@ import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 
 import { StateError, StateStore } from '../skills/chatgpt-pro-collab/scripts/state.ts';
+import { seedActiveTask } from './support/state.ts';
 
 describe('BEH-002, BEH-005, BEH-007, and BEH-008 state gates', () => {
   it('binds one conversation and permits only one unfinished turn', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collab-state-'));
     const store = new StateStore(join(root, 'state.sqlite'));
-    store.createTask('task-a', 'session-a');
-    store.beginTurn('task-a', 'turn-a', '/prompt.md', ['/a', '/b']);
+    seedActiveTask(store, 'task-a', 'session-a');
+    store.beginSendTurn('task-a', 'turn-a', '/prompt.md', ['/a', '/b'], 'operation-a');
 
     expect(() => {
-      return store.beginTurn('task-a', 'turn-b', '/other.md', []);
+      return store.beginSendTurn('task-a', 'turn-b', '/other.md', [], 'operation-b');
     }).toThrowError(StateError);
 
-    store.markSubmissionAttempting('task-a', 'turn-a');
-    store.markTurnPending('task-a', 'turn-a', 'conversation-a', 'https://chatgpt.com/c/conversation-a', 'user-turn-a');
+    store.advanceSendToSubmitEffectUnknown('operation-a');
+    store.commitSubmittedTurn(
+      'task-a',
+      'turn-a',
+      'conversation-a',
+      'https://chatgpt.com/c/conversation-a',
+      'user-turn-a',
+      'operation-a',
+    );
     expect(store.requireTurn('task-a', 'turn-a')).toMatchObject({ status: 'pending', error: null });
     const responsePath = join(root, 'response.md');
     store.freezeCapture('task-a', 'turn-a', responsePath, []);
     await writeFile(responsePath, 'response');
     store.completeTurn('task-a', 'turn-a', responsePath);
-    store.beginTurn('task-a', 'turn-b', '/other.md', []);
-    store.markSubmissionAttempting('task-a', 'turn-b');
+    store.beginSendTurn('task-a', 'turn-b', '/other.md', [], 'operation-b');
+    store.advanceSendToSubmitEffectUnknown('operation-b');
 
     expect(() => {
-      return store.markTurnPending(
+      return store.commitSubmittedTurn(
         'task-a',
         'turn-b',
         'conversation-b',
         'https://chatgpt.com/c/conversation-b',
         'user-turn-b',
+        'operation-b',
       );
     }).toThrowError(/different conversation/);
     expect(() => {
-      return store.markTurnPending(
+      return store.commitSubmittedTurn(
         'task-a',
         'turn-b',
         'conversation-a',
         'https://chatgpt.com/c/conversation-a',
         'user-turn-a',
+        'operation-b',
       );
     }).toThrowError(/user turn identity/);
     store.close();
@@ -52,7 +62,7 @@ describe('BEH-002, BEH-005, BEH-007, and BEH-008 state gates', () => {
   it('keeps the first submitted canonical conversation URL across later turns', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collab-canonical-binding-'));
     const store = new StateStore(join(root, 'state.sqlite'));
-    store.createTask('task-a', 'session-a');
+    seedActiveTask(store, 'task-a', 'session-a');
     store.beginSendTurn('task-a', 'turn-a', '/prompt.md', [], 'operation-a');
     store.advanceSendToSubmitEffectUnknown('operation-a');
     store.commitSubmittedTurn(
@@ -101,10 +111,17 @@ describe('BEH-002, BEH-005, BEH-007, and BEH-008 state gates', () => {
   it('freezes ordered artifacts before publication and completes only readable files', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collab-artifact-state-'));
     const store = new StateStore(join(root, 'state.sqlite'));
-    store.createTask('task-a', 'session-a');
-    store.beginTurn('task-a', 'turn-a', '/prompt.md', []);
-    store.markSubmissionAttempting('task-a', 'turn-a');
-    store.markTurnPending('task-a', 'turn-a', 'conversation-a', 'https://chatgpt.com/c/conversation-a', 'user-turn-a');
+    seedActiveTask(store, 'task-a', 'session-a');
+    store.beginSendTurn('task-a', 'turn-a', '/prompt.md', [], 'operation-a');
+    store.advanceSendToSubmitEffectUnknown('operation-a');
+    store.commitSubmittedTurn(
+      'task-a',
+      'turn-a',
+      'conversation-a',
+      'https://chatgpt.com/c/conversation-a',
+      'user-turn-a',
+      'operation-a',
+    );
     const responsePath = join(root, 'response.md');
     store.freezeCapture('task-a', 'turn-a', responsePath, [
       { sourceUrl: 'sandbox:/mnt/data/first.txt', label: 'first.txt' },
@@ -121,7 +138,7 @@ describe('BEH-002, BEH-005, BEH-007, and BEH-008 state gates', () => {
       { ordinal: 2, sourceUrl: 'sandbox:/mnt/data/second.txt', status: 'pending' },
     ]);
     expect(() => {
-      return store.beginTurn('task-a', 'turn-b', '/other.md', []);
+      return store.beginSendTurn('task-a', 'turn-b', '/other.md', [], 'operation-b');
     }).toThrowError(/unfinished turn/);
     expect(() => {
       return store.verifyArtifactSet('task-a', 'turn-a', [
@@ -150,9 +167,9 @@ describe('BEH-002, BEH-005, BEH-007, and BEH-008 state gates', () => {
   it('keeps transcript metadata readable after idempotent close and process restart', () => {
     const databasePath = join(tmpdir(), `collab-restart-${crypto.randomUUID()}.sqlite`);
     const first = new StateStore(databasePath);
-    first.createTask('task-a', 'session-a');
-    first.beginTurn('task-a', 'turn-a', '/prompt.md', ['/attachment']);
-    first.failSendingTurn('task-a', 'turn-a', 'upload failed');
+    seedActiveTask(first, 'task-a', 'session-a');
+    first.beginSendTurn('task-a', 'turn-a', '/prompt.md', ['/attachment'], 'operation-a');
+    first.failSubmissionAndCommit('task-a', 'turn-a', 'operation-a', 'upload failed');
     first.closeTask('task-a');
     first.closeTask('task-a');
     first.close();
@@ -174,7 +191,7 @@ describe('BEH-002, BEH-005, BEH-007, and BEH-008 state gates', () => {
     const databasePath = join(tmpdir(), `collab-close-race-${crypto.randomUUID()}.sqlite`);
     const winner = new StateStore(databasePath);
     const contender = new StateStore(databasePath);
-    winner.createTask('task-a', 'session-a');
+    seedActiveTask(winner, 'task-a', 'session-a');
 
     expect(contender.requireTask('task-a').status).toBe('active');
     expect(winner.acquireCloseTaskOperation('task-a', 'winner')).toBe(true);
@@ -196,7 +213,7 @@ describe('BEH-002, BEH-005, BEH-007, and BEH-008 state gates', () => {
     const databasePath = join(tmpdir(), `collab-lease-${crypto.randomUUID()}.sqlite`);
     const first = new StateStore(databasePath);
     const second = new StateStore(databasePath);
-    first.createTask('task-a', 'session-a');
+    seedActiveTask(first, 'task-a', 'session-a');
     first.acquireTaskOperation('task-a', 'wait', 'live-owner');
 
     expect(() => {
@@ -218,9 +235,9 @@ describe('BEH-002, BEH-005, BEH-007, and BEH-008 state gates', () => {
   it('keeps an orphaned sending turn recoverable instead of auto-failing it when reclaiming its lease', () => {
     const databasePath = join(tmpdir(), `collab-orphan-sending-${crypto.randomUUID()}.sqlite`);
     const first = new StateStore(databasePath);
-    first.createTask('task-a', 'session-a');
+    seedActiveTask(first, 'task-a', 'session-a');
     first.acquireTaskOperation('task-a', 'send', 'dead-owner', 999_999);
-    first.beginTurn('task-a', 'turn-a', '/prompt.md', []);
+    first.beginSendTurn('task-a', 'turn-a', '/prompt.md', [], 'send-operation-a');
     first.close();
 
     const contender = new StateStore(databasePath);
@@ -234,27 +251,17 @@ describe('BEH-002, BEH-005, BEH-007, and BEH-008 state gates', () => {
   it('keeps the operation journal and status snapshot after a process restart', () => {
     const databasePath = join(tmpdir(), `collab-journal-${crypto.randomUUID()}.sqlite`);
     const first = new StateStore(databasePath);
-    first.createTask('task-a', 'session-a');
+    seedActiveTask(first, 'task-a', 'session-a');
     const operationId = 'send-operation-a';
-    first.beginTurn('task-a', 'turn-a', '/prompt.md', []);
-    const operation = first.createOperation({
-      id: operationId,
-      kind: 'send',
-      step: 'draft',
-      taskId: 'task-a',
-      turnId: 'turn-a',
-      sessionName: 'session-a',
-    });
+    const { operation } = first.beginSendTurn('task-a', 'turn-a', '/prompt.md', [], operationId);
     expect(operation).toMatchObject({ kind: 'send', step: 'draft', phase: 'prepared', progress: 0 });
-    first.advanceOperationStep(operationId, 'submit');
-    first.markOperationEffectUnknown(operationId, {
+    first.advanceSendToSubmitEffectUnknown(operationId, {
       observedAt: new Date().toISOString(),
       sessionName: 'session-a',
       postcondition: 'submit command released',
     });
-    first.markOperationNeedsDecision(operationId);
+    first.markSubmissionUnknownAndNeedsDecision('task-a', 'turn-a', operationId, 'submission unresolved');
     expect(first.requireOperation(operationId).phase).toBe('needs-decision');
-    first.markSubmissionAttempting('task-a', 'turn-a');
     first.close();
 
     const reopened = new StateStore(databasePath);
@@ -275,8 +282,8 @@ describe('BEH-002, BEH-005, BEH-007, and BEH-008 state gates', () => {
   it('enforces one uncommitted operation per task and one global uncommitted setup', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collab-operation-constraints-'));
     const store = new StateStore(join(root, 'state.sqlite'));
-    store.createTask('task-a', 'session-a');
-    store.createTask('task-b', 'session-b');
+    seedActiveTask(store, 'task-a', 'session-a');
+    seedActiveTask(store, 'task-b', 'session-b');
     store.createOperation({
       id: 'setup-1',
       kind: 'setup',
@@ -338,7 +345,7 @@ describe('BEH-002, BEH-005, BEH-007, and BEH-008 state gates', () => {
   it('computes closing, closed, and missing-browser next actions from the status snapshot', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collab-next-action-'));
     const store = new StateStore(join(root, 'state.sqlite'));
-    store.createTask('task-a', 'session-a');
+    seedActiveTask(store, 'task-a', 'session-a');
     expect(store.getStatus('task-a', 'available').nextAction).toBe('none');
     expect(store.getStatus('task-a', 'missing').nextAction).toBe('recover');
 
@@ -356,10 +363,17 @@ describe('BEH-002, BEH-005, BEH-007, and BEH-008 state gates', () => {
   it('routes a missing browser ahead of a pending turn and keeps wait for an available one', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collab-next-action-route-'));
     const store = new StateStore(join(root, 'state.sqlite'));
-    store.createTask('task-a', 'session-a');
-    store.beginTurn('task-a', 'turn-a', '/prompt.md', []);
-    store.markSubmissionAttempting('task-a', 'turn-a');
-    store.markTurnPending('task-a', 'turn-a', 'conversation-a', 'https://chatgpt.com/c/conversation-a', 'user-turn-a');
+    seedActiveTask(store, 'task-a', 'session-a');
+    store.beginSendTurn('task-a', 'turn-a', '/prompt.md', [], 'operation-a');
+    store.advanceSendToSubmitEffectUnknown('operation-a');
+    store.commitSubmittedTurn(
+      'task-a',
+      'turn-a',
+      'conversation-a',
+      'https://chatgpt.com/c/conversation-a',
+      'user-turn-a',
+      'operation-a',
+    );
     expect(store.getStatus('task-a', 'missing').nextAction).toBe('recover');
     expect(store.getStatus('task-a', 'available').nextAction).toBe('wait');
     store.close();
@@ -368,15 +382,22 @@ describe('BEH-002, BEH-005, BEH-007, and BEH-008 state gates', () => {
   it('returns recover for a closed task with a pending turn and rejects reactivating a non-closed task', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collab-closed-recover-'));
     const store = new StateStore(join(root, 'state.sqlite'));
-    store.createTask('task-a', 'session-a');
-    store.beginTurn('task-a', 'turn-a', '/prompt.md', []);
-    store.markSubmissionAttempting('task-a', 'turn-a');
-    store.markTurnPending('task-a', 'turn-a', 'conversation-a', 'https://chatgpt.com/c/conversation-a', 'user-turn-a');
+    seedActiveTask(store, 'task-a', 'session-a');
+    store.beginSendTurn('task-a', 'turn-a', '/prompt.md', [], 'operation-a');
+    store.advanceSendToSubmitEffectUnknown('operation-a');
+    store.commitSubmittedTurn(
+      'task-a',
+      'turn-a',
+      'conversation-a',
+      'https://chatgpt.com/c/conversation-a',
+      'user-turn-a',
+      'operation-a',
+    );
     store.closeTask('task-a');
     expect(store.getStatus('task-a', 'available').nextAction).toBe('recover');
     expect(store.getStatus('task-a', 'missing').nextAction).toBe('recover');
 
-    store.createTask('task-b', 'session-b');
+    seedActiveTask(store, 'task-b', 'session-b');
     store.failTask('task-b');
     expect(store.requireTask('task-b').status).toBe('failed');
     expect(store.getStatus('task-b', 'missing').nextAction).toBe('none');
@@ -391,21 +412,23 @@ describe('BEH-002, BEH-005, BEH-007, and BEH-008 state gates', () => {
 
 describe('BEH-013 failed-response turn resolution state gate', () => {
   const pendingTurn = (store: StateStore, taskId: string, turnId: string): void => {
-    store.beginTurn(taskId, turnId, '/prompt.md', []);
-    store.markSubmissionAttempting(taskId, turnId);
-    store.markTurnPending(
+    const operationId = `${taskId}-${turnId}-send-operation`;
+    store.beginSendTurn(taskId, turnId, '/prompt.md', [], operationId);
+    store.advanceSendToSubmitEffectUnknown(operationId);
+    store.commitSubmittedTurn(
       taskId,
       turnId,
       'conversation-a',
       'https://chatgpt.com/c/conversation-a',
       `user-turn-${taskId}`,
+      operationId,
     );
   };
 
   it('atomically fails a pending turn and records the complete human resolution', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collab-resolve-turn-'));
     const store = new StateStore(join(root, 'state.sqlite'));
-    store.createTask('task-a', 'session-a');
+    seedActiveTask(store, 'task-a', 'session-a');
     pendingTurn(store, 'task-a', 'turn-a');
 
     const failed = store.failPendingTurnWithResolution('task-a', 'turn-a', {
@@ -432,20 +455,20 @@ describe('BEH-013 failed-response turn resolution state gate', () => {
       stop: 'absent',
     });
     expect(store.requireTask('task-a').status).toBe('active');
-    store.beginTurn('task-a', 'turn-b', '/next.md', []);
+    store.beginSendTurn('task-a', 'turn-b', '/next.md', [], 'operation-b');
     store.close();
   });
 
   it('rejects every non-pending turn and a non-active task while preserving state', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collab-resolve-turn-gates-'));
     const store = new StateStore(join(root, 'state.sqlite'));
-    store.createTask('task-sending', 'session-sending');
+    seedActiveTask(store, 'task-sending', 'session-sending');
     pendingTurn(store, 'task-sending', 'turn-a');
     store.close();
 
     const sending = new StateStore(join(root, 'state.sqlite'));
-    sending.createTask('task-other', 'session-other');
-    sending.beginTurn('task-other', 'turn-sending', '/prompt.md', []);
+    seedActiveTask(sending, 'task-other', 'session-other');
+    sending.beginSendTurn('task-other', 'turn-sending', '/prompt.md', [], 'operation-sending');
     expect(() => {
       return sending.failPendingTurnWithResolution('task-other', 'turn-sending', {
         adjudication: 'failed',
@@ -458,9 +481,15 @@ describe('BEH-013 failed-response turn resolution state gate', () => {
     expect(sending.requireTurn('task-other', 'turn-sending').status).toBe('sending');
     expect(sending.getFailedTurnResolution('task-other', 'turn-sending')).toBeNull();
 
-    sending.createTask('task-unknown', 'session-unknown');
-    sending.beginTurn('task-unknown', 'turn-unknown', '/prompt.md', []);
-    sending.markSubmissionAttempting('task-unknown', 'turn-unknown');
+    seedActiveTask(sending, 'task-unknown', 'session-unknown');
+    sending.beginSendTurn('task-unknown', 'turn-unknown', '/prompt.md', [], 'operation-unknown');
+    sending.advanceSendToSubmitEffectUnknown('operation-unknown');
+    sending.markSubmissionUnknownAndNeedsDecision(
+      'task-unknown',
+      'turn-unknown',
+      'operation-unknown',
+      'submission unresolved',
+    );
     expect(() => {
       return sending.failPendingTurnWithResolution('task-unknown', 'turn-unknown', {
         adjudication: 'failed',
@@ -472,15 +501,16 @@ describe('BEH-013 failed-response turn resolution state gate', () => {
     }).toThrowError(/expected pending/);
     expect(sending.requireTurn('task-unknown', 'turn-unknown').status).toBe('unknown-submission');
 
-    sending.createTask('task-completed', 'session-completed');
-    sending.beginTurn('task-completed', 'turn-completed', '/prompt.md', []);
-    sending.markSubmissionAttempting('task-completed', 'turn-completed');
-    sending.markTurnPending(
+    seedActiveTask(sending, 'task-completed', 'session-completed');
+    sending.beginSendTurn('task-completed', 'turn-completed', '/prompt.md', [], 'operation-completed');
+    sending.advanceSendToSubmitEffectUnknown('operation-completed');
+    sending.commitSubmittedTurn(
       'task-completed',
       'turn-completed',
       'conversation-b',
       'https://chatgpt.com/c/conversation-b',
       'user-turn-completed',
+      'operation-completed',
     );
     const responsePath = join(root, 'completed.md');
     sending.freezeCapture('task-completed', 'turn-completed', responsePath, []);
@@ -497,9 +527,9 @@ describe('BEH-013 failed-response turn resolution state gate', () => {
     }).toThrowError(/expected pending/);
     expect(sending.requireTurn('task-completed', 'turn-completed').status).toBe('completed');
 
-    sending.createTask('task-failed', 'session-failed');
-    sending.beginTurn('task-failed', 'turn-failed', '/prompt.md', []);
-    sending.failSendingTurn('task-failed', 'turn-failed', 'pre-submission failure');
+    seedActiveTask(sending, 'task-failed', 'session-failed');
+    sending.beginSendTurn('task-failed', 'turn-failed', '/prompt.md', [], 'operation-failed');
+    sending.failSubmissionAndCommit('task-failed', 'turn-failed', 'operation-failed', 'pre-submission failure');
     expect(() => {
       return sending.failPendingTurnWithResolution('task-failed', 'turn-failed', {
         adjudication: 'failed',
@@ -529,7 +559,7 @@ describe('BEH-013 failed-response turn resolution state gate', () => {
   it('rejects a pending turn whose user identity was not persisted', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collab-resolve-turn-identity-'));
     const store = new StateStore(join(root, 'state.sqlite'));
-    store.createTask('task-a', 'session-a');
+    seedActiveTask(store, 'task-a', 'session-a');
     pendingTurn(store, 'task-a', 'turn-a');
     const raw = new DatabaseSync(join(root, 'state.sqlite'));
     raw.prepare('UPDATE turn SET user_turn_identity = NULL WHERE task_id = ? AND id = ?').run('task-a', 'turn-a');
@@ -552,7 +582,7 @@ describe('BEH-013 failed-response turn resolution state gate', () => {
   it('keeps the failed turn the only unfinished-free blocker and leaves later turns possible', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collab-resolve-turn-continue-'));
     const store = new StateStore(join(root, 'state.sqlite'));
-    store.createTask('task-a', 'session-a');
+    seedActiveTask(store, 'task-a', 'session-a');
     pendingTurn(store, 'task-a', 'turn-a');
     store.failPendingTurnWithResolution('task-a', 'turn-a', {
       adjudication: 'failed',
@@ -562,8 +592,8 @@ describe('BEH-013 failed-response turn resolution state gate', () => {
       stop: 'stopped',
     });
 
-    const continuation = store.beginTurn('task-a', 'turn-b', '/continuation.md', []);
-    expect(continuation).toMatchObject({ id: 'turn-b', status: 'sending' });
+    const continuation = store.beginSendTurn('task-a', 'turn-b', '/continuation.md', [], 'operation-b');
+    expect(continuation.turn).toMatchObject({ id: 'turn-b', status: 'sending' });
     store.close();
   });
 });

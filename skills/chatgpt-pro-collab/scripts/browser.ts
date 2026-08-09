@@ -67,7 +67,6 @@ export interface BrowserSessionInfo {
   readonly powerNow: number;
   readonly powerMin: number;
   readonly powerMax: number;
-  readonly persistent: false;
 }
 
 export type BrowserAvailability = 'available' | 'missing' | 'unknown';
@@ -108,16 +107,13 @@ export interface BrowserArtifactDescription {
 
 export interface BrowserCaptureResult {
   readonly response: string;
-  readonly responseHtml: string;
   readonly artifacts: readonly BrowserArtifactDescription[];
   readonly conversationId: string;
   readonly conversationUrl: string;
 }
 
 export interface BrowserArtifactDownload {
-  readonly sourceUrl: string;
   readonly suggestedFilename: string;
-  readonly downloadUrl: string;
 }
 
 interface ProtocolResult {
@@ -268,7 +264,6 @@ export interface BrowserResolveFailedTurnResult {
 
 export class BrowserError extends Error {
   readonly code: string;
-  readonly operation: string;
 
   /**
    * Creates a stable browser-boundary error without hiding the failed operation.
@@ -282,7 +277,6 @@ export class BrowserError extends Error {
     super(`${operation}: ${message}`);
     this.name = 'BrowserError';
     this.code = code;
-    this.operation = operation;
   }
 }
 
@@ -304,45 +298,6 @@ export class PlaywrightBrowser {
     this.#paths = paths;
     this.#cwd = cwd;
     this.#runner = runner;
-  }
-
-  /**
-   * Runs the one-time interactive login, saves shared storage state, and closes setup.
-   *
-   * @returns The absolute seed state path after Playwright writes it.
-   * @throws {BrowserError} If login, state save, or setup cleanup fails.
-   * @throws {Error} If a local Playwright artifact cannot be written.
-   */
-  async setup(): Promise<string> {
-    const setupId = `setup-${randomUUID()}`;
-    const sessionName = `chatgpt-pro-collab-${setupId}`;
-    await ensureTaskDirectories(this.#paths, setupId);
-    let primaryFailure: unknown;
-
-    try {
-      await this.setupOpen(sessionName);
-      await this.setupSaveSeed(sessionName, this.#paths.seedState);
-    } catch (error) {
-      primaryFailure = error;
-    }
-
-    try {
-      await this.setupClose(sessionName);
-    } catch (closeError) {
-      if (primaryFailure !== undefined) {
-        throw new BrowserError(
-          'BROWSER_CLEANUP_FAILED',
-          'setup',
-          `${errorMessage(primaryFailure)}; cleanup also failed: ${errorMessage(closeError)}`,
-        );
-      }
-      throw closeError;
-    }
-
-    if (primaryFailure !== undefined) {
-      throw primaryFailure;
-    }
-    return this.#paths.seedState;
   }
 
   /**
@@ -565,7 +520,6 @@ export class PlaywrightBrowser {
         powerNow: result.powerNow,
         powerMin: result.powerMin,
         powerMax: result.powerMax,
-        persistent: false,
       };
     } catch (error) {
       if (opened || (reused && isDefiniteStartFailure(error))) {
@@ -963,7 +917,6 @@ export class PlaywrightBrowser {
     }
     return {
       response: result.response,
-      responseHtml: result.responseHtml,
       artifacts: decodeBrowserArtifacts(result.artifacts),
       conversationId: result.conversationId,
       conversationUrl: result.conversationUrl,
@@ -1030,9 +983,7 @@ export class PlaywrightBrowser {
     }
     this.#artifactControlsRefreshed.add(taskId);
     return {
-      sourceUrl,
       suggestedFilename: result.suggestedFilename,
-      downloadUrl: result.downloadUrl,
     };
   }
 

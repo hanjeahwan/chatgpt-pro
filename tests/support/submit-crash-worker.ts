@@ -1,6 +1,7 @@
 import { writeFileSync } from 'node:fs';
 
 import { StateStore } from '../../skills/chatgpt-pro-collab/scripts/state.ts';
+import { seedActiveTask } from './state.ts';
 
 const [databasePath, taskId, turnId, readyPath] = process.argv.slice(2);
 if (databasePath === undefined || taskId === undefined || turnId === undefined || readyPath === undefined) {
@@ -8,7 +9,7 @@ if (databasePath === undefined || taskId === undefined || turnId === undefined |
 }
 
 const store = new StateStore(databasePath);
-store.createTask(taskId, `chatgpt-pro-collab-${taskId}`);
+seedActiveTask(store, taskId, `chatgpt-pro-collab-${taskId}`);
 store.beginSendTurn(taskId, turnId, '/prompt.md', [], 'send-op');
 store.advanceSendToSubmitEffectUnknown('send-op', {
   observedAt: new Date().toISOString(),

@@ -13,6 +13,7 @@ import {
   savePromptCopy,
 } from '../skills/chatgpt-pro-collab/scripts/session.ts';
 import { StateStore } from '../skills/chatgpt-pro-collab/scripts/state.ts';
+import { seedActiveTask } from './support/state.ts';
 
 describe('BEH-007 per-turn audit record', () => {
   it('reconstructs text order, artifact order, and paths after close and process restart', async () => {
@@ -22,14 +23,21 @@ describe('BEH-007 per-turn audit record', () => {
     const databasePath = paths.database;
 
     const first = new StateStore(databasePath);
-    first.createTask('task-a', 'chatgpt-pro-collab-task-a');
+    seedActiveTask(first, 'task-a', 'chatgpt-pro-collab-task-a');
     const promptPath = join(root, 'prompt.md');
     await writeFile(promptPath, 'first prompt');
     await ensureTaskDirectories(paths, 'task-a');
-    first.beginTurn('task-a', 'turn-a', promptPath, ['/outside/a.txt', '/outside/b.txt']);
+    first.beginSendTurn('task-a', 'turn-a', promptPath, ['/outside/a.txt', '/outside/b.txt'], 'operation-a');
     await savePromptCopy(paths, 'task-a', 'turn-a', Buffer.from('first prompt'));
-    first.markSubmissionAttempting('task-a', 'turn-a');
-    first.markTurnPending('task-a', 'turn-a', 'conversation-a', 'https://chatgpt.com/c/conversation-a', 'user-turn-1');
+    first.advanceSendToSubmitEffectUnknown('operation-a');
+    first.commitSubmittedTurn(
+      'task-a',
+      'turn-a',
+      'conversation-a',
+      'https://chatgpt.com/c/conversation-a',
+      'user-turn-1',
+      'operation-a',
+    );
     const firstResponsePath = responsePath(paths, 'task-a', 'turn-a');
     first.freezeCapture('task-a', 'turn-a', firstResponsePath, [
       { sourceUrl: 'sandbox:/mnt/data/same.txt', label: 'same.txt' },
@@ -42,10 +50,17 @@ describe('BEH-007 per-turn audit record', () => {
     first.completeArtifact('task-a', 'turn-a', 1);
     first.completeTurn('task-a', 'turn-a', firstResponsePath);
 
-    first.beginTurn('task-a', 'turn-b', promptPath, ['/outside/b.txt', '/outside/c.txt']);
+    first.beginSendTurn('task-a', 'turn-b', promptPath, ['/outside/b.txt', '/outside/c.txt'], 'operation-b');
     await savePromptCopy(paths, 'task-a', 'turn-b', Buffer.from('second prompt'));
-    first.markSubmissionAttempting('task-a', 'turn-b');
-    first.markTurnPending('task-a', 'turn-b', 'conversation-a', 'https://chatgpt.com/c/conversation-a', 'user-turn-2');
+    first.advanceSendToSubmitEffectUnknown('operation-b');
+    first.commitSubmittedTurn(
+      'task-a',
+      'turn-b',
+      'conversation-a',
+      'https://chatgpt.com/c/conversation-a',
+      'user-turn-2',
+      'operation-b',
+    );
     const secondResponsePath = responsePath(paths, 'task-a', 'turn-b');
     first.freezeCapture('task-a', 'turn-b', secondResponsePath, [
       { sourceUrl: 'sandbox:/mnt/data/same.txt', label: 'same.txt' },
@@ -116,7 +131,7 @@ describe('BEH-007 per-turn audit record', () => {
     const paths = collabPaths(root);
     await ensureCollabDirectories(paths);
     const store = new StateStore(paths.database);
-    store.createTask('task-a', 'session-a');
+    seedActiveTask(store, 'task-a', 'session-a');
     store.createOperation({
       id: 'automatic-op',
       kind: 'start',
@@ -131,18 +146,9 @@ describe('BEH-007 per-turn audit record', () => {
       postcondition: 'start session resumed from seed',
     });
 
-    store.beginTurn('task-a', 'turn-a', '/prompt.md', []);
-    store.markSubmissionAttempting('task-a', 'turn-a');
-    store.createOperation({
-      id: 'human-op',
-      kind: 'send',
-      step: 'submit',
-      taskId: 'task-a',
-      turnId: 'turn-a',
-      sessionName: 'session-a',
-    });
-    store.markOperationEffectUnknown('human-op');
-    store.markOperationNeedsDecision('human-op');
+    store.beginSendTurn('task-a', 'turn-a', '/prompt.md', [], 'human-op');
+    store.advanceSendToSubmitEffectUnknown('human-op');
+    store.markSubmissionUnknownAndNeedsDecision('task-a', 'turn-a', 'human-op', 'submission unresolved');
     store.commitOperation('human-op', 'human', {
       observedAt: '2026-08-07T01:00:00.000Z',
       sessionName: 'session-a',
@@ -173,15 +179,9 @@ describe('BEH-007 per-turn audit record', () => {
     await ensureCollabDirectories(paths);
     const databasePath = paths.database;
     const first = new StateStore(databasePath);
-    first.createTask('task-a', 'session-a');
-    first.createOperation({
-      id: 'start-op',
-      kind: 'start',
-      step: 'configuration',
-      taskId: 'task-a',
-      turnId: null,
-      sessionName: 'session-a',
-    });
+    first.createStartingTask('task-a', 'session-a', 'start-op');
+    first.advanceOperationStep('start-op', 'project');
+    first.advanceOperationStep('start-op', 'configuration');
     first.commitOperation('start-op', 'automatic', {
       observedAt: '2026-08-07T00:00:00.000Z',
       sessionName: 'session-a',
@@ -192,6 +192,7 @@ describe('BEH-007 per-turn audit record', () => {
       powerMin: 0,
       powerMax: 4,
     });
+    first.activateTask('task-a');
     first.closeTask('task-a');
     first.close();
 

@@ -18,6 +18,7 @@ import {
   savePromptCopy,
 } from '../skills/chatgpt-pro-collab/scripts/session.ts';
 import { StateStore } from '../skills/chatgpt-pro-collab/scripts/state.ts';
+import { seedActiveTask } from './support/state.ts';
 
 describe('BEH-001 through BEH-009 CLI orchestration', () => {
   it('supports setup, isolated tasks, multiple turns, idempotent wait, archive, and close', async () => {
@@ -1391,7 +1392,7 @@ describe('BEH-013 recovery matrix completion', () => {
     const firstPromptPath = join(fixture.root, 'bound.md');
     await writeFile(firstPromptPath, 'bound prompt');
     const seedStore = new StateStore(fixture.paths.database);
-    seedStore.createTask(taskId, `chatgpt-pro-collab-${taskId}`);
+    seedActiveTask(seedStore, taskId, `chatgpt-pro-collab-${taskId}`);
     seedStore.close();
     const firstTurn = await fixture.service.send(taskId, firstPromptPath, []);
     await fixture.service.wait(taskId, firstTurn.turnId, 20_000, 20_000);
@@ -1432,7 +1433,7 @@ describe('BEH-013 recovery matrix completion', () => {
     const submittedPromptPath = join(fixture.root, 'submitted-then-failed.md');
     await writeFile(submittedPromptPath, 'submitted then failed');
     const seedStore = new StateStore(fixture.paths.database);
-    seedStore.createTask(taskId, sessionName);
+    seedActiveTask(seedStore, taskId, sessionName);
     seedStore.close();
     const submittedTurn = await fixture.service.send(taskId, submittedPromptPath, []);
 
@@ -1451,8 +1452,8 @@ describe('BEH-013 recovery matrix completion', () => {
       userTurnIdentity: submittedIdentity,
       stop: 'absent',
     });
-    store.beginTurn(taskId, 'pre-submit-failure', '/pre-submit-failure.md', []);
-    store.failSendingTurn(taskId, 'pre-submit-failure', 'failed before submission');
+    store.beginSendTurn(taskId, 'pre-submit-failure', '/pre-submit-failure.md', [], 'pre-submit-operation');
+    store.failSubmissionAndCommit(taskId, 'pre-submit-failure', 'pre-submit-operation', 'failed before submission');
     store.beginSendTurn(taskId, crashedTurnId, crashedPromptPath, [], 'send-op');
     store.advanceSendToSubmitEffectUnknown('send-op');
     store.close();
@@ -1473,7 +1474,7 @@ describe('BEH-013 recovery matrix completion', () => {
     const promptPath = join(fixture.root, 'unresolved.md');
     await writeFile(promptPath, 'unresolved prompt');
     const store = new StateStore(fixture.paths.database);
-    store.createTask(taskId, `chatgpt-pro-collab-${taskId}`);
+    seedActiveTask(store, taskId, `chatgpt-pro-collab-${taskId}`);
     store.beginSendTurn(taskId, turnId, promptPath, [], 'send-op');
     store.advanceSendToSubmitEffectUnknown('send-op');
     store.close();
@@ -1495,7 +1496,7 @@ describe('BEH-013 recovery matrix completion', () => {
     const promptPath = join(fixture.root, 'no-browser.md');
     await writeFile(promptPath, 'no browser prompt');
     const store = new StateStore(fixture.paths.database);
-    store.createTask(taskId, `chatgpt-pro-collab-${taskId}`);
+    seedActiveTask(store, taskId, `chatgpt-pro-collab-${taskId}`);
     store.beginSendTurn(taskId, turnId, promptPath, [], 'send-op');
     store.advanceSendToSubmitEffectUnknown('send-op');
     store.close();
@@ -1523,7 +1524,7 @@ describe('BEH-013 recovery matrix completion', () => {
     const promptPath = join(fixture.root, 'unbound-canonical.md');
     await writeFile(promptPath, 'unbound canonical prompt');
     const store = new StateStore(fixture.paths.database);
-    store.createTask(taskId, `chatgpt-pro-collab-${taskId}`);
+    seedActiveTask(store, taskId, `chatgpt-pro-collab-${taskId}`);
     store.beginSendTurn(taskId, turnId, promptPath, [], 'send-op');
     store.advanceSendToSubmitEffectUnknown('send-op');
     store.close();
@@ -1573,7 +1574,7 @@ describe('BEH-013 recovery matrix completion', () => {
     const firstPromptPath = join(fixture.root, 'bound-recover.md');
     await writeFile(firstPromptPath, 'bound recover');
     const seedStore = new StateStore(fixture.paths.database);
-    seedStore.createTask(taskId, `chatgpt-pro-collab-${taskId}`);
+    seedActiveTask(seedStore, taskId, `chatgpt-pro-collab-${taskId}`);
     seedStore.close();
     const firstTurn = await fixture.service.send(taskId, firstPromptPath, []);
     await fixture.service.wait(taskId, firstTurn.turnId, 20_000, 20_000);
@@ -1605,19 +1606,10 @@ describe('BEH-013 recovery matrix completion', () => {
     const promptPath = join(fixture.root, 'resolve-rebuild.md');
     await writeFile(promptPath, 'resolved prompt');
     const store = new StateStore(fixture.paths.database);
-    store.createTask(taskId, `chatgpt-pro-collab-${taskId}`);
-    store.beginTurn(taskId, turnId, promptPath, []);
-    store.markSubmissionAttempting(taskId, turnId);
-    store.createOperation({
-      id: 'send-op',
-      kind: 'send',
-      step: 'submit',
-      taskId,
-      turnId,
-      sessionName: `chatgpt-pro-collab-${taskId}`,
-    });
-    store.markOperationEffectUnknown('send-op');
-    store.markOperationNeedsDecision('send-op');
+    seedActiveTask(store, taskId, `chatgpt-pro-collab-${taskId}`);
+    store.beginSendTurn(taskId, turnId, promptPath, [], 'send-op');
+    store.advanceSendToSubmitEffectUnknown('send-op');
+    store.markSubmissionUnknownAndNeedsDecision(taskId, turnId, 'send-op', 'submission unresolved');
     store.close();
     await savePromptCopy(fixture.paths, taskId, turnId, Buffer.from('resolved prompt'));
     fixture.browser.sessionAvailabilityResult = 'missing';
@@ -1644,19 +1636,10 @@ describe('BEH-013 recovery matrix completion', () => {
     const promptPath = join(fixture.root, 'failed-verify.md');
     await writeFile(promptPath, 'failed verify');
     const store = new StateStore(fixture.paths.database);
-    store.createTask(taskId, `chatgpt-pro-collab-${taskId}`);
-    store.beginTurn(taskId, turnId, promptPath, []);
-    store.markSubmissionAttempting(taskId, turnId);
-    store.createOperation({
-      id: 'send-op',
-      kind: 'send',
-      step: 'submit',
-      taskId,
-      turnId,
-      sessionName: `chatgpt-pro-collab-${taskId}`,
-    });
-    store.markOperationEffectUnknown('send-op');
-    store.markOperationNeedsDecision('send-op');
+    seedActiveTask(store, taskId, `chatgpt-pro-collab-${taskId}`);
+    store.beginSendTurn(taskId, turnId, promptPath, [], 'send-op');
+    store.advanceSendToSubmitEffectUnknown('send-op');
+    store.markSubmissionUnknownAndNeedsDecision(taskId, turnId, 'send-op', 'submission unresolved');
     store.close();
     await savePromptCopy(fixture.paths, taskId, turnId, Buffer.from('failed verify'));
     fixture.browser.nextVerifySafeComposerFailureTaskId = taskId;
@@ -2475,15 +2458,7 @@ describe('BEH-013 status, recover, and resolve-submission', () => {
     const fixture = await serviceFixture();
     const taskId = 'task-starting';
     const store = new StateStore(fixture.paths.database);
-    store.createTask(taskId, `chatgpt-pro-collab-${taskId}`, 'starting');
-    store.createOperation({
-      id: 'start-op',
-      kind: 'start',
-      step: 'session',
-      taskId,
-      turnId: null,
-      sessionName: `chatgpt-pro-collab-${taskId}`,
-    });
+    store.createStartingTask(taskId, `chatgpt-pro-collab-${taskId}`, 'start-op');
     store.close();
     await writeFile(fixture.paths.seedState, validSeedText());
 
@@ -2502,19 +2477,10 @@ describe('BEH-013 status, recover, and resolve-submission', () => {
     const promptPath = join(fixture.root, 'resolve-prompt.md');
     await writeFile(promptPath, 'resolved prompt');
     const store = new StateStore(fixture.paths.database);
-    store.createTask(taskId, `chatgpt-pro-collab-${taskId}`);
-    store.beginTurn(taskId, turnId, promptPath, []);
-    store.markSubmissionAttempting(taskId, turnId);
-    store.createOperation({
-      id: 'send-op',
-      kind: 'send',
-      step: 'submit',
-      taskId,
-      turnId,
-      sessionName: `chatgpt-pro-collab-${taskId}`,
-    });
-    store.markOperationEffectUnknown('send-op');
-    store.markOperationNeedsDecision('send-op');
+    seedActiveTask(store, taskId, `chatgpt-pro-collab-${taskId}`);
+    store.beginSendTurn(taskId, turnId, promptPath, [], 'send-op');
+    store.advanceSendToSubmitEffectUnknown('send-op');
+    store.markSubmissionUnknownAndNeedsDecision(taskId, turnId, 'send-op', 'submission unresolved');
     store.close();
     await savePromptCopy(fixture.paths, taskId, turnId, Buffer.from('resolved prompt'));
 
@@ -2545,19 +2511,10 @@ describe('BEH-013 status, recover, and resolve-submission', () => {
     const promptPath = join(fixture.root, 'not-sent-prompt.md');
     await writeFile(promptPath, 'not sent');
     const store = new StateStore(fixture.paths.database);
-    store.createTask(taskId, `chatgpt-pro-collab-${taskId}`);
-    store.beginTurn(taskId, turnId, promptPath, []);
-    store.markSubmissionAttempting(taskId, turnId);
-    store.createOperation({
-      id: 'send-op',
-      kind: 'send',
-      step: 'submit',
-      taskId,
-      turnId,
-      sessionName: `chatgpt-pro-collab-${taskId}`,
-    });
-    store.markOperationEffectUnknown('send-op');
-    store.markOperationNeedsDecision('send-op');
+    seedActiveTask(store, taskId, `chatgpt-pro-collab-${taskId}`);
+    store.beginSendTurn(taskId, turnId, promptPath, [], 'send-op');
+    store.advanceSendToSubmitEffectUnknown('send-op');
+    store.markSubmissionUnknownAndNeedsDecision(taskId, turnId, 'send-op', 'submission unresolved');
     store.close();
     await savePromptCopy(fixture.paths, taskId, turnId, Buffer.from('not sent'));
 
@@ -2644,10 +2601,18 @@ describe('BEH-013 resolve-turn failed response resolution', () => {
     const promptPath = join(fixture.root, `${turnId}.md`);
     await Promise.all([writeFile(promptPath, 'pending'), writeFile(fixture.paths.seedState, validSeedText())]);
     const store = new StateStore(fixture.paths.database);
-    store.createTask(taskId, `chatgpt-pro-collab-${taskId}`);
-    store.beginTurn(taskId, turnId, promptPath, []);
-    store.markSubmissionAttempting(taskId, turnId);
-    store.markTurnPending(taskId, turnId, `conversation-${taskId}`, conversationUrl, `user-turn-${taskId}`);
+    seedActiveTask(store, taskId, `chatgpt-pro-collab-${taskId}`);
+    const operationId = `${taskId}-${turnId}-send-operation`;
+    store.beginSendTurn(taskId, turnId, promptPath, [], operationId);
+    store.advanceSendToSubmitEffectUnknown(operationId);
+    store.commitSubmittedTurn(
+      taskId,
+      turnId,
+      `conversation-${taskId}`,
+      conversationUrl,
+      `user-turn-${taskId}`,
+      operationId,
+    );
     store.close();
   };
 
@@ -2745,38 +2710,51 @@ describe('BEH-013 resolve-turn failed response resolution', () => {
   it('rejects capturing, completed, sending, unknown-submission, and other-failed turns', async () => {
     const fixture = await serviceFixture();
     const capturing = new StateStore(fixture.paths.database);
-    capturing.createTask('capturing-task', 'session-capturing');
-    capturing.beginTurn('capturing-task', 'turn-capturing', '/prompt.md', []);
-    capturing.markSubmissionAttempting('capturing-task', 'turn-capturing');
-    capturing.markTurnPending(
+    seedActiveTask(capturing, 'capturing-task', 'session-capturing');
+    capturing.beginSendTurn('capturing-task', 'turn-capturing', '/prompt.md', [], 'capturing-operation');
+    capturing.advanceSendToSubmitEffectUnknown('capturing-operation');
+    capturing.commitSubmittedTurn(
       'capturing-task',
       'turn-capturing',
       'conversation-capturing',
       'https://chatgpt.com/c/conversation-capturing',
       'user-turn-capturing',
+      'capturing-operation',
     );
     capturing.freezeCapture('capturing-task', 'turn-capturing', join(fixture.root, 'capturing.md'), []);
-    capturing.createTask('completed-task', 'session-completed');
-    capturing.beginTurn('completed-task', 'turn-completed', '/prompt.md', []);
-    capturing.markSubmissionAttempting('completed-task', 'turn-completed');
-    capturing.markTurnPending(
+    seedActiveTask(capturing, 'completed-task', 'session-completed');
+    capturing.beginSendTurn('completed-task', 'turn-completed', '/prompt.md', [], 'completed-operation');
+    capturing.advanceSendToSubmitEffectUnknown('completed-operation');
+    capturing.commitSubmittedTurn(
       'completed-task',
       'turn-completed',
       'conversation-completed',
       'https://chatgpt.com/c/conversation-completed',
       'user-turn-completed',
+      'completed-operation',
     );
     capturing.freezeCapture('completed-task', 'turn-completed', join(fixture.root, 'completed.md'), []);
     await writeFile(join(fixture.root, 'completed.md'), 'done');
     capturing.completeTurn('completed-task', 'turn-completed', join(fixture.root, 'completed.md'));
-    capturing.createTask('sending-task', 'session-sending');
-    capturing.beginTurn('sending-task', 'turn-sending', '/prompt.md', []);
-    capturing.createTask('unknown-task', 'session-unknown');
-    capturing.beginTurn('unknown-task', 'turn-unknown', '/prompt.md', []);
-    capturing.markSubmissionAttempting('unknown-task', 'turn-unknown');
-    capturing.createTask('other-failed-task', 'session-other-failed');
-    capturing.beginTurn('other-failed-task', 'turn-other-failed', '/prompt.md', []);
-    capturing.failSendingTurn('other-failed-task', 'turn-other-failed', 'pre-submission failure');
+    seedActiveTask(capturing, 'sending-task', 'session-sending');
+    capturing.beginSendTurn('sending-task', 'turn-sending', '/prompt.md', [], 'sending-operation');
+    seedActiveTask(capturing, 'unknown-task', 'session-unknown');
+    capturing.beginSendTurn('unknown-task', 'turn-unknown', '/prompt.md', [], 'unknown-operation');
+    capturing.advanceSendToSubmitEffectUnknown('unknown-operation');
+    capturing.markSubmissionUnknownAndNeedsDecision(
+      'unknown-task',
+      'turn-unknown',
+      'unknown-operation',
+      'submission unresolved',
+    );
+    seedActiveTask(capturing, 'other-failed-task', 'session-other-failed');
+    capturing.beginSendTurn('other-failed-task', 'turn-other-failed', '/prompt.md', [], 'failed-operation');
+    capturing.failSubmissionAndCommit(
+      'other-failed-task',
+      'turn-other-failed',
+      'failed-operation',
+      'pre-submission failure',
+    );
     capturing.close();
 
     for (const [taskId, turnId] of [
@@ -3046,17 +3024,6 @@ class FakeBrowser implements CollabBrowser {
   }
 
   /**
-   * Writes the fake shared authentication seed.
-   *
-   * @returns The fake seed path.
-   * @throws {Error} If the test file cannot be written.
-   */
-  async setup(): Promise<string> {
-    await writeFile(this.paths.seedState, validSeedText());
-    return this.paths.seedState;
-  }
-
-  /**
    * Records one fake setup login observation.
    *
    * @param sessionName Recorded setup session name.
@@ -3145,7 +3112,6 @@ class FakeBrowser implements CollabBrowser {
       powerNow: 4,
       powerMin: 0,
       powerMax: 4,
-      persistent: false as const,
     });
   }
 
@@ -3595,7 +3561,6 @@ class FakeBrowser implements CollabBrowser {
       }
       return {
         response: `response for ${taskId}`,
-        responseHtml: `<p>response for ${taskId}</p>`,
         artifacts: [...this.responseArtifacts],
         conversationId: expectedConversationId,
         conversationUrl: `https://chatgpt.com/c/${expectedConversationId}`,
@@ -3667,9 +3632,7 @@ class FakeBrowser implements CollabBrowser {
     }
     await writeFile(temporaryPath, `artifact for ${sourceUrl}`);
     return {
-      sourceUrl,
       suggestedFilename: sourceUrl.slice(sourceUrl.lastIndexOf('/') + 1),
-      downloadUrl: `https://chatgpt.com/backend-api/estuary/content/${this.downloadedArtifacts.length}`,
     };
   }
 

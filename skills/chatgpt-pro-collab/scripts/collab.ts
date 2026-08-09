@@ -41,7 +41,6 @@ const CAPTURE_ABORT_SETTLE_MS = 250;
 const OBSERVATION_RELOAD_PERIOD_MS = 300_000;
 
 export interface CollabBrowser {
-  setup(): Promise<string>;
   setupOpen(sessionName: string): Promise<void>;
   setupSaveSeed(sessionName: string, seedStatePath: string): Promise<{ readonly seedValidated: boolean }>;
   setupClose(sessionName: string): Promise<{ readonly sessionClosed: boolean }>;
