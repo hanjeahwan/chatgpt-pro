@@ -681,7 +681,7 @@ export class CollabService {
           powerMax: browser.powerMax,
         });
       }
-      store.commitOperation(effectOperation.id, 'automatic', {
+      const evidence = {
         observedAt: new Date().toISOString(),
         sessionName,
         pageUrl: browser.url,
@@ -692,9 +692,11 @@ export class CollabService {
         powerNow: browser.powerNow,
         powerMin: browser.powerMin,
         powerMax: browser.powerMax,
-      });
+      };
       if (task.status === 'starting') {
-        store.activateTask(taskId);
+        store.finishStartTask(taskId, effectOperation.id, 'active', evidence);
+      } else {
+        store.commitOperation(effectOperation.id, 'automatic', evidence);
       }
       return {
         taskId,
@@ -705,8 +707,7 @@ export class CollabService {
     } catch (error) {
       if (isDefiniteStartFailure(error)) {
         try {
-          store.failTask(taskId);
-          store.commitOperation(effectOperation.id, 'automatic', undefined, errorMessage(error));
+          store.finishStartTask(taskId, effectOperation.id, 'failed', undefined, errorMessage(error));
         } catch {
           // Preserve the original start failure when the failure commit itself fails.
         }
@@ -1597,7 +1598,7 @@ export class CollabService {
         });
       }
       if (recoveredOperation !== null) {
-        store.commitOperation(recoveredOperation.id, 'automatic', {
+        const evidence = {
           observedAt: new Date().toISOString(),
           sessionName: task.playwrightSession,
           pageUrl: browser.url,
@@ -1608,9 +1609,13 @@ export class CollabService {
           powerNow: browser.powerNow,
           powerMin: browser.powerMin,
           powerMax: browser.powerMax,
-        });
-      }
-      if (task.status === 'starting') {
+        };
+        if (task.status === 'starting') {
+          store.finishStartTask(taskId, recoveredOperation.id, 'active', evidence);
+        } else {
+          store.commitOperation(recoveredOperation.id, 'automatic', evidence);
+        }
+      } else if (task.status === 'starting') {
         store.activateTask(taskId);
       }
       const after = await this.#browser.sessionAvailability(task.playwrightSession);

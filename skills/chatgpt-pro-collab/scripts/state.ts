@@ -346,6 +346,44 @@ export class StateStore {
   }
 
   /**
+   * Commits a terminal start outcome together with its operation journal.
+   *
+   * @param taskId Starting task identifier.
+   * @param operationId Start operation identifier.
+   * @param outcome Terminal task status proven by the start attempt.
+   * @param evidence Final observed browser evidence for a successful start.
+   * @param error Concrete terminal failure for a failed start.
+   * @returns The updated active or failed task.
+   * @throws {StateError} If the task or operation does not describe the same unfinished start.
+   * @throws {Error} If SQLite cannot commit the complete transition.
+   */
+  finishStartTask(
+    taskId: string,
+    operationId: string,
+    outcome: 'active' | 'failed',
+    evidence?: OperationEvidence,
+    error?: string,
+  ): TaskRecord {
+    return this.#transaction(() => {
+      const task = this.requireTask(taskId);
+      if (task.status !== 'starting') {
+        throw new StateError('TASK_STATE_CONFLICT', `task is ${task.status}, expected starting: ${taskId}`);
+      }
+      const operation = this.requireOperation(operationId);
+      if (operation.kind !== 'start' || operation.taskId !== taskId) {
+        throw new StateError(
+          'OPERATION_PHASE_CONFLICT',
+          `operation does not belong to the starting task: ${operationId}`,
+        );
+      }
+      const now = new Date().toISOString();
+      this.#database.prepare('UPDATE task SET status = ?, updated_at = ? WHERE id = ?').run(outcome, now, taskId);
+      this.#commitOperationRow(operationId, 'automatic', evidence, error);
+      return this.requireTask(taskId);
+    });
+  }
+
+  /**
    * Loads one task regardless of lifecycle status.
    *
    * @param taskId Task identifier.

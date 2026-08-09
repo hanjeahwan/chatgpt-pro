@@ -328,8 +328,7 @@ describe('BEH-002, BEH-005, BEH-007, and BEH-008 state gates', () => {
     const root = await mkdtemp(join(tmpdir(), 'collab-terminal-task-status-'));
     const store = new StateStore(join(root, 'state.sqlite'));
     store.createStartingTask('task-a', 'session-a', 'start-operation-a');
-    store.failTask('task-a');
-    store.commitOperation('start-operation-a', 'automatic', undefined, 'project unavailable');
+    store.finishStartTask('task-a', 'start-operation-a', 'failed', undefined, 'project unavailable');
 
     expect(store.getStatus('task-a', 'missing')).toMatchObject({
       taskStatus: 'failed',
@@ -339,6 +338,29 @@ describe('BEH-002, BEH-005, BEH-007, and BEH-008 state gates', () => {
       error: 'project unavailable',
       nextAction: 'none',
     });
+    store.close();
+  });
+
+  it('rolls back the task outcome when its start operation cannot commit', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-start-outcome-rollback-'));
+    const databasePath = join(root, 'state.sqlite');
+    const store = new StateStore(databasePath);
+    store.createStartingTask('task-a', 'session-a', 'start-operation-a');
+    store.markOperationEffectUnknown('start-operation-a');
+    const raw = new DatabaseSync(databasePath);
+    raw.exec(`
+      CREATE TRIGGER reject_start_commit BEFORE UPDATE OF phase ON operation
+      WHEN NEW.id = 'start-operation-a' AND NEW.phase = 'committed'
+      BEGIN SELECT RAISE(ABORT, 'injected operation commit failure'); END;
+    `);
+    raw.close();
+
+    expect(() => {
+      store.finishStartTask('task-a', 'start-operation-a', 'failed', undefined, 'project unavailable');
+    }).toThrowError(/injected operation commit failure/);
+    expect(store.requireTask('task-a').status).toBe('starting');
+    expect(store.requireOperation('start-operation-a').phase).toBe('effect-unknown');
+    expect(store.getStatus('task-a', 'missing').nextAction).toBe('recover');
     store.close();
   });
 
