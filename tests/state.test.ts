@@ -49,6 +49,55 @@ describe('BEH-002, BEH-005, BEH-007, and BEH-008 state gates', () => {
     store.close();
   });
 
+  it('keeps the first submitted canonical conversation URL across later turns', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-canonical-binding-'));
+    const store = new StateStore(join(root, 'state.sqlite'));
+    store.createTask('task-a', 'session-a');
+    store.beginSendTurn('task-a', 'turn-a', '/prompt.md', [], 'operation-a');
+    store.advanceSendToSubmitEffectUnknown('operation-a');
+    store.commitSubmittedTurn(
+      'task-a',
+      'turn-a',
+      'conversation-a',
+      'https://chatgpt.com/c/conversation-a',
+      'user-turn-a',
+      'operation-a',
+    );
+    expect(store.requireTask('task-a')).toMatchObject({
+      conversationId: 'conversation-a',
+      conversationUrl: 'https://chatgpt.com/c/conversation-a',
+    });
+    const responsePath = join(root, 'response.md');
+    store.freezeCapture('task-a', 'turn-a', responsePath, []);
+    await writeFile(responsePath, 'done');
+    store.completeTurn('task-a', 'turn-a', responsePath);
+
+    store.beginSendTurn('task-a', 'turn-b', '/next.md', [], 'operation-b');
+    store.advanceSendToSubmitEffectUnknown('operation-b');
+    expect(() => {
+      store.commitSubmittedTurn(
+        'task-a',
+        'turn-b',
+        'conversation-a',
+        'https://chatgpt.com/g/g-p-123/c/conversation-a',
+        'user-turn-b',
+        'operation-b',
+      );
+    }).toThrowError(/different conversation/);
+    expect(store.requireTask('task-a').conversationUrl).toBe('https://chatgpt.com/c/conversation-a');
+
+    store.commitSubmittedTurn(
+      'task-a',
+      'turn-b',
+      'conversation-a',
+      'https://chatgpt.com/c/conversation-a',
+      'user-turn-b',
+      'operation-b',
+    );
+    expect(store.requireTask('task-a').conversationUrl).toBe('https://chatgpt.com/c/conversation-a');
+    store.close();
+  });
+
   it('freezes ordered artifacts before publication and completes only readable files', async () => {
     const root = await mkdtemp(join(tmpdir(), 'collab-artifact-state-'));
     const store = new StateStore(join(root, 'state.sqlite'));

@@ -698,21 +698,20 @@ export class StateStore {
           `turn is ${turn.status}, expected sending or unknown-submission: ${turnId}`,
         );
       }
-      if (
-        task.conversationId !== null &&
-        (task.conversationId !== conversationId ||
-          conversationIdOf(task.conversationUrl) !== conversationIdOf(conversationUrl))
-      ) {
-        throw new StateError('CONVERSATION_MISMATCH', `task is already bound to a different conversation: ${taskId}`);
-      }
       const now = new Date().toISOString();
-      this.#database
-        .prepare(
-          `UPDATE task
-           SET conversation_id = ?, conversation_url = ?, updated_at = ?
-           WHERE id = ?`,
-        )
-        .run(conversationId, conversationUrl, now, taskId);
+      if (task.conversationId !== null) {
+        if (task.conversationId !== conversationId || task.conversationUrl !== conversationUrl) {
+          throw new StateError('CONVERSATION_MISMATCH', `task is already bound to a different conversation: ${taskId}`);
+        }
+      } else {
+        this.#database
+          .prepare(
+            `UPDATE task
+             SET conversation_id = ?, conversation_url = ?, updated_at = ?
+             WHERE id = ?`,
+          )
+          .run(conversationId, conversationUrl, now, taskId);
+      }
       try {
         this.#database
           .prepare(

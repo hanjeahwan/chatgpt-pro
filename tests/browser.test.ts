@@ -1920,6 +1920,23 @@ describe('BEH-013 browser boundary support', () => {
     expectPageFunctionSyntax(source);
   });
 
+  it('rejects a rebuilt conversation redirect that keeps the id under a different canonical path', async () => {
+    const fixture = await executableConversationIdentityFixture({
+      hostname: 'chatgpt.com',
+      pathname: '/g/g-p-123/c/conversation-a',
+      origin: 'https://chatgpt.com',
+    });
+
+    await expect(
+      fixture.browser.recoverConversation(
+        'task-a',
+        'session-a',
+        'https://chatgpt.com/c/conversation-a',
+        'conversation-a',
+      ),
+    ).rejects.toThrow(/conversation identity/);
+  });
+
   it('reloads the bound conversation and verifies the rehydrated identity after the fixed CLI reload', async () => {
     const fixture = await browserFixture([
       output('reloaded current page'),
@@ -1960,7 +1977,7 @@ describe('BEH-013 browser boundary support', () => {
   });
 
   it('accepts a reloaded page matching the recorded canonical conversation URL', async () => {
-    const fixture = await executableReloadFixture({
+    const fixture = await executableConversationIdentityFixture({
       hostname: 'chatgpt.com',
       pathname: '/c/conversation-a',
       origin: 'https://chatgpt.com',
@@ -1981,7 +1998,7 @@ describe('BEH-013 browser boundary support', () => {
   });
 
   it('rejects a reloaded page that shares the conversation id but resolves to a different canonical URL', async () => {
-    const fixture = await executableReloadFixture({
+    const fixture = await executableConversationIdentityFixture({
       hostname: 'chatgpt.com',
       pathname: '/g/g-p-123/c/conversation-a',
       origin: 'https://chatgpt.com',
@@ -3288,8 +3305,8 @@ async function executableBrowserFixture(options: ArtifactPageOptions) {
 }
 
 /**
- * Creates a browser runner that executes the generated reload verification function against
- * a page-shaped stub reporting one fixed canonical URL and one matching user turn anchor.
+ * Creates a browser runner that executes generated conversation identity checks against a
+ * page-shaped stub reporting one fixed canonical URL and one matching user turn anchor.
  *
  * The stub re-evaluates each callback from source before invoking it, mirroring Playwright's
  * separate serialization of `waitForFunction`/`evaluate` callbacks, so closures over the page
@@ -3299,7 +3316,7 @@ async function executableBrowserFixture(options: ArtifactPageOptions) {
  * @returns Browser, fixture root, and captured invocations.
  * @throws {Error} If the fixture directory or generated script cannot be read.
  */
-async function executableReloadFixture(url: {
+async function executableConversationIdentityFixture(url: {
   readonly hostname: string;
   readonly pathname: string;
   readonly origin: string;
@@ -3316,12 +3333,15 @@ async function executableReloadFixture(url: {
       return name === 'data-turn' ? 'user' : null;
     },
   };
-  const withReloadGlobals = (callback: unknown, argument: unknown): unknown => {
+  const withConversationGlobals = (callback: unknown, argument: unknown): unknown => {
     const globals = globalThis as unknown as Record<string, unknown>;
     const previousLocation = globals.location;
     const previousDocument = globals.document;
     globals.location = { hostname: url.hostname, pathname: url.pathname, origin: url.origin };
     globals.document = {
+      querySelector() {
+        return anchor;
+      },
       querySelectorAll() {
         return [anchor];
       },
@@ -3346,13 +3366,14 @@ async function executableReloadFixture(url: {
     }
   };
   const page = {
+    async goto() {},
     async waitForFunction(callback: unknown, argument: unknown) {
-      if (withReloadGlobals(callback, argument) !== true) {
-        throw new Error('reloaded page did not settle on the expected conversation identity');
+      if (withConversationGlobals(callback, argument) !== true) {
+        throw new Error('page did not settle on the expected conversation identity');
       }
     },
     async evaluate(callback: unknown) {
-      return withReloadGlobals(callback, undefined);
+      return withConversationGlobals(callback, undefined);
     },
   };
   const browser = new PlaywrightBrowser(paths, root, async (invocation) => {

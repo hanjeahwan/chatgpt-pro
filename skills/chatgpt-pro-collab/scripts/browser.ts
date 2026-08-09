@@ -3468,7 +3468,11 @@ function recoverConversationScript(canonicalUrl: string, expectedConversationId:
     const url = await page.evaluate(() => {
       return { hostname: location.hostname, pathname: location.pathname, origin: location.origin };
     });
-    if (url.hostname !== 'chatgpt.com' || conversationIdOf(url.pathname) !== conversationId) {
+    if (
+      url.hostname !== 'chatgpt.com' ||
+      url.origin + url.pathname !== canonicalUrl ||
+      conversationIdOf(url.pathname) !== conversationId
+    ) {
       throw new Error('conversation identity does not match the recorded canonical URL');
     }
     return JSON.stringify({
