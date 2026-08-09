@@ -5,8 +5,8 @@
 ## 1. 事件事实
 
 - 日期：2026-08-09。
-- 用户报告：长生成 turn 中 ChatGPT 服务端已完成回复，但 Web 客户端停留在陈旧状态：目标 assistant 的 Copy 始终不可见、页面没有可见的 `Stop answering`、也没有 Submit 或文本层面的完成信号，普通 DOM 轮询无法区分“仍在生成”与“服务端已完成但客户端卡死”。
-- 人工 reload 页面后 conversation 重新水合：同一 canonical conversation 与目标 user turn 可定位，目标 assistant 的 Copy 可见，回复可正常进入既有捕获路径。
+- 用户报告：长生成 turn 中 ChatGPT 服务端已有 response，但 Web 客户端未呈现可捕获完成控件，普通 DOM 信号无法可靠区分该状态与“仍在生成”。
+- 人工 reload 页面后 conversation 重新水合：同一 canonical conversation 与目标 user turn 仍可定位，回复可正常进入既有捕获路径。
 - 与已明确失败或终止的 response 的边界：后者 reload 后仍未恢复生成（`2026-08-09-collab-terminal-pro-response-cannot-continue.md`），需要用户提供终端失败事实后由 `resolve-turn ... failed` 裁决；本场景远端已完成，只需重新水合页面即可继续捕获，不应判为失败。
 
 ## 2. 根因与共同根因
@@ -32,12 +32,12 @@
 
 ## 5. 修复前验证条件
 
-- [ ] 确定性夹具：未捕获持续达到 `300000ms` 时触发 reload，且 Copy/Stop/Submit/文本状态保持不变时仍按单调时间触发。
+- [ ] 确定性夹具：模拟 stale 完成状态（服务端已有 response、页面未呈现可捕获完成控件），未捕获持续达到 `300000ms` 时按单调时间触发 reload，并经周期 reload 恢复既有观察与捕获。
 - [ ] reload 后同一 canonical conversation 与目标 user turn 核对成功，继续既有观察与捕获并完成。
 - [ ] reload 后身份核对失败时保持 `pending`，不捕获、不自动失败。
 - [ ] reload 耗时计入 `observationWindowMs`，剩余预算耗尽时窗口到期正常返回 `pending`；同一次 wait 内多次 reload 周期可重复。
 - [ ] reload 期间不点击 Stop、不改变 turn 持久状态、不发送 continuation；turn 持久状态与审计不变。
 - [ ] capturing 恢复与 `resolve-turn ... failed` 行为与既有合同一致。
-- [ ] 实机 live：复现“服务端已完成但页面陈旧”，单次 wait 内自动 reload 重新水合并完成捕获，Web 端无额外 user turn。
+- [ ] 实机 live：让一个长生成 turn 跨过 `300000ms` 自动 reload 点，证明 reload 不终止远端生成、同一 canonical conversation 与目标 user turn 身份不变、最终完成捕获且无额外 user turn；自然偶发 stale 的再次实机复现列为证明边界，不作为必测前置。
 
 完成条件：陈旧但服务端已完成的 pending turn 能在同一次 wait 内由单调时间驱动的周期 reload 自动重新水合，走既有观察/捕获路径完成，不引入 Stop 点击、自动失败或 continuation。
