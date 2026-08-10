@@ -6,6 +6,12 @@
       "sourceType": "github",
       "skillPath": "skills/define-product-spec/SKILL.md",
       "computedHash": "dad534da616d4e2fbad41694ee6f5860d1f461b3a6433820fb2cbf4dde8b20bc"
+    },
+    "open-code-review": {
+      "source": "alibaba/open-code-review",
+      "sourceType": "github",
+      "skillPath": "skills/open-code-review/SKILL.md",
+      "computedHash": "5ebd7726ff89b3f5906b6dc4f3a16dfa9684e30181f619d95a3fb7bc00ad3f3a"
     }
   }
 }
