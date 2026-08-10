@@ -8,7 +8,7 @@
 2. **理解变化并拆分任务**：Coordinator 对照用户请求、适用 Spec 和现有实现，将工作拆为可独立实现、验证和提交的 atomic Tasks。
 3. **派发实现**：Coordinator 按依赖顺序派发 Implementation Tasks。Implementation writer 交付对应 atomic commits，Coordinator 按 `orchestration` Skill 监督 Dispatch 直至结算。
 4. **汇总候选与全量验证**：Coordinator 汇集已接受的 commits，在 task worktree 同步 target branch，并对最终 aggregate diff 执行完整检查。
-5. **全量 Changes Review**：Coordinator 派发只读 Review Task。Independent reviewer 使用 `open-code-review-delegate` Skill 审查最终 aggregate diff。
+5. **全量 Changes Review**：Coordinator 派发只读 Review Task。Independent reviewer 使用 `open-code-review` Skill 审查最终 aggregate diff。
 6. **修正并集成**：Coordinator 将阻塞 finding 转为 atomic remediation Task，重复实现、验证和 Review。只有最终候选完成必要验证且没有阻塞 finding，Coordinator 才能集成。
 
 ## 2. Orca task worktree 与 Task
@@ -43,10 +43,10 @@ Coordinator 在 final candidate HEAD 上执行仓库默认检查，以及任务�
 ## 5. Review Dispatch 与 remediation
 
 1. Coordinator 将 `候选已纳入的 target SHA..final candidate HEAD` 创建为只读 Review Task，不授予 write ownership。
-2. Coordinator 使用 `orchestration` Skill 派发 `AGENTS.md` 定义的 Independent reviewer。Review Task 明确要求 reviewer 使用 `open-code-review-delegate` Skill 选择文件、解析规则并 Review 最终 aggregate diff。
+2. Coordinator 使用 `orchestration` Skill 派发 `AGENTS.md` 定义的 Independent reviewer。Review Task 明确要求 reviewer 使用 `open-code-review` Skill Review 最终 aggregate diff。
 3. Reviewer 对照用户请求、适用 Spec 和验收条件，检查实现完整性、正确性、回归风险和 commits 组合后的集成问题。Review 默认针对最终 aggregate diff，不为每个 atomic commit 单独设置 Review Gate。
 4. 存在阻塞 finding 时，Coordinator 创建 atomic remediation Task，重新授予 Implementation writer write ownership 并通过 `orchestration` Skill 派发。
-5. Implementation writer 交付 remediation commit 后，Coordinator 重新运行受影响检查和必要的全量检查，再派发 Independent reviewer 使用 `open-code-review-delegate` Skill 复审最终 aggregate diff。
+5. Implementation writer 交付 remediation commit 后，Coordinator 重新运行受影响检查和必要的全量检查，再派发 Independent reviewer 使用 `open-code-review` Skill 复审最终 aggregate diff。
 
 ## 6. 集成前检查
 
@@ -55,7 +55,7 @@ Coordinator 在 final candidate HEAD 上执行仓库默认检查，以及任务�
 - [ ] 所有 Orca Tasks 与 Dispatches 已结算，没有 writer 仍会修改最终候选。
 - [ ] 所有 atomic Tasks 已形成对应 commits，候选已纳入的 target SHA、final candidate HEAD 和 aggregate diff 可由 Git 定位。
 - [ ] 必要的全量验证已在 final candidate HEAD 上完成，未验证项已说明。
-- [ ] Independent reviewer 已通过 `open-code-review-delegate` Skill Review 最终 aggregate diff，且没有未解决的阻塞 finding。
+- [ ] Independent reviewer 已通过 `open-code-review` Skill Review 最终 aggregate diff，且没有未解决的阻塞 finding。
 - [ ] 最终 diff 没有无关修改，task worktree clean。
 
 集成前 target branch 已前进时：
