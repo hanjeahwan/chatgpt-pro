@@ -33,7 +33,9 @@
 
 根据任务场景选择路由：
 
-- **仓库开发**：涉及仓库写入时，先按 `WORKFLOW.md` 创建专用 Orca task worktree。Coordinator 继续对实施、Review 和最终结果负责时，使用 `orchestration` Skill。
+- **仓库开发**
+  - **协作任务**：用户明确要求 Orca task worktree，或任务需要 Implementation writer 或 Independent reviewer 时，按 `WORKFLOW.md` 执行。
+  - **普通任务**：其他仓库写入由当前 Agent 在当前 worktree 直接完成，并执行本文件的“自审”和“验证”。
 - **监督式协作**：例如“把任务拆成 A、B、C，交给多个 Agent。”使用 `orchestration`
   Skill。Coordinator 继续对执行过程和最终结果负责；Run、Task、Dispatch、消息、等待和 worker 操作直接遵守版本匹配的 Skill。
 - **完整任务交接**：例如“把这个任务交给另一个 Agent 完成，你不需要继续跟踪。”使用 `orca-cli` Skill。

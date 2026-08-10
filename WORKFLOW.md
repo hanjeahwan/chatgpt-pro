@@ -1,6 +1,6 @@
 # WORKFLOW
 
-本文件规定仓库开发任务的 Orca-native 闭环。任何写入开始前，Coordinator 必须从 target branch 创建专用 Orca task worktree。实施、验证和 Review 均在该 worktree 进行；除最终集成外，禁止直接写入 target branch（包括 `main`）或用户主工作区。Orca 命令、消息、等待和 worker 生命周期遵守版本匹配的 `orca-cli` 与 `orchestration` Skill；本文件只规定角色、交付边界和放行条件。
+本文件规定由 `AGENTS.md` 路由的协作任务的 Orca-native 闭环。进入本流程后，Coordinator 必须从 target branch 创建专用 Orca task worktree。实施、验证和 Review 均在该 worktree 进行；除最终集成外，禁止直接写入 target branch（包括 `main`）或用户主工作区。Orca 命令、消息、等待和 worker 生命周期遵守版本匹配的 `orca-cli` 与 `orchestration` Skill；本文件只规定角色、交付边界和放行条件。
 
 ## 1. 核心流程
 
