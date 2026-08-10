@@ -24,6 +24,7 @@
 
 - **Coordinator**：local coordinating session；创建专用 Orca task worktree，通过 Orca Orchestrator 建立并监督 Run、Task 与 Dispatch，维护 writer ownership，并对 Spec 变化、候选验证、Review 和集成负责。
 - **Implementation writer**：Orca supervised worker，默认 Agent 为 `opencode`；只写入 Orca Task 分配的 write scope，并交付对应 atomic commit。
+  - 不得执行任何非项目脚本或可执行包，包括仓库、项目权威文档或配置未提供的 `npx` 临时包、远程安装器和全局安装命令；确有必要时，必须先通过 Orca Orchestrator 向 Coordinator 说明目的、来源和副作用，并取得明确许可。
 - **Independent reviewer**：Orca supervised worker，默认 Agent 为 `codex`；按 `WORKFLOW.md` 使用 `open-code-review` Skill 只读 Review 最终 aggregate diff 并返回 findings。
 - **Orca Orchestrator**：提供 Run、Task、Dispatch、Message 与可选 decision gate 的运行时生命周期和任务状态。
 
