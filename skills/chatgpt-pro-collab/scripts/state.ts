@@ -1247,11 +1247,15 @@ export class StateStore {
    * @param ordinal One-based artifact order.
    * @param reason Concrete browser, download, or publication failure.
    * @returns The still-pending artifact with updated diagnostic state.
-   * @throws {StateError} If the artifact is not pending.
+   * @throws {StateError} If the turn is not capturing or the artifact is not pending.
    * @throws {Error} If SQLite cannot commit the diagnostic.
    */
   recordArtifactError(taskId: string, turnId: string, ordinal: number, reason: string): ArtifactRecord {
     return this.#transaction(() => {
+      const turn = this.requireTurn(taskId, turnId);
+      if (turn.status !== 'capturing') {
+        throw new StateError('TURN_STATE_CONFLICT', `turn is ${turn.status}, expected capturing: ${turnId}`);
+      }
       const artifact = this.requireArtifact(taskId, turnId, ordinal);
       if (artifact.status !== 'pending') {
         throw new StateError('ARTIFACT_STATE_CONFLICT', `artifact is ${artifact.status}: ${ordinal}`);
@@ -1278,12 +1282,15 @@ export class StateStore {
    * @throws {Error} If SQLite cannot commit the transition.
    */
   completeArtifact(taskId: string, turnId: string, ordinal: number): ArtifactRecord {
-    const artifact = this.requireArtifact(taskId, turnId, ordinal);
-    if (artifact.filename === null || artifact.localPath === null || !isRegularFile(artifact.localPath)) {
-      throw new StateError('ARTIFACT_MISSING', `artifact must exist before completion: ${ordinal}`);
-    }
     return this.#transaction(() => {
+      const turn = this.requireTurn(taskId, turnId);
+      if (turn.status !== 'capturing') {
+        throw new StateError('TURN_STATE_CONFLICT', `turn is ${turn.status}, expected capturing: ${turnId}`);
+      }
       const current = this.requireArtifact(taskId, turnId, ordinal);
+      if (current.filename === null || current.localPath === null || !isRegularFile(current.localPath)) {
+        throw new StateError('ARTIFACT_MISSING', `artifact must exist before completion: ${ordinal}`);
+      }
       if (current.status !== 'pending') {
         throw new StateError('ARTIFACT_STATE_CONFLICT', `artifact is ${current.status}: ${ordinal}`);
       }

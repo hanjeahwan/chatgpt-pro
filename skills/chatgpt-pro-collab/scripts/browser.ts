@@ -2483,7 +2483,8 @@ function startVerificationScript(contextMarker: string): string {
 
     const openModelSubmenu = async () => {
       let sawRadioSubmenu = false;
-      for (let index = 0; ; index += 1) {
+      let index = 0;
+      while (true) {
         const result = await evaluate((probe) => {
           const visible = (element) => {
             if (!(element instanceof HTMLElement)) return false;
@@ -2515,6 +2516,9 @@ function startVerificationScript(contextMarker: string): string {
             return [...menu.querySelectorAll('[role="slider"], [role="menuitem"][aria-haspopup]')].some(visible);
           });
           if (menus.length !== 1) {
+            if (probe.index > 0) {
+              return { status: 'reset', sawRadios: radios.length > 0 };
+            }
             return { status: 'drift', reason: 'composer model/Power menu is not unique', sawRadios: radios.length > 0 };
           }
           const openers = [...menus[0].querySelectorAll('[role="menuitem"][aria-haspopup]')].filter(visible);
@@ -2526,12 +2530,27 @@ function startVerificationScript(contextMarker: string): string {
         }, { index, targetModel });
         sawRadioSubmenu = sawRadioSubmenu || result.sawRadios;
         if (result.status === 'opened' || result.status === 'drift') return result;
+        if (result.status === 'reset') {
+          const selector = await selectorState();
+          if (selector.status === 'drift') return selector;
+          if (selector.expanded) {
+            if (await selectorControl.count() !== 1) {
+              return { status: 'drift', reason: 'composer model/Power selector control is not unique' };
+            }
+            await selectorControl.first().click();
+            await page.waitForTimeout(400);
+          }
+          const reopened = await ensureMenuOpen();
+          if (reopened.status === 'drift') return reopened;
+          continue;
+        }
         if (result.status === 'exhausted') {
           return sawRadioSubmenu
             ? { status: 'unavailable' }
             : { status: 'drift', reason: 'model submenu opener was not observed' };
         }
         await page.waitForTimeout(400);
+        index += 1;
       }
     };
 

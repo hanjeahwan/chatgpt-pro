@@ -971,13 +971,11 @@ export class CollabService {
               }
               return sliceEndsObservation ? { status: 'pending' as const, taskId, turnId } : null;
             }
-            if (observationSignal.aborted || remainingMilliseconds(sliceDeadline, this.#now) === 0) {
-              return sliceEndsObservation ? { status: 'pending' as const, taskId, turnId } : null;
-            }
             if (observed.status === 'pending') {
-              return remainingMilliseconds(observationDeadline, this.#now) === 0
-                ? { status: 'pending' as const, taskId, turnId }
-                : null;
+              if (observationSignal.aborted || remainingMilliseconds(sliceDeadline, this.#now) === 0) {
+                return sliceEndsObservation ? { status: 'pending' as const, taskId, turnId } : null;
+              }
+              return null;
             }
             assertConversation(taskId, task.conversationId, task.conversationUrl, observed);
             expectedAssistantTurnId = observed.assistantTurnId;

@@ -558,6 +558,17 @@ describe('BEH-002 fixed Project and GPT-5.6 Sol Power 5/5 start context', () => 
     expect(fixture.events).toContain('model-click');
   });
 
+  it('reopens the model menu after an unrelated opener closes it', async () => {
+    const fixture = await executableStartFixture({ unrelatedModelOpenerFirst: true });
+    await writeFile(fixture.paths.seedState, '{}');
+
+    const result = await fixture.browser.startTask('task-a', 'session-a', fixture.paths.seedState);
+
+    expect(result).toMatchObject({ modelConfirmed: true, powerConfirmed: true });
+    expect(fixture.events).toContain('effort-opener-click');
+    expect(fixture.events).toContain('model-click');
+  });
+
   it('rejects with PROJECT_NOT_FOUND when the target Project row is absent', async () => {
     const fixture = await executableStartFixture({ projectRowCount: 0, otherRowCount: 1 });
     await writeFile(fixture.paths.seedState, '{}');

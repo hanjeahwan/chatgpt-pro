@@ -2567,27 +2567,25 @@ describe('BEH-012 returned file capture and recoverable publication', () => {
     store.close();
   });
 
-  it('returns pending when a completed observation settles after the host deadline', async () => {
+  it('captures a completed observation that settles at the host deadline', async () => {
     const fixture = await reloadServiceFixture();
     await fixture.service.setup();
     const task = await fixture.start();
     const promptPath = join(fixture.root, 'late-observation.md');
     await writeFile(promptPath, 'late observation');
-    fixture.browser.observeDelayMs = 50;
     fixture.browser.onObserveBudget = (budgetMs) => {
       fixture.clock.advance(budgetMs);
     };
     const turn = await fixture.service.send(task.taskId, promptPath, []);
 
-    await expect(fixture.service.wait(task.taskId, turn.turnId, 1, 20_000)).resolves.toEqual({
-      status: 'pending',
-      taskId: task.taskId,
-      turnId: turn.turnId,
+    await expect(fixture.service.wait(task.taskId, turn.turnId, 1, 20_000)).resolves.toMatchObject({
+      status: 'completed',
+      artifactPaths: [],
     });
-    expect(fixture.browser.observeAbortCount).toBe(1);
+    expect(fixture.browser.observeAbortCount).toBe(0);
     expect(fixture.browser.observeResponseBudgets).toEqual([1]);
     const store = new StateStore(fixture.paths.database);
-    expect(store.requireTurn(task.taskId, turn.turnId).status).toBe('pending');
+    expect(store.requireTurn(task.taskId, turn.turnId).status).toBe('completed');
     expect(store.getTaskOperation(task.taskId)).toBeNull();
     store.close();
   });

@@ -15,6 +15,7 @@ export interface StartPageOptions {
   readonly modelInitiallyChecked?: boolean;
   readonly modelOpenerPrefix?: string;
   readonly modelOpenerCount?: number;
+  readonly unrelatedModelOpenerFirst?: boolean;
   readonly modelRadioPresent?: boolean;
   readonly modelClickApplies?: boolean;
   readonly modelClickResetsPower?: boolean;
@@ -210,6 +211,7 @@ export function startPageFixture(options: StartPageOptions): StartPageFixture {
     modelClickResetsPower: options.modelClickResetsPower ?? false,
     modelOpenerPrefix: options.modelOpenerPrefix ?? 'Model',
     modelOpenerCount: options.modelOpenerCount ?? 1,
+    unrelatedModelOpenerFirst: options.unrelatedModelOpenerFirst ?? false,
     modelRadioPresent: options.modelRadioPresent ?? true,
     navigateOnProjectClick: options.navigateOnProjectClick ?? true,
     otherRowCount: options.otherRowCount ?? 0,
@@ -404,7 +406,17 @@ export function startPageFixture(options: StartPageOptions): StartPageFixture {
   const modelOpeners: StartDomNode[] = Array.from({ length: state.modelOpenerCount }, () => {
     return modelItem;
   });
-  const effortOpener = node('div', 'EffortPro', { 'role': 'menuitem', 'aria-haspopup': 'menu' }, [], () => {}, 'first');
+  const effortOpener = node(
+    'div',
+    'EffortPro',
+    { 'role': 'menuitem', 'aria-haspopup': 'menu' },
+    [],
+    () => {
+      events.push('effort-opener-click');
+      closeMenu();
+    },
+    'first',
+  );
 
   const powerSlider = node(
     'div',
@@ -428,7 +440,10 @@ export function startPageFixture(options: StartPageOptions): StartPageFixture {
   });
   const powerSliders: StartDomNode[] = state.powerSliderPresent ? [powerSlider] : [];
   const firstLayer = node('div', '', { role: 'menu' });
-  setChildren(firstLayer, [...modelOpeners, effortOpener, ...powerSliders]);
+  const submenuOpeners = state.unrelatedModelOpenerFirst
+    ? [effortOpener, ...modelOpeners]
+    : [...modelOpeners, effortOpener];
+  setChildren(firstLayer, [...submenuOpeners, ...powerSliders]);
 
   const modelRadios: StartDomNode[] = (['GPT-5.6 Sol', 'GPT-5.5', 'GPT-5.3', 'o3'] as const)
     .filter((model) => {

@@ -615,6 +615,14 @@ describe('BEH-013 failed-response and capture-abandonment state gate', () => {
     });
     await expect(readFile(responsePath)).resolves.toEqual(frozenResponse);
     expect(store.listArtifacts('task-a', 'turn-a')).toEqual(frozenArtifacts);
+    expect(() => {
+      store.recordArtifactError('task-a', 'turn-a', 2, 'late worker error');
+    }).toThrowError(/expected capturing/);
+    await writeFile(pendingArtifactPath, 'late artifact');
+    expect(() => {
+      store.completeArtifact('task-a', 'turn-a', 2);
+    }).toThrowError(/expected capturing/);
+    expect(store.listArtifacts('task-a', 'turn-a')).toEqual(frozenArtifacts);
     store.beginSendTurn('task-a', 'turn-b', '/next.md', [], 'operation-b');
     store.close();
   });
