@@ -208,6 +208,13 @@ export class StateStore {
     `);
     requireCurrentTaskSchema(this.#database);
     this.#database.exec(`
+      CREATE TABLE IF NOT EXISTS browser_process (
+        task_id TEXT PRIMARY KEY,
+        pid INTEGER NOT NULL UNIQUE CHECK (pid > 0),
+        FOREIGN KEY (task_id) REFERENCES task(id)
+      ) STRICT;
+    `);
+    this.#database.exec(`
       CREATE TABLE IF NOT EXISTS setup_lease (
         singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
         browser_operation_token TEXT NOT NULL,
@@ -409,6 +416,55 @@ export class StateStore {
       throw new StateError('TASK_NOT_FOUND', `task does not exist: ${taskId}`);
     }
     return task;
+  }
+
+  /**
+   * Records the detached Playwright daemon that currently owns one task browser.
+   *
+   * @param taskId Owning task identifier.
+   * @param pid Positive daemon process-group identifier returned by Playwright CLI.
+   * @returns Nothing after the task-bound process record is committed.
+   * @throws {StateError} If the task does not exist.
+   * @throws {Error} If SQLite rejects the process record.
+   */
+  setTaskBrowserPid(taskId: string, pid: number): void {
+    this.requireTask(taskId);
+    if (!Number.isSafeInteger(pid) || pid <= 0) {
+      throw new TypeError(`browser PID must be a positive safe integer: ${String(pid)}`);
+    }
+    this.#database
+      .prepare(
+        `INSERT INTO browser_process (task_id, pid) VALUES (?, ?)
+         ON CONFLICT(task_id) DO UPDATE SET pid = excluded.pid`,
+      )
+      .run(taskId, pid);
+  }
+
+  /**
+   * Returns the detached Playwright daemon recorded for one task.
+   *
+   * @param taskId Owning task identifier.
+   * @returns Positive daemon PID, or `null` before a daemon has been recorded or after cleanup.
+   * @throws {StateError} If the task does not exist.
+   * @throws {Error} If SQLite cannot read or decode the process record.
+   */
+  getTaskBrowserPid(taskId: string): number | null {
+    this.requireTask(taskId);
+    const value = this.#database.prepare('SELECT pid FROM browser_process WHERE task_id = ?').get(taskId);
+    return value === undefined ? null : integer(record(value).pid, 'browser_process.pid');
+  }
+
+  /**
+   * Clears one task's daemon record only after browser cleanup succeeds.
+   *
+   * @param taskId Owning task identifier.
+   * @returns Nothing after the process record is absent.
+   * @throws {StateError} If the task does not exist.
+   * @throws {Error} If SQLite cannot delete the process record.
+   */
+  clearTaskBrowserPid(taskId: string): void {
+    this.requireTask(taskId);
+    this.#database.prepare('DELETE FROM browser_process WHERE task_id = ?').run(taskId);
   }
 
   /**

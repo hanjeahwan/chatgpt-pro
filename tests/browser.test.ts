@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
@@ -6,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   PlaywrightBrowser,
+  terminateBrowserDaemon,
   type BrowserCommandInvocation,
   type BrowserCommandOutput,
   type BrowserOperationObserver,
@@ -488,6 +490,43 @@ describe('BEH-001, BEH-002, and BEH-006 browser isolation', () => {
       /sessionStorage is not defined/,
     );
     expect(fixture.invocations.at(-1)?.arguments).toContain('close');
+  });
+});
+
+describe('BEH-008 detached browser cleanup', () => {
+  it.runIf(process.platform !== 'win32')('terminates only the persisted session process group', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'collab-daemon-cleanup-'));
+    const sessionName = `chatgpt-pro-collab-${crypto.randomUUID()}`;
+    const daemonPath = join(root, 'cliDaemon.js');
+    await writeFile(daemonPath, "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);");
+    const daemon = spawn(process.execPath, [daemonPath, sessionName], {
+      detached: true,
+      stdio: 'ignore',
+    });
+    const pid = daemon.pid;
+    if (pid === undefined) {
+      throw new Error('test daemon did not expose a PID');
+    }
+    daemon.unref();
+
+    try {
+      await expect(terminateBrowserDaemon(pid, `${sessionName}-other`)).rejects.toMatchObject({
+        code: 'BROWSER_CLEANUP_FAILED',
+      });
+      expect(() => {
+        process.kill(-pid, 0);
+      }).not.toThrow();
+      await terminateBrowserDaemon(pid, sessionName);
+      expect(() => {
+        process.kill(-pid, 0);
+      }).toThrow();
+    } finally {
+      try {
+        process.kill(-pid, 'SIGKILL');
+      } catch {
+        // The expected cleanup path already removed the test process group.
+      }
+    }
   });
 });
 
@@ -2053,6 +2092,7 @@ describe('BEH-013 browser boundary support', () => {
     );
 
     expect(result).toEqual({
+      pid: null,
       conversationId: 'conversation-a',
       conversationUrl: 'https://chatgpt.com/c/conversation-a',
     });
@@ -2065,7 +2105,7 @@ describe('BEH-013 browser boundary support', () => {
 
   it('rebuilds a missing bound session directly at its canonical conversation', async () => {
     const fixture = await browserFixture([
-      output('opened'),
+      output('### Browser `session-a` opened with pid 4123.'),
       output('navigated'),
       pageResult({
         protocol,

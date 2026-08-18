@@ -90,6 +90,7 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     expect(repeatedCloseStore.requireTask(firstTask.taskId)).toEqual(closedBeforeRepeat);
     repeatedCloseStore.close();
     expect(fixture.browser.closed).toEqual([firstTask.taskId]);
+    expect(fixture.browser.closedDaemonPids).toEqual([firstTask.browserPid]);
     expect(fixture.browser.observedOperations).toBe(18);
     await expect(fixture.service.wait(firstTask.taskId, firstTurn.turnId, 20_000, 20_000)).resolves.toEqual(repeated);
     await expect(fixture.service.archive(firstTask.taskId)).rejects.toMatchObject({ code: 'TASK_NOT_ACTIVE' });
@@ -2096,6 +2097,7 @@ describe('BEH-008 local close and BEH-009 archive journal', () => {
     expect(fixture.browser.recoveredConversations).toEqual([task.taskId]);
     const reopened = new StateStore(fixture.paths.database);
     expect(reopened.requireOperation('missing-archive-op')).toMatchObject({ phase: 'committed' });
+    expect(reopened.getTaskBrowserPid(task.taskId)).toBe(40_001);
     reopened.close();
   });
 
@@ -3624,6 +3626,7 @@ class FakeBrowser implements CollabBrowser {
   readonly paths: ReturnType<typeof collabPaths>;
   readonly conversations = new Map<string, string>();
   readonly closed: string[] = [];
+  readonly closedDaemonPids: Array<number | null> = [];
   readonly archived: string[] = [];
   readonly recoveredConversations: string[] = [];
   readonly resolvedSubmissions: string[] = [];
@@ -3926,7 +3929,11 @@ class FakeBrowser implements CollabBrowser {
       );
     }
     this.recoveredConversations.push(taskId);
-    return Promise.resolve({ conversationId, conversationUrl });
+    return Promise.resolve({
+      pid: rebuild === true ? 30_000 + this.recoveredConversations.length : null,
+      conversationId,
+      conversationUrl,
+    });
   }
 
   /**
@@ -4063,14 +4070,15 @@ class FakeBrowser implements CollabBrowser {
       this.sessionAvailabilityResult = 'available';
     }
     this.archiveObservations.push(taskId);
+    const pid = rebuild === true ? 40_000 + this.archiveObservations.length : null;
     if (this.nextArchiveStateUnknown === taskId) {
       this.nextArchiveStateUnknown = null;
-      return { status: 'unknown' as const, error: 'injected unverifiable archive state' };
+      return { pid, status: 'unknown' as const, error: 'injected unverifiable archive state' };
     }
     if (this.nextArchiveState === 'archived') {
-      return { status: 'archived' as const };
+      return { pid, status: 'archived' as const };
     }
-    return { status: 'not-archived' as const };
+    return { pid, status: 'not-archived' as const };
   }
 
   /**
@@ -4383,13 +4391,15 @@ class FakeBrowser implements CollabBrowser {
    *
    * @param taskId Task identifier.
    * @param _sessionName Unused named session.
+   * @param daemonPid Persisted task browser daemon PID.
    * @param observer Task-lease child-process observer.
    * @returns An open-session cleanup result.
    * @throws {Error} This fake close does not throw.
    */
-  closeTask(taskId: string, _sessionName: string, observer?: BrowserOperationObserver) {
+  closeTask(taskId: string, _sessionName: string, daemonPid: number | null, observer?: BrowserOperationObserver) {
     this.observe(observer);
     this.closed.push(taskId);
+    this.closedDaemonPids.push(daemonPid);
     this.sessionAvailabilityResult = this.closeAvailabilityResult;
     return Promise.resolve({ wasOpen: true });
   }

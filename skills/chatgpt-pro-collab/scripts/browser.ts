@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, statSync } from 'node:fs';
 import { basename, join } from 'node:path';
@@ -17,6 +17,8 @@ const COMMAND_PID_NOTIFICATION_FAILED_EXIT_CODE = 70;
 const COMMAND_SPAWN_FAILED_EXIT_CODE = 127;
 const COMMAND_STOPPED_BEFORE_SPAWN_EXIT_CODE = 128;
 const COMMAND_ABORT_GRACE_MS = 100;
+const BROWSER_DAEMON_EXIT_GRACE_MS = 500;
+const BROWSER_DAEMON_EXIT_POLL_MS = 25;
 const COMMAND_HOST_DEADLINE_MS = 10 * 60 * 1000;
 const AVAILABILITY_PROBE_DEADLINE_MS = 30_000;
 
@@ -260,9 +262,9 @@ export type BrowserAutoVerifyResult =
   | { readonly status: 'unresolved'; readonly reason: string };
 
 export type BrowserArchiveState =
-  | { readonly status: 'archived' }
-  | { readonly status: 'not-archived' }
-  | { readonly status: 'unknown'; readonly error: string };
+  | { readonly pid: number | null; readonly status: 'archived' }
+  | { readonly pid: number | null; readonly status: 'not-archived' }
+  | { readonly pid: number | null; readonly status: 'unknown'; readonly error: string };
 
 export interface BrowserResolveFailedTurnResult {
   readonly conversationId: string;
@@ -609,7 +611,7 @@ export class PlaywrightBrowser {
    * @param expectedConversationId Database-bound canonical identity.
    * @param rebuild Whether to recreate the caller-proven missing session from the shared seed first.
    * @param observer Task-lease child-process observer.
-   * @returns The re-verified conversation identity and URL.
+   * @returns Fresh daemon PID when rebuilt, plus the re-verified conversation identity and URL.
    * @throws {BrowserError} If the conversation cannot be reached or its identity differs.
    * @throws {Error} If a local Playwright artifact cannot be written.
    */
@@ -620,9 +622,11 @@ export class PlaywrightBrowser {
     expectedConversationId: string,
     rebuild: boolean = false,
     observer?: BrowserOperationObserver,
-  ): Promise<{ readonly conversationId: string; readonly conversationUrl: string }> {
+  ): Promise<{ readonly pid: number | null; readonly conversationId: string; readonly conversationUrl: string }> {
+    let pid: number | null = null;
     if (rebuild) {
-      await this.#openSeededTaskSession(taskId, sessionName, observer);
+      const output = await this.#openSeededTaskSession(taskId, sessionName, observer);
+      pid = parseOpenPid(output.stdout, sessionName);
     }
     await this.#invoke(sessionName, taskId, ['goto', conversationUrl], 'open bound conversation', observer);
     const result = await this.#runCode<RecoverConversationProtocolResult>(
@@ -634,7 +638,7 @@ export class PlaywrightBrowser {
       'recover-conversation',
       observer,
     );
-    return { conversationId: result.conversationId, conversationUrl: result.conversationUrl };
+    return { pid, conversationId: result.conversationId, conversationUrl: result.conversationUrl };
   }
 
   /**
@@ -1050,6 +1054,7 @@ export class PlaywrightBrowser {
    *
    * @param taskId Owning task identifier.
    * @param sessionName Owning Playwright named session.
+   * @param daemonPid Persisted detached daemon process-group identifier, or null for an older untracked session.
    * @param observer Task-lease child-process observer.
    * @returns Whether Playwright reported an open session before cleanup.
    * @throws {BrowserError} If Playwright cannot complete the close command.
@@ -1057,9 +1062,13 @@ export class PlaywrightBrowser {
   async closeTask(
     taskId: string,
     sessionName: string,
+    daemonPid: number | null,
     observer?: BrowserOperationObserver,
   ): Promise<{ readonly wasOpen: boolean }> {
     const output = await this.#invoke(sessionName, taskId, ['close'], 'close task browser', observer);
+    if (daemonPid !== null) {
+      await terminateBrowserDaemon(daemonPid, sessionName);
+    }
     return { wasOpen: !output.stdout.includes(`Browser '${sessionName}' is not open.`) };
   }
 
@@ -1103,7 +1112,7 @@ export class PlaywrightBrowser {
    * @param conversationId Database-bound canonical identity.
    * @param rebuild Whether to recreate the caller-proven missing session from the shared seed first.
    * @param observer Task-lease child-process observer.
-   * @returns Archived, provably not archived, or unknown with a real cause.
+   * @returns Fresh daemon PID when rebuilt, plus archived, provably not archived, or unknown state.
    * @throws {BrowserError} If the page cannot be observed at all.
    * @throws {Error} If a local Playwright artifact cannot be written.
    */
@@ -1115,8 +1124,10 @@ export class PlaywrightBrowser {
     rebuild: boolean = false,
     observer?: BrowserOperationObserver,
   ): Promise<BrowserArchiveState> {
+    let pid: number | null = null;
     if (rebuild) {
-      await this.#openSeededTaskSession(taskId, sessionName, observer);
+      const output = await this.#openSeededTaskSession(taskId, sessionName, observer);
+      pid = parseOpenPid(output.stdout, sessionName);
     }
     const result = await this.#runCode<ObserveArchiveProtocolResult>(
       sessionName,
@@ -1128,9 +1139,9 @@ export class PlaywrightBrowser {
       observer,
     );
     if (result.status === 'archived' || result.status === 'not-archived') {
-      return { status: result.status };
+      return { pid, status: result.status };
     }
-    return { status: 'unknown', error: result.error ?? 'archive state could not be verified' };
+    return { pid, status: 'unknown', error: result.error ?? 'archive state could not be verified' };
   }
 
   /**
@@ -1862,6 +1873,135 @@ function killIfAlive(pid: number, signal: NodeJS.Signals): void {
       throw error;
     }
   }
+}
+
+/**
+ * Ensures one persisted Playwright daemon process group has exited after named-session close.
+ *
+ * Playwright CLI treats an unreachable socket as an already closed session and removes its
+ * registry entry even when the detached daemon is still alive. The persisted daemon PID is
+ * therefore the final cleanup authority. A live POSIX group is signalled only when `ps` still
+ * ties it to the exact task session, preventing stale PID reuse from terminating unrelated work.
+ *
+ * @param pid Detached daemon PID and POSIX process-group identifier returned by Playwright CLI.
+ * @param sessionName Exact task-owned Playwright session name.
+ * @returns Nothing after the process group is absent.
+ * @throws {BrowserError} If a live group cannot be identified safely or survives forced cleanup.
+ */
+export async function terminateBrowserDaemon(pid: number, sessionName: string): Promise<void> {
+  if (!Number.isSafeInteger(pid) || pid <= 0) {
+    throw new TypeError(`browser daemon PID must be a positive safe integer: ${String(pid)}`);
+  }
+  if (await waitForProcessExit(pid)) {
+    return;
+  }
+  if (process.platform !== 'win32' && !(await processGroupBelongsToSession(pid, sessionName))) {
+    throw new BrowserError(
+      'BROWSER_CLEANUP_FAILED',
+      'terminate task browser daemon',
+      `process group ${pid} is alive but no longer belongs to session ${sessionName}`,
+    );
+  }
+  signalBrowserProcess(pid, 'SIGTERM');
+  if (await waitForProcessExit(pid)) {
+    return;
+  }
+  if (process.platform !== 'win32' && !(await processGroupBelongsToSession(pid, sessionName))) {
+    throw new BrowserError(
+      'BROWSER_CLEANUP_FAILED',
+      'force terminate task browser daemon',
+      `process group ${pid} changed identity before forced cleanup of session ${sessionName}`,
+    );
+  }
+  signalBrowserProcess(pid, 'SIGKILL');
+  if (!(await waitForProcessExit(pid))) {
+    throw new BrowserError(
+      'BROWSER_CLEANUP_FAILED',
+      'force terminate task browser daemon',
+      `process group ${pid} remained alive for session ${sessionName}`,
+    );
+  }
+}
+
+/**
+ * Waits a bounded interval for one daemon process group to disappear.
+ *
+ * @param pid Detached daemon PID and process-group identifier.
+ * @returns Whether the daemon or process group is absent before the deadline.
+ * @throws {Error} If the operating system rejects the liveness probe.
+ */
+async function waitForProcessExit(pid: number): Promise<boolean> {
+  const deadline = Date.now() + BROWSER_DAEMON_EXIT_GRACE_MS;
+  while (processGroupAlive(pid)) {
+    if (Date.now() >= deadline) {
+      return false;
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, BROWSER_DAEMON_EXIT_POLL_MS);
+    });
+  }
+  return true;
+}
+
+/**
+ * Checks the persisted daemon or POSIX process group without changing it.
+ *
+ * @param pid Detached daemon PID and process-group identifier.
+ * @returns Whether the target still exists.
+ * @throws {Error} If the operating system rejects the probe for a reason other than absence.
+ */
+function processGroupAlive(pid: number): boolean {
+  try {
+    process.kill(process.platform === 'win32' ? pid : -pid, 0);
+    return true;
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ESRCH') {
+      return false;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Sends one signal to the complete task browser process tree on POSIX.
+ *
+ * @param pid Detached daemon PID and process-group identifier.
+ * @param signal Graceful or forced termination signal.
+ * @returns Nothing after the signal succeeds or the target has already exited.
+ * @throws {Error} If the operating system rejects the signal for another reason.
+ */
+function signalBrowserProcess(pid: number, signal: NodeJS.Signals): void {
+  killIfAlive(process.platform === 'win32' ? pid : -pid, signal);
+}
+
+/**
+ * Verifies that a live POSIX process group still carries the exact Playwright session identity.
+ *
+ * @param pid Detached daemon PID and process-group identifier.
+ * @param sessionName Exact task-owned Playwright session name.
+ * @returns Whether the group contains the daemon or its session-scoped browser profile.
+ * @throws {Error} If `ps` cannot enumerate process groups.
+ */
+async function processGroupBelongsToSession(pid: number, sessionName: string): Promise<boolean> {
+  const stdout = await new Promise<string>((resolve, reject) => {
+    execFile('ps', ['-axo', 'pgid=,command='], { encoding: 'utf8' }, (error, output) => {
+      if (error !== null) {
+        reject(error);
+        return;
+      }
+      resolve(output);
+    });
+  });
+  return stdout.split(/\r?\n/u).some((line) => {
+    const match = /^\s*(\d+)\s+(.*)$/u.exec(line);
+    if (Number(match?.[1]) !== pid) {
+      return false;
+    }
+    const command = match?.[2] ?? '';
+    return (
+      command.includes(sessionName) && (command.includes('cliDaemon.js') || command.includes(`ud-${sessionName}-`))
+    );
+  });
 }
 
 /**

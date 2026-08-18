@@ -187,6 +187,20 @@ describe('BEH-002, BEH-005, BEH-007, and BEH-008 state gates', () => {
     reopened.close();
   });
 
+  it('persists and clears the task-owned browser daemon PID across process restarts', () => {
+    const databasePath = join(tmpdir(), `collab-browser-pid-${crypto.randomUUID()}.sqlite`);
+    const first = new StateStore(databasePath);
+    seedActiveTask(first, 'task-a', 'session-a');
+    first.setTaskBrowserPid('task-a', 41_234);
+    first.close();
+
+    const reopened = new StateStore(databasePath);
+    expect(reopened.getTaskBrowserPid('task-a')).toBe(41_234);
+    reopened.clearTaskBrowserPid('task-a');
+    expect(reopened.getTaskBrowserPid('task-a')).toBeNull();
+    reopened.close();
+  });
+
   it('keeps a stale cross-connection close attempt read-only after another connection closes', async () => {
     const databasePath = join(tmpdir(), `collab-close-race-${crypto.randomUUID()}.sqlite`);
     const winner = new StateStore(databasePath);

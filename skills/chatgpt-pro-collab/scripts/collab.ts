@@ -70,7 +70,7 @@ export interface CollabBrowser {
     conversationId: string,
     rebuild?: boolean,
     observer?: BrowserOperationObserver,
-  ): Promise<{ readonly conversationId: string; readonly conversationUrl: string }>;
+  ): Promise<{ readonly pid: number | null; readonly conversationId: string; readonly conversationUrl: string }>;
   reloadConversation(
     taskId: string,
     sessionName: string,
@@ -123,6 +123,7 @@ export interface CollabBrowser {
   closeTask(
     taskId: string,
     sessionName: string,
+    daemonPid: number | null,
     observer?: BrowserOperationObserver,
   ): Promise<{ readonly wasOpen: boolean }>;
   archive(
@@ -538,6 +539,7 @@ export class CollabService {
     const previousUserTurnIdentity = await previousUserTurnIdentityBefore(store, taskId, sendingTurn.id);
     if ((await this.#browser.sessionAvailability(task.playwrightSession)) === 'missing') {
       await this.#restoreTaskPage(
+        store,
         taskId,
         task.playwrightSession,
         task.conversationId,
@@ -633,6 +635,9 @@ export class CollabService {
     if (operation === null || operation.kind !== 'start') {
       if (task.status === 'starting') {
         const resumed = await this.#browser.startTask(taskId, task.playwrightSession, seedStatePath, true, observer);
+        if (resumed.pid !== null) {
+          store.setTaskBrowserPid(taskId, resumed.pid);
+        }
         store.activateTask(taskId);
         return {
           taskId,
@@ -643,6 +648,9 @@ export class CollabService {
       }
       if (task.status === 'active' && task.conversationId === null) {
         const resumed = await this.#browser.startTask(taskId, task.playwrightSession, seedStatePath, true, observer);
+        if (resumed.pid !== null) {
+          store.setTaskBrowserPid(taskId, resumed.pid);
+        }
         return {
           taskId,
           browserPid: resumed.pid,
@@ -663,6 +671,9 @@ export class CollabService {
     try {
       const resumed = reuseExistingSession || (task.status === 'active' && task.conversationId === null);
       const browser = await this.#browser.startTask(taskId, task.playwrightSession, seedStatePath, resumed, observer);
+      if (browser.pid !== null) {
+        store.setTaskBrowserPid(taskId, browser.pid);
+      }
       if (effectOperation.step === 'session') {
         effectOperation = store.advanceOperationStep(effectOperation.id, 'project', {
           observedAt: new Date().toISOString(),
@@ -783,6 +794,7 @@ export class CollabService {
         const observedAt = new Date().toISOString();
         if (browserResult.status === 'unsafe-not-submitted') {
           await this.#recoverDraftComposer(
+            store,
             taskId,
             task.playwrightSession,
             task.conversationId,
@@ -1164,7 +1176,7 @@ export class CollabService {
           return await this.#withAcquiredTaskOperation(store, taskId, token, async (observer) => {
             const task = store.requireTask(taskId);
             store.markTaskClosing(taskId);
-            const result = await this.#browser.closeTask(taskId, task.playwrightSession, observer);
+            const result = await this.#closeTaskBrowser(store, taskId, task.playwrightSession, observer);
             const availability = await this.#browser.sessionAvailability(task.playwrightSession);
             if (availability !== 'missing') {
               throw new CollabError(
@@ -1265,6 +1277,9 @@ export class CollabService {
       rebuild,
       observer,
     );
+    if (observed.pid !== null) {
+      store.setTaskBrowserPid(taskId, observed.pid);
+    }
     if (observed.status === 'archived') {
       await this.#browser.recoverConversation(
         taskId,
@@ -1392,6 +1407,7 @@ export class CollabService {
   /**
    * Restores a task session at its only valid page target.
    *
+   * @param store Current process-local state connection used to persist a newly opened daemon.
    * @param taskId Task identifier.
    * @param sessionName Stable task session name.
    * @param conversationId Bound conversation identity, or null before binding.
@@ -1402,6 +1418,7 @@ export class CollabService {
    * @throws {Error} If the seed or target page cannot be verified.
    */
   async #restoreTaskPage(
+    store: StateStore,
     taskId: string,
     sessionName: string,
     conversationId: string | null,
@@ -1411,7 +1428,7 @@ export class CollabService {
   ): Promise<void> {
     const seedStatePath = await requireSeedState(this.#paths);
     if (conversationId !== null && conversationUrl !== null) {
-      await this.#browser.recoverConversation(
+      const recovered = await this.#browser.recoverConversation(
         taskId,
         sessionName,
         conversationUrl,
@@ -1419,9 +1436,36 @@ export class CollabService {
         sessionMissing,
         observer,
       );
+      if (recovered.pid !== null) {
+        store.setTaskBrowserPid(taskId, recovered.pid);
+      }
       return;
     }
-    await this.#browser.startTask(taskId, sessionName, seedStatePath, true, observer);
+    const started = await this.#browser.startTask(taskId, sessionName, seedStatePath, true, observer);
+    if (started.pid !== null) {
+      store.setTaskBrowserPid(taskId, started.pid);
+    }
+  }
+
+  /**
+   * Closes one task browser using both the named session and its persisted detached daemon PID.
+   *
+   * @param store Current process-local state connection holding the daemon identity.
+   * @param taskId Owning task identifier.
+   * @param sessionName Stable task session name.
+   * @param observer Task-lease child-process observer.
+   * @returns Whether Playwright reported an open named session before cleanup.
+   * @throws {Error} If named-session or targeted daemon cleanup fails.
+   */
+  async #closeTaskBrowser(
+    store: StateStore,
+    taskId: string,
+    sessionName: string,
+    observer: BrowserOperationObserver,
+  ): Promise<{ readonly wasOpen: boolean }> {
+    const result = await this.#browser.closeTask(taskId, sessionName, store.getTaskBrowserPid(taskId), observer);
+    store.clearTaskBrowserPid(taskId);
+    return result;
   }
 
   /**
@@ -1433,6 +1477,7 @@ export class CollabService {
    * identity, restores the exact canonical conversation when bound, and verifies
    * the composer again. Never resends messages or migrates conversations.
    *
+   * @param store Persistent task state.
    * @param taskId Task whose composer is restored.
    * @param sessionName Task's stable Playwright named session.
    * @param conversationId Bound conversation identity, or null before binding.
@@ -1442,6 +1487,7 @@ export class CollabService {
    * @throws {Error} If cleanup, close, rebuild, identity recovery, or re-verification fails.
    */
   async #recoverDraftComposer(
+    store: StateStore,
     taskId: string,
     sessionName: string,
     conversationId: string | null,
@@ -1455,8 +1501,8 @@ export class CollabService {
     } catch {
       // The composer cannot be proven safe in-page; continue with the close-and-rebuild path.
     }
-    await this.#browser.closeTask(taskId, sessionName, observer);
-    await this.#restoreTaskPage(taskId, sessionName, conversationId, conversationUrl, true, observer);
+    await this.#closeTaskBrowser(store, taskId, sessionName, observer);
+    await this.#restoreTaskPage(store, taskId, sessionName, conversationId, conversationUrl, true, observer);
     await this.#browser.cleanSendComposer(taskId, sessionName, conversationId, attachmentNames, observer);
   }
 
@@ -1495,6 +1541,7 @@ export class CollabService {
     }
     if (task.status === 'closed') {
       await this.#restoreTaskPage(
+        store,
         taskId,
         task.playwrightSession,
         task.conversationId,
@@ -1521,6 +1568,7 @@ export class CollabService {
       browserStatus === 'missing' && task.status !== 'starting' && (pendingTurn !== undefined || operation !== null);
     if (pageWorkPending) {
       await this.#restoreTaskPage(
+        store,
         taskId,
         task.playwrightSession,
         task.conversationId,
@@ -1552,6 +1600,7 @@ export class CollabService {
       const task = store.requireTask(taskId);
       const sendingTurn = pendingTurn;
       await this.#recoverDraftComposer(
+        store,
         taskId,
         task.playwrightSession,
         task.conversationId,
@@ -1588,6 +1637,7 @@ export class CollabService {
     if (browserStatus === 'missing') {
       const rebuilt = store.requireTask(taskId);
       await this.#restoreTaskPage(
+        store,
         taskId,
         rebuilt.playwrightSession,
         rebuilt.conversationId,
@@ -1660,7 +1710,15 @@ export class CollabService {
         const sessionName = task.playwrightSession;
         const resolvedAt = new Date().toISOString();
         if ((await this.#browser.sessionAvailability(sessionName)) === 'missing') {
-          await this.#restoreTaskPage(taskId, sessionName, task.conversationId, task.conversationUrl, true, observer);
+          await this.#restoreTaskPage(
+            store,
+            taskId,
+            sessionName,
+            task.conversationId,
+            task.conversationUrl,
+            true,
+            observer,
+          );
         }
         if (verdict === 'submitted' && canonicalUrl !== null) {
           const verified = await this.#browser.resolveSubmittedConversation(
@@ -1774,7 +1832,15 @@ export class CollabService {
           const sessionName = task.playwrightSession;
           const resolvedAt = new Date().toISOString();
           if ((await this.#browser.sessionAvailability(sessionName)) === 'missing') {
-            await this.#restoreTaskPage(taskId, sessionName, task.conversationId, task.conversationUrl, true, observer);
+            await this.#restoreTaskPage(
+              store,
+              taskId,
+              sessionName,
+              task.conversationId,
+              task.conversationUrl,
+              true,
+              observer,
+            );
           }
           const verified = await this.#browser.resolveFailedTurn(
             taskId,
