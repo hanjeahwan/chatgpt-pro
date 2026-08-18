@@ -816,7 +816,13 @@ describe('BEH-003 first send stays inside the fixed Project composer', () => {
     ]);
 
     expect(result).toMatchObject({ status: 'submitted' });
-    expect(fixture.events).toEqual(['plus-click', 'plus-click', 'upload-click', 'send-click']);
+    expect(fixture.events).toEqual([
+      'plus-click',
+      'plus-click',
+      'upload-click',
+      `upload-file:${join(fixture.paths.root, 'a.txt')}`,
+      'send-click',
+    ]);
   });
 
   it('rejects a first send whose page is on the home root before the preflight', async () => {
@@ -969,9 +975,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     const fixture = await browserFixture([
       pageResult({ protocol, kind: 'send-ready' }),
       pageResult({ protocol, kind: 'upload-ready' }),
-      output('first uploaded'),
       pageResult({ protocol, kind: 'upload-ready' }),
-      output('second uploaded'),
       pageResult({
         protocol,
         kind: 'send',
@@ -990,14 +994,31 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
       conversationUrl: 'https://chatgpt.com/c/conversation-a',
       userTurnIdentity: 'conversation-turn-1',
     });
-    const uploads = fixture.invocations
+    const uploadScripts = fixture.invocations
       .filter((invocation) => {
-        return invocation.arguments.includes('upload');
+        return invocation.arguments.includes('run-code');
       })
       .map((invocation) => {
-        return invocation.arguments.at(-1);
+        return invocation.arguments[invocation.arguments.indexOf('--filename') + 1] ?? '';
+      })
+      .filter((scriptPath) => {
+        return scriptPath.includes('prepare-upload');
       });
-    expect(uploads).toEqual(['/tmp/a', '/tmp/b']);
+    expect(uploadScripts).toHaveLength(2);
+    const uploadSources = await Promise.all(
+      uploadScripts.map((scriptPath) => {
+        return readFile(scriptPath, 'utf8');
+      }),
+    );
+    for (const source of uploadSources) {
+      expect(source).toContain("page.locator('#upload-files')");
+      expect(source).toContain('setInputFiles(attachmentPath)');
+    }
+    expect(
+      fixture.invocations.some((invocation) => {
+        return invocation.arguments.includes('upload');
+      }),
+    ).toBe(false);
     const sendSource = await lastScript(fixture.invocations);
     expect(sendSource).toContain("page.locator('#prompt-textarea')");
     expect(sendSource).toContain('page.locator(\'[data-testid="send-button"]\')');
@@ -1014,7 +1035,6 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     const fixture = await browserFixture([
       pageResult({ protocol, kind: 'send-ready' }),
       pageResult({ protocol, kind: 'upload-ready' }),
-      output('first uploaded'),
       output('### Error\nError: second chooser failed'),
       pageResult({ protocol, kind: 'draft-cleared' }),
     ]);
@@ -1039,109 +1059,9 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     expect(cleanupSource).toContain('const attachmentFileNames = ["a","b"]');
     const uploadPreparationSource = await scriptForInvocation(fixture.invocations[1]);
     expect(uploadPreparationSource).toContain('conversation identity changed before attachment preparation');
-    expect(uploadPreparationSource).toContain("upload.waitFor({ state: 'visible', timeout: 10000 })");
+    expect(uploadPreparationSource).toContain("fileInput.waitFor({ state: 'attached', timeout: 10000 })");
+    expect(uploadPreparationSource).toContain('setInputFiles(attachmentPath)');
     expectPageFunctionSyntax(cleanupSource);
-  });
-
-  it('accepts an empty upload-preparation handoff when the following upload succeeds and submits exactly once', async () => {
-    const fixture = await browserFixture([
-      pageResult({ protocol, kind: 'send-ready' }),
-      output(''),
-      output('first uploaded'),
-      pageResult({
-        protocol,
-        kind: 'send',
-        status: 'submitted',
-        conversationId: 'conversation-a',
-        conversationUrl: 'https://chatgpt.com/c/conversation-a',
-        userTurnIdentity: 'conversation-turn-1',
-      }),
-    ]);
-
-    const result = await fixture.browser.send('task-a', 'session-a', 'conversation-a', 'exact prompt', [
-      '/tmp/attachment.txt',
-    ]);
-
-    expect(result).toEqual({
-      status: 'submitted',
-      conversationId: 'conversation-a',
-      conversationUrl: 'https://chatgpt.com/c/conversation-a',
-      userTurnIdentity: 'conversation-turn-1',
-    });
-    const uploads = fixture.invocations.filter((invocation) => {
-      return invocation.arguments.includes('upload');
-    });
-    expect(uploads).toHaveLength(1);
-    const sendSource = await lastScript(fixture.invocations);
-    expect(sendSource).toContain('exact prompt');
-  });
-
-  it('fails the pre-submit path when a handoff upload returns a fixed-CLI tool error', async () => {
-    const fixture = await browserFixture([
-      pageResult({ protocol, kind: 'send-ready' }),
-      output(''),
-      output('### Error\nError: No file chooser visible'),
-      pageResult({ protocol, kind: 'draft-cleared' }),
-    ]);
-
-    await expect(
-      fixture.browser.send('task-a', 'session-a', 'conversation-a', 'exact prompt', ['/tmp/attachment.txt']),
-    ).resolves.toEqual({
-      status: 'not-submitted',
-      error: expect.stringContaining('Error: No file chooser visible'),
-    });
-    const commands = fixture.invocations.map((invocation) => {
-      return invocation.arguments.slice(4);
-    });
-    expect(commands).toEqual([
-      ['run-code', '--filename', expect.any(String)],
-      ['run-code', '--filename', expect.any(String)],
-      ['upload', '/tmp/attachment.txt'],
-      ['run-code', '--filename', expect.any(String)],
-    ]);
-    const cleanupSource = await lastScript(fixture.invocations);
-    expect(cleanupSource).toContain("page.reload({ waitUntil: 'domcontentloaded' })");
-    expect(cleanupSource).toContain('attachment draft remained after reload');
-  });
-
-  it('treats a bare Error: upload result as an explicit fixed-CLI tool error', async () => {
-    const fixture = await browserFixture([
-      pageResult({ protocol, kind: 'send-ready' }),
-      output(''),
-      output('Error: No file chooser visible'),
-      pageResult({ protocol, kind: 'draft-cleared' }),
-    ]);
-
-    await expect(
-      fixture.browser.send('task-a', 'session-a', 'conversation-a', 'exact prompt', ['/tmp/attachment.txt']),
-    ).resolves.toEqual({
-      status: 'not-submitted',
-      error: expect.stringContaining('No file chooser visible'),
-    });
-  });
-
-  it('keeps the upload error and a blocked cleanup error distinguishable', async () => {
-    const fixture = await browserFixture([
-      pageResult({ protocol, kind: 'send-ready' }),
-      output(''),
-      output('### Error\nError: No file chooser visible'),
-      output('### Error\nError: modal guard blocked draft clearing'),
-    ]);
-
-    const result = await fixture.browser.send('task-a', 'session-a', 'conversation-a', 'exact prompt', [
-      '/tmp/attachment.txt',
-    ]);
-
-    expect(result).toEqual(
-      expect.objectContaining({
-        status: 'unsafe-not-submitted',
-        error: expect.stringContaining('Error: No file chooser visible'),
-      }),
-    );
-    if (result.status === 'unsafe-not-submitted') {
-      expect(result.error).toContain('attachment cleanup failed');
-      expect(result.error).toContain('modal guard blocked draft clearing');
-    }
   });
 
   it('keeps non-empty malformed preparation output a contract drift with bounded detail', async () => {
@@ -1164,27 +1084,10 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     }
   });
 
-  it('fails the pre-submit path when a normal upload reports a fixed-CLI tool error', async () => {
-    const fixture = await browserFixture([
-      pageResult({ protocol, kind: 'send-ready' }),
-      pageResult({ protocol, kind: 'upload-ready' }),
-      output('### Error\nError: No file chooser visible'),
-      pageResult({ protocol, kind: 'draft-cleared' }),
-    ]);
-
-    await expect(
-      fixture.browser.send('task-a', 'session-a', 'conversation-a', 'exact prompt', ['/tmp/attachment.txt']),
-    ).resolves.toEqual({
-      status: 'not-submitted',
-      error: expect.stringContaining('No file chooser visible'),
-    });
-  });
-
   it('clears uploaded attachments when a later known pre-submit check fails', async () => {
     const fixture = await browserFixture([
       pageResult({ protocol, kind: 'send-ready' }),
       pageResult({ protocol, kind: 'upload-ready' }),
-      output('uploaded'),
       pageResult({ protocol, kind: 'send', status: 'not-submitted', error: 'composer drift' }),
       pageResult({ protocol, kind: 'draft-cleared' }),
     ]);
@@ -1201,7 +1104,6 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     const fixture = await browserFixture([
       pageResult({ protocol, kind: 'send-ready' }),
       pageResult({ protocol, kind: 'upload-ready' }),
-      output('uploaded'),
       new CommandNotSpawnedError('spawn npx ENOENT'),
       pageResult({ protocol, kind: 'draft-cleared' }),
     ]);
@@ -1217,7 +1119,6 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     const fixture = await browserFixture([
       pageResult({ protocol, kind: 'send-ready' }),
       pageResult({ protocol, kind: 'upload-ready' }),
-      output('uploaded'),
       new CommandReleasedError('gate exited before command PID notification'),
     ]);
     let ambiguityPersisted = false;
@@ -1239,7 +1140,7 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
       error: expect.stringContaining('gate exited before command PID notification'),
     });
     expect(ambiguityPersisted).toBe(true);
-    expect(fixture.invocations).toHaveLength(4);
+    expect(fixture.invocations).toHaveLength(3);
     expect(await lastScript(fixture.invocations)).not.toContain('attachment draft remained after reload');
   });
 

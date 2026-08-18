@@ -150,6 +150,9 @@ export function projectSendPageFixture(initialPathname: string): ProjectSendPage
       if (selector === '[data-testid="composer-plus-btn"]') {
         return [new SendHtmlElement('button', '', { 'data-testid': 'composer-plus-btn' })];
       }
+      if (selector === '#upload-files') {
+        return [new SendHtmlElement('input', '', { id: 'upload-files', type: 'file' })];
+      }
       if (selector === '[data-testid^="conversation-turn-"][data-turn]') {
         return turnElements();
       }
@@ -176,6 +179,13 @@ export function projectSendPageFixture(initialPathname: string): ProjectSendPage
           return;
         }
         throw new Error(`fixture locator click is unsupported: ${selector}`);
+      },
+      async setInputFiles(path: string) {
+        if (selector === '#upload-files') {
+          events.push(`upload-file:${path}`);
+          return;
+        }
+        throw new Error(`fixture setInputFiles is unsupported: ${selector}`);
       },
       async fill(text: string) {
         if (selector === '#prompt-textarea') {

@@ -735,21 +735,7 @@ export class PlaywrightBrowser {
     try {
       for (const attachmentPath of attachmentPaths) {
         attachmentPreparationStarted = true;
-        await this.#prepareUpload(sessionName, taskId, expectedConversationId, observer);
-        const uploadOutput = await this.#invoke(
-          sessionName,
-          taskId,
-          ['upload', attachmentPath],
-          `upload attachment ${attachmentPath}`,
-          observer,
-        );
-        const uploadError = parseFixedCliToolError(uploadOutput.stdout);
-        if (uploadError !== undefined) {
-          throw new Error(uploadError);
-        }
-        if (uploadOutput.stdout.trim() === '') {
-          throw new Error('upload command produced no result; attachment readiness unproven');
-        }
+        await this.#prepareUpload(sessionName, taskId, expectedConversationId, attachmentPath, observer);
       }
     } catch (error) {
       if (attachmentPreparationStarted) {
@@ -1582,46 +1568,41 @@ export class PlaywrightBrowser {
   }
 
   /**
-   * Runs the upload-preparation page function, accepting the pinned CLI's modal-handoff
-   * empty result as a provisional state that only the immediately following upload command
-   * may prove.
+   * Opens the attachment menu and stages one explicit file in the page's hidden input.
    *
-   * The pinned CLI races the page function against modal states: clicking `Add photos & files`
-   * can emit a fileChooser modal before the function resolves, making the tool return without
-   * its result and leaving `--raw` stdout empty. That empty result is neither success nor
-   * failure; the upload command that consumes the chooser is the only proof of readiness.
-   * Non-empty output that is not the valid envelope remains a page-contract drift.
+   * The current ChatGPT composer does not consistently hand a fileChooser modal across
+   * separate CLI commands. `setInputFiles` keeps opening the menu and selecting the file
+   * in one page operation, so upload readiness is proven by the page result itself.
    *
    * @param sessionName Playwright named session.
    * @param taskId Local task or setup directory identifier.
    * @param expectedConversationId Existing bound conversation, or null for a first turn.
+   * @param attachmentPath Explicit absolute attachment path.
    * @param observer Task-lease child-process observer.
-   * @returns Nothing; readiness is proven only by the following upload command.
-   * @throws {BrowserError} If the command or a non-empty non-envelope result fails.
+   * @returns Nothing; readiness is proven by the upload-ready page result.
+   * @throws {BrowserError} If the command or its page result fails.
    * @throws {Error} If the script file cannot be written.
    */
   async #prepareUpload(
     sessionName: string,
     taskId: string,
     expectedConversationId: string | null,
+    attachmentPath: string,
     observer?: BrowserOperationObserver,
   ): Promise<void> {
     const scriptPath = await savePlaywrightScript(
       this.#paths,
       taskId,
       'prepare-upload',
-      uploadPreparationScript(expectedConversationId),
+      uploadPreparationScript(expectedConversationId, attachmentPath),
     );
     const output = await this.#invoke(
       sessionName,
       taskId,
       ['run-code', '--filename', scriptPath],
-      'open attachment file chooser',
+      'stage attachment file',
       observer,
     );
-    if (output.stdout.trim() === '') {
-      return;
-    }
     parseProtocolResult<UploadReadyProtocolResult>(output.stdout, 'upload-ready');
   }
 }
@@ -2234,29 +2215,6 @@ function suggestedFilenameMatchesSource(sourceUrl: string, suggestedFilename: st
   const stem = extensionIndex < 0 ? suggestedFilename : suggestedFilename.slice(0, extensionIndex);
   const extension = extensionIndex < 0 ? '' : suggestedFilename.slice(extensionIndex);
   return `${stem.replace(/\(\d+\)$/u, '')}${extension}` === expectedFilename;
-}
-
-/**
- * Detects an explicit fixed-CLI tool error in raw `--raw` stdout.
- *
- * The pinned CLI reports tool failures as plain stdout text while still exiting zero:
- * handler errors arrive as a `### Error` block, and `--raw` strips section headings
- * for errors emitted as sections, leaving a bare `Error:` line. Either form must fail
- * the pre-submit path while preserving the bounded concrete message.
- *
- * @param stdout Complete raw `--raw` stdout.
- * @returns The bounded concrete error text, or undefined when no explicit tool error is present.
- */
-function parseFixedCliToolError(stdout: string): string | undefined {
-  const trimmed = stdout.trim();
-  if (trimmed.startsWith('### Error')) {
-    const detail = trimmed.slice('### Error'.length).trim();
-    return (detail === '' ? trimmed : detail).slice(0, 2000);
-  }
-  if (trimmed.startsWith('Error:')) {
-    return trimmed.slice(0, 2000);
-  }
-  return undefined;
 }
 
 /**
@@ -3034,15 +2992,17 @@ function clearUploadDraftScript(expectedConversationId: string | null, attachmen
 }
 
 /**
- * Builds the exact file-chooser action required before each CLI upload command.
+ * Builds the page operation that stages one attachment in the composer.
  *
  * @param expectedConversationId Existing bound conversation, or null for a new task.
+ * @param attachmentPath Explicit absolute attachment path.
  * @returns A Playwright page function source.
  * @throws {Error} This pure source builder does not throw.
  */
-function uploadPreparationScript(expectedConversationId: string | null): string {
+function uploadPreparationScript(expectedConversationId: string | null, attachmentPath: string): string {
   return `async (page) => {
     const expectedConversationId = ${JSON.stringify(expectedConversationId)};${SEND_TARGET_OK}
+    const attachmentPath = ${JSON.stringify(attachmentPath)};
     const url = await page.evaluate(() => {
       return { hostname: location.hostname, pathname: location.pathname };
     });
@@ -3071,6 +3031,12 @@ function uploadPreparationScript(expectedConversationId: string | null): string 
         continue;
       }
       await upload.click();
+      const fileInput = page.locator('#upload-files');
+      await fileInput.waitFor({ state: 'attached', timeout: 10000 });
+      if (await fileInput.count() !== 1) {
+        throw new Error('page contract drift: upload file input is not unique');
+      }
+      await fileInput.setInputFiles(attachmentPath);
       return JSON.stringify({ protocol: '${PROTOCOL}', kind: 'upload-ready' });
     }
     throw new Error(lastFailure);
