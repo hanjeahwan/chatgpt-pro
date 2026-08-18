@@ -733,9 +733,18 @@ export class PlaywrightBrowser {
 
     let attachmentPreparationStarted = false;
     try {
-      for (const attachmentPath of attachmentPaths) {
+      for (const [index, attachmentPath] of attachmentPaths.entries()) {
         attachmentPreparationStarted = true;
-        await this.#prepareUpload(sessionName, taskId, expectedConversationId, attachmentPath, observer);
+        await this.#prepareUpload(
+          sessionName,
+          taskId,
+          expectedConversationId,
+          attachmentPath,
+          attachmentPaths.slice(0, index + 1).map((path) => {
+            return basename(path);
+          }),
+          observer,
+        );
       }
     } catch (error) {
       if (attachmentPreparationStarted) {
@@ -1578,6 +1587,7 @@ export class PlaywrightBrowser {
    * @param taskId Local task or setup directory identifier.
    * @param expectedConversationId Existing bound conversation, or null for a first turn.
    * @param attachmentPath Explicit absolute attachment path.
+   * @param expectedAttachmentNames Ordered attachment basenames that must be visible after staging.
    * @param observer Task-lease child-process observer.
    * @returns Nothing; readiness is proven by the upload-ready page result.
    * @throws {BrowserError} If the command or its page result fails.
@@ -1588,13 +1598,14 @@ export class PlaywrightBrowser {
     taskId: string,
     expectedConversationId: string | null,
     attachmentPath: string,
+    expectedAttachmentNames: readonly string[],
     observer?: BrowserOperationObserver,
   ): Promise<void> {
     const scriptPath = await savePlaywrightScript(
       this.#paths,
       taskId,
       'prepare-upload',
-      uploadPreparationScript(expectedConversationId, attachmentPath),
+      uploadPreparationScript(expectedConversationId, attachmentPath, expectedAttachmentNames),
     );
     const output = await this.#invoke(
       sessionName,
@@ -2996,13 +3007,19 @@ function clearUploadDraftScript(expectedConversationId: string | null, attachmen
  *
  * @param expectedConversationId Existing bound conversation, or null for a new task.
  * @param attachmentPath Explicit absolute attachment path.
+ * @param expectedAttachmentNames Ordered attachment basenames that must be visible after staging.
  * @returns A Playwright page function source.
  * @throws {Error} This pure source builder does not throw.
  */
-function uploadPreparationScript(expectedConversationId: string | null, attachmentPath: string): string {
+function uploadPreparationScript(
+  expectedConversationId: string | null,
+  attachmentPath: string,
+  expectedAttachmentNames: readonly string[],
+): string {
   return `async (page) => {
     const expectedConversationId = ${JSON.stringify(expectedConversationId)};${SEND_TARGET_OK}
     const attachmentPath = ${JSON.stringify(attachmentPath)};
+    const expectedAttachmentNames = ${JSON.stringify(expectedAttachmentNames)};
     const url = await page.evaluate(() => {
       return { hostname: location.hostname, pathname: location.pathname };
     });
@@ -3037,6 +3054,23 @@ function uploadPreparationScript(expectedConversationId: string | null, attachme
         throw new Error('page contract drift: upload file input is not unique');
       }
       await fileInput.setInputFiles(attachmentPath);
+      await page.waitForFunction((names) => {
+        const visible = (element) => {
+          if (!(element instanceof HTMLElement)) return false;
+          const style = getComputedStyle(element);
+          return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
+        };
+        const composer = document.querySelector('#prompt-textarea');
+        if (composer === null) return false;
+        const forms = [...document.querySelectorAll('form')].filter((form) => form.contains(composer));
+        if (forms.length !== 1) return false;
+        const attachmentTexts = [...forms[0].querySelectorAll('*')]
+          .filter((element) => visible(element) && element.children.length === 0)
+          .map((element) => (element.textContent || '').trim())
+          .filter((text) => names.includes(text));
+        return attachmentTexts.length === names.length &&
+          attachmentTexts.every((text, index) => text === names[index]);
+      }, expectedAttachmentNames, { timeout: 120000, polling: 100 });
       return JSON.stringify({ protocol: '${PROTOCOL}', kind: 'upload-ready' });
     }
     throw new Error(lastFailure);

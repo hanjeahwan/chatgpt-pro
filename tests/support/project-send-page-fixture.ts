@@ -1,3 +1,5 @@
+import { basename } from 'node:path';
+
 export interface ProjectSendPageFixture {
   readonly page: object;
   readonly events: string[];
@@ -10,6 +12,7 @@ export interface ProjectSendPageFixture {
 }
 
 interface SendDomNode {
+  readonly children: readonly SendDomNode[];
   readonly tagName: string;
   textContent: string;
   readonly attributes: Readonly<Record<string, string>>;
@@ -18,6 +21,7 @@ interface SendDomNode {
 }
 
 class SendHtmlElement implements SendDomNode {
+  readonly children: readonly SendDomNode[] = [];
   readonly tagName: string;
   textContent: string;
   readonly attributes: Readonly<Record<string, string>>;
@@ -68,6 +72,7 @@ export function projectSendPageFixture(initialPathname: string): ProjectSendPage
   const events: string[] = [];
   const state = {
     archived: false,
+    attachmentNames: [] as string[],
     composerText: '',
     pathname: initialPathname,
     plusAttempts: 0,
@@ -96,6 +101,19 @@ export function projectSendPageFixture(initialPathname: string): ProjectSendPage
       });
     });
   };
+  const attachmentElements = (): readonly SendHtmlElement[] => {
+    return state.attachmentNames.map((name) => {
+      return new SendHtmlElement('span', name, {});
+    });
+  };
+  const composerForm = {
+    contains(element: unknown) {
+      return element === composer;
+    },
+    querySelectorAll(selector: string) {
+      return selector === '*' ? [composer, ...attachmentElements()] : [];
+    },
+  };
 
   const documentRoot = {
     querySelector(selector: string) {
@@ -116,6 +134,9 @@ export function projectSendPageFixture(initialPathname: string): ProjectSendPage
       }
       if (selector === '[data-testid^="conversation-turn-"][data-turn="user"]') {
         return turnElements();
+      }
+      if (selector === 'form') {
+        return [composerForm];
       }
       if (selector === 'div') {
         return state.archived ? [archivedMessage] : [];
@@ -183,6 +204,7 @@ export function projectSendPageFixture(initialPathname: string): ProjectSendPage
       async setInputFiles(path: string) {
         if (selector === '#upload-files') {
           events.push(`upload-file:${path}`);
+          state.attachmentNames.push(basename(path));
           return;
         }
         throw new Error(`fixture setInputFiles is unsupported: ${selector}`);

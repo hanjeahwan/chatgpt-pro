@@ -563,16 +563,33 @@ export class CollabService {
       const after = await this.#browser.sessionAvailability(task.playwrightSession);
       return store.getStatus(taskId, after);
     }
-    const verified = await this.#browser.autoVerifySubmission(
-      taskId,
-      task.playwrightSession,
-      task.conversationId,
-      store.getStartProjectIdentity(taskId),
-      previousUserTurnIdentity,
-      prompt,
-      attachmentNames,
-      observer,
-    );
+    let verified: BrowserAutoVerifyResult;
+    try {
+      verified = await this.#browser.autoVerifySubmission(
+        taskId,
+        task.playwrightSession,
+        task.conversationId,
+        store.getStartProjectIdentity(taskId),
+        previousUserTurnIdentity,
+        prompt,
+        attachmentNames,
+        observer,
+      );
+    } catch (error) {
+      store.markSubmissionUnknownAndNeedsDecision(
+        taskId,
+        sendingTurn.id,
+        operation.id,
+        `auto-verification failed: ${errorMessage(error)}`,
+        {
+          observedAt,
+          sessionName: task.playwrightSession,
+          postcondition: 'page evidence could not be evaluated',
+        },
+      );
+      const after = await this.#browser.sessionAvailability(task.playwrightSession);
+      return store.getStatus(taskId, after);
+    }
     if (verified.status === 'submitted') {
       store.commitSubmittedTurn(
         taskId,
@@ -776,6 +793,10 @@ export class CollabService {
           });
           throw error;
         }
+        const attachmentNames = input.attachmentPaths.map((attachmentPath) => {
+          return basename(attachmentPath);
+        });
+        const previousUserTurnIdentity = await previousUserTurnIdentityBefore(store, taskId, turnId);
         const browserResult = await this.#browser.send(
           taskId,
           task.playwrightSession,
@@ -828,20 +849,53 @@ export class CollabService {
           throw new CollabError('SUBMISSION_UNKNOWN', browserResult.error);
         }
 
+        let verified: BrowserAutoVerifyResult;
+        try {
+          verified = await this.#browser.autoVerifySubmission(
+            taskId,
+            task.playwrightSession,
+            browserResult.conversationId,
+            store.getStartProjectIdentity(taskId),
+            previousUserTurnIdentity,
+            input.promptText,
+            attachmentNames,
+            observer,
+          );
+        } catch (error) {
+          const message = `submitted user turn could not be verified: ${errorMessage(error)}`;
+          store.markSubmissionUnknownAndNeedsDecision(taskId, turnId, operationId, message, {
+            observedAt,
+            sessionName: task.playwrightSession,
+            pageUrl: browserResult.conversationUrl,
+            postcondition: 'submission was observed but its prompt and attachments were not proven',
+          });
+          throw new CollabError('SUBMISSION_UNKNOWN', message);
+        }
+        if (verified.status !== 'submitted') {
+          const message = `submitted user turn could not be verified: ${verified.reason}`;
+          store.markSubmissionUnknownAndNeedsDecision(taskId, turnId, operationId, message, {
+            observedAt,
+            sessionName: task.playwrightSession,
+            pageUrl: browserResult.conversationUrl,
+            postcondition: 'submission was observed but its prompt and attachments were not proven',
+          });
+          throw new CollabError('SUBMISSION_UNKNOWN', message);
+        }
+
         store.commitSubmittedTurn(
           taskId,
           turnId,
-          browserResult.conversationId,
-          browserResult.conversationUrl,
-          browserResult.userTurnIdentity,
+          verified.conversationId,
+          verified.conversationUrl,
+          verified.userTurnIdentity,
           operationId,
           {
             observedAt,
             sessionName: task.playwrightSession,
-            pageUrl: browserResult.conversationUrl,
-            postcondition: 'unique user turn observed after the recorded anchor',
-            conversationId: browserResult.conversationId,
-            userTurnIdentity: browserResult.userTurnIdentity,
+            pageUrl: verified.conversationUrl,
+            postcondition: 'unique matching user turn verified after the recorded anchor',
+            conversationId: verified.conversationId,
+            userTurnIdentity: verified.userTurnIdentity,
             promptVerbatimMatch: true,
             attachmentNamesMatch: true,
           },

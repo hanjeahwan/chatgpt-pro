@@ -1013,7 +1013,11 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     for (const source of uploadSources) {
       expect(source).toContain("page.locator('#upload-files')");
       expect(source).toContain('setInputFiles(attachmentPath)');
+      expect(source).toContain("document.querySelectorAll('form')");
+      expect(source).toContain('attachmentTexts.every((text, index) => text === names[index])');
     }
+    expect(uploadSources[1]).toContain('const expectedAttachmentNames = ["a","b"]');
+    expect(fixture.invocations).toHaveLength(4);
     expect(
       fixture.invocations.some((invocation) => {
         return invocation.arguments.includes('upload');
@@ -1062,6 +1066,28 @@ describe('BEH-003, BEH-004, and BEH-009 page contracts', () => {
     expect(uploadPreparationSource).toContain("fileInput.waitFor({ state: 'attached', timeout: 10000 })");
     expect(uploadPreparationSource).toContain('setInputFiles(attachmentPath)');
     expectPageFunctionSyntax(cleanupSource);
+  });
+
+  it('keeps an upload error and a failed draft cleanup distinguishable', async () => {
+    const fixture = await browserFixture([
+      pageResult({ protocol, kind: 'send-ready' }),
+      output('### Error\nError: attachment staging failed'),
+      output('### Error\nError: attachment cleanup failed'),
+    ]);
+
+    const result = await fixture.browser.send('task-a', 'session-a', 'conversation-a', 'exact prompt', [
+      '/tmp/attachment.txt',
+    ]);
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        status: 'unsafe-not-submitted',
+        error: expect.stringContaining('attachment staging failed'),
+      }),
+    );
+    if (result.status === 'unsafe-not-submitted') {
+      expect(result.error).toContain('attachment cleanup failed');
+    }
   });
 
   it('keeps non-empty malformed preparation output a contract drift with bounded detail', async () => {

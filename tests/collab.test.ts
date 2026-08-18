@@ -91,7 +91,7 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     repeatedCloseStore.close();
     expect(fixture.browser.closed).toEqual([firstTask.taskId]);
     expect(fixture.browser.closedDaemonPids).toEqual([firstTask.browserPid]);
-    expect(fixture.browser.observedOperations).toBe(18);
+    expect(fixture.browser.observedOperations).toBe(21);
     await expect(fixture.service.wait(firstTask.taskId, firstTurn.turnId, 20_000, 20_000)).resolves.toEqual(repeated);
     await expect(fixture.service.archive(firstTask.taskId)).rejects.toMatchObject({ code: 'TASK_NOT_ACTIVE' });
   });
@@ -1222,6 +1222,32 @@ describe('BEH-003 send journal and archive attachments', () => {
     store.close();
   });
 
+  it('keeps a submitted turn unresolved until its prompt and attachments match page evidence', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const task = await fixture.start();
+    const promptPath = join(fixture.root, 'unverified-submission.md');
+    const attachmentPath = join(fixture.root, 'evidence.txt');
+    await writeFile(promptPath, 'verify this turn');
+    await writeFile(attachmentPath, 'evidence');
+    fixture.browser.nextAutoVerifyUnresolved = task.taskId;
+
+    await expect(fixture.service.send(task.taskId, promptPath, [attachmentPath])).rejects.toMatchObject({
+      code: 'SUBMISSION_UNKNOWN',
+    });
+    expect(fixture.browser.autoVerificationPrompts).toEqual(['verify this turn']);
+    expect(fixture.browser.autoVerificationAttachmentNames).toEqual([['evidence.txt']]);
+
+    const store = new StateStore(fixture.paths.database);
+    expect(store.listTurns(task.taskId)).toMatchObject([{ status: 'unknown-submission' }]);
+    expect(store.listOperations(task.taskId).at(-1)).toMatchObject({
+      kind: 'send',
+      step: 'submit',
+      phase: 'needs-decision',
+    });
+    store.close();
+  });
+
   it('commits a failed send operation for a proven non-submission', async () => {
     const fixture = await serviceFixture();
     await fixture.service.setup();
@@ -1668,6 +1694,8 @@ describe('BEH-013 recovery matrix completion', () => {
     seedStore.close();
     const firstTurn = await fixture.service.send(taskId, firstPromptPath, []);
     await fixture.service.wait(taskId, firstTurn.turnId, 20_000, 20_000);
+    fixture.browser.autoVerifications.length = 0;
+    fixture.browser.autoVerificationAnchors.length = 0;
     const turnId = 'crashed-turn';
     const promptPath = join(fixture.root, 'crashed.md');
     await writeFile(promptPath, 'crashed prompt');
@@ -1708,6 +1736,8 @@ describe('BEH-013 recovery matrix completion', () => {
     seedActiveTask(seedStore, taskId, sessionName);
     seedStore.close();
     const submittedTurn = await fixture.service.send(taskId, submittedPromptPath, []);
+    fixture.browser.autoVerifications.length = 0;
+    fixture.browser.autoVerificationAnchors.length = 0;
 
     const crashedTurnId = 'crashed-after-failures';
     const crashedPromptPath = join(fixture.root, 'crashed-after-failures.md');
@@ -1758,6 +1788,31 @@ describe('BEH-013 recovery matrix completion', () => {
     expect(status).toMatchObject({ turnStatus: 'unknown-submission', nextAction: 'resolve-submission' });
     const reopened = new StateStore(fixture.paths.database);
     expect(reopened.requireOperation('send-op')).toMatchObject({ phase: 'needs-decision' });
+    reopened.close();
+  });
+
+  it('opens the decision gate when recovered submission evidence cannot be evaluated', async () => {
+    const fixture = await serviceFixture();
+    await fixture.service.setup();
+    const taskId = randomUUID();
+    const turnId = 'verification-error-turn';
+    const promptPath = join(fixture.root, 'verification-error.md');
+    await writeFile(promptPath, 'verification error prompt');
+    const store = new StateStore(fixture.paths.database);
+    seedActiveTask(store, taskId, `chatgpt-pro-collab-${taskId}`);
+    store.beginSendTurn(taskId, turnId, promptPath, [], 'send-op');
+    store.advanceSendToSubmitEffectUnknown('send-op');
+    store.close();
+    await savePromptCopy(fixture.paths, taskId, turnId, Buffer.from('verification error prompt'));
+    fixture.browser.nextAutoVerifyError = taskId;
+
+    const status = await fixture.service.recover(taskId);
+    expect(status).toMatchObject({ turnStatus: 'unknown-submission', nextAction: 'resolve-submission' });
+    const reopened = new StateStore(fixture.paths.database);
+    expect(reopened.requireOperation('send-op')).toMatchObject({
+      phase: 'needs-decision',
+      error: expect.stringContaining('injected auto-verification failure'),
+    });
     reopened.close();
   });
 
@@ -1851,6 +1906,8 @@ describe('BEH-013 recovery matrix completion', () => {
     seedStore.close();
     const firstTurn = await fixture.service.send(taskId, firstPromptPath, []);
     await fixture.service.wait(taskId, firstTurn.turnId, 20_000, 20_000);
+    fixture.browser.autoVerifications.length = 0;
+    fixture.browser.autoVerificationAnchors.length = 0;
     const turnId = 'crashed-bound-turn';
     const promptPath = join(fixture.root, 'crashed-bound.md');
     await writeFile(promptPath, 'crashed bound prompt');
@@ -3625,6 +3682,8 @@ class ClockAdvancingWaitLeaseStore extends StateStore {
 class FakeBrowser implements CollabBrowser {
   readonly paths: ReturnType<typeof collabPaths>;
   readonly conversations = new Map<string, string>();
+  readonly latestSubmittedPrompts = new Map<string, string>();
+  readonly latestSubmittedUserTurnIdentities = new Map<string, string>();
   readonly closed: string[] = [];
   readonly closedDaemonPids: Array<number | null> = [];
   readonly archived: string[] = [];
@@ -3645,9 +3704,12 @@ class FakeBrowser implements CollabBrowser {
   readonly archiveObservations: string[] = [];
   readonly autoVerifications: string[] = [];
   readonly autoVerificationAnchors: Array<string | null> = [];
+  readonly autoVerificationPrompts: string[] = [];
+  readonly autoVerificationAttachmentNames: string[][] = [];
   nextArchiveState: 'archived' | 'not-archived' = 'not-archived';
   nextArchiveStateUnknown: string | null = null;
   nextAutoVerifyUnresolved: string | null = null;
+  nextAutoVerifyError: string | null = null;
   autoVerifyConversationId: string | null = null;
   readonly expectedConversationIds: Array<string | null> = [];
   readonly expectedAssistantTurnIds: Array<string | null> = [];
@@ -3839,7 +3901,7 @@ class FakeBrowser implements CollabBrowser {
    * @param taskId Task identifier.
    * @param _sessionName Unused named session.
    * @param expectedConversationId Database-bound conversation, or null for a first turn.
-   * @param _prompt Exact prompt under test.
+   * @param prompt Exact prompt under test.
    * @param _attachmentPaths Ordered attachment paths under test.
    * @param observer Task-lease child-process observer.
    * @param beforeSubmissionRelease Submission-boundary callback under test.
@@ -3850,7 +3912,7 @@ class FakeBrowser implements CollabBrowser {
     taskId: string,
     _sessionName: string,
     expectedConversationId: string | null,
-    _prompt: string,
+    prompt: string,
     _attachmentPaths: readonly string[],
     observer?: BrowserOperationObserver,
     beforeSubmissionRelease?: () => void,
@@ -3874,11 +3936,14 @@ class FakeBrowser implements CollabBrowser {
     this.conversations.set(taskId, conversationId);
     beforeSubmissionRelease?.();
     this.nextUserTurnOrdinal += 1;
+    const userTurnIdentity = `user-turn-${taskId}-${this.nextUserTurnOrdinal}`;
+    this.latestSubmittedPrompts.set(taskId, prompt);
+    this.latestSubmittedUserTurnIdentities.set(taskId, userTurnIdentity);
     return Promise.resolve({
       status: 'submitted' as const,
       conversationId,
       conversationUrl: `https://chatgpt.com/c/${conversationId}`,
-      userTurnIdentity: `user-turn-${taskId}-${this.nextUserTurnOrdinal}`,
+      userTurnIdentity,
     });
   }
 
@@ -3998,11 +4063,11 @@ class FakeBrowser implements CollabBrowser {
    * @param expectedConversationId Database-bound identity.
    * @param _expectedProjectIdentity Unused recorded project identity.
    * @param previousUserTurnIdentity Persisted predecessor anchor.
-   * @param _prompt Unused saved prompt.
-   * @param _attachmentNames Unused ordered attachment names.
+   * @param prompt Saved prompt used to reuse the fake identity returned by the matching send.
+   * @param attachmentNames Ordered attachment names used for page verification.
    * @param observer Task-lease child-process observer.
    * @returns The configured auto-verification result.
-   * @throws {Error} This fake verification does not throw.
+   * @throws {Error} When the configured verification failure is injected.
    */
   async autoVerifySubmission(
     taskId: string,
@@ -4010,13 +4075,19 @@ class FakeBrowser implements CollabBrowser {
     expectedConversationId: string | null,
     _expectedProjectIdentity: string | null,
     previousUserTurnIdentity: string | null,
-    _prompt: string,
-    _attachmentNames: readonly string[],
+    prompt: string,
+    attachmentNames: readonly string[],
     observer?: BrowserOperationObserver,
   ) {
     this.observe(observer);
     this.autoVerifications.push(taskId);
     this.autoVerificationAnchors.push(previousUserTurnIdentity);
+    this.autoVerificationPrompts.push(prompt);
+    this.autoVerificationAttachmentNames.push([...attachmentNames]);
+    if (this.nextAutoVerifyError === taskId) {
+      this.nextAutoVerifyError = null;
+      throw new Error('injected auto-verification failure');
+    }
     if (this.nextAutoVerifyUnresolved === taskId) {
       this.nextAutoVerifyUnresolved = null;
       return { status: 'unresolved' as const, reason: 'injected unresolved auto-verification' };
@@ -4029,19 +4100,27 @@ class FakeBrowser implements CollabBrowser {
         };
       }
       const conversationId = this.autoVerifyConversationId;
+      const userTurnIdentity =
+        this.latestSubmittedPrompts.get(taskId) === prompt
+          ? this.latestSubmittedUserTurnIdentities.get(taskId)
+          : undefined;
       return {
         status: 'submitted' as const,
         conversationId,
         conversationUrl: `https://chatgpt.com/c/${conversationId}`,
-        userTurnIdentity: `user-turn-${taskId}`,
+        userTurnIdentity: userTurnIdentity ?? `user-turn-${taskId}`,
       };
     }
     const conversationId = expectedConversationId;
+    const userTurnIdentity =
+      this.latestSubmittedPrompts.get(taskId) === prompt
+        ? this.latestSubmittedUserTurnIdentities.get(taskId)
+        : undefined;
     return {
       status: 'submitted' as const,
       conversationId,
       conversationUrl: `https://chatgpt.com/c/${conversationId}`,
-      userTurnIdentity: `user-turn-${taskId}`,
+      userTurnIdentity: userTurnIdentity ?? `user-turn-${taskId}`,
     };
   }
 
