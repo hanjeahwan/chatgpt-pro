@@ -2820,12 +2820,15 @@ export const USER_TURN_EVIDENCE = `
         const style = getComputedStyle(candidate);
         return style.visibility !== 'hidden' && style.display !== 'none' && candidate.getClientRects().length > 0;
       };
-      // ChatGPT renders inline code inside a user message as <code>, so the backticks never
-      // reach the DOM text. Both sides drop backticks and every other character still has to
-      // match exactly; only prompts differing solely in backtick placement become
-      // indistinguishable, which is the smallest concession that keeps a submitted prompt
-      // provable once the page has rendered it.
-      const strip = (value) => (value || '').replace(/\`/g, '');
+      // ChatGPT renders a user message through more than one lossy path, measured on live
+      // turns: one renders inline code as <code> and drops the backticks while keeping blank
+      // lines, another keeps the backticks verbatim but collapses blank lines to single
+      // newlines. Normalising both sides by dropping backticks and collapsing whitespace runs
+      // is what survives either path. Runs are collapsed rather than trimmed: surrounding
+      // whitespace still has to be present on both sides, so a page that trimmed the prompt
+      // remains unprovable, which is the guarantee the prompt-verbatim rule depends on. Every
+      // other character must still match exactly and in order.
+      const strip = (value) => (value || '').replace(/\`/g, '').replace(/\\s+/g, ' ');
       const expected = strip(expectedPrompt);
       if (expected === '') return false;
       const descendants = [...element.querySelectorAll('*')].filter(visible);

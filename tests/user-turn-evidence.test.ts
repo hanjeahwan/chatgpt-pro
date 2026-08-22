@@ -95,14 +95,22 @@ function readEvidence(element: StubElement, prompt: string, names: readonly stri
 }
 
 /**
- * Builds a user turn shaped like ChatGPT's: an attachment tile beside a message body whose
- * inline code renders as <code>, dropping the backticks from the DOM text.
+ * Builds a user turn shaped like ChatGPT's, in either rendering path measured on live turns.
+ *
+ * `markdown` splits the prompt on inline code into <code> elements, dropping the backticks and
+ * keeping blank lines. `plain` keeps the text verbatim but collapses blank lines to single
+ * newlines. Both are lossy in different ways, so evidence has to survive either.
  *
  * @param prompt Locally saved prompt, backticks included.
  * @param attachmentNames Attachment basenames rendered as tiles.
+ * @param rendering Which page rendering path to reproduce.
  * @returns The user turn root element.
  */
-function userTurn(prompt: string, attachmentNames: readonly string[]): StubElement {
+function userTurn(
+  prompt: string,
+  attachmentNames: readonly string[],
+  rendering: 'markdown' | 'plain' = 'markdown',
+): StubElement {
   const turn = new StubElement('DIV', null, { 'data-turn': 'user' });
   const heading = new StubElement('H4', 'You said:');
   const tiles = new StubElement('DIV');
@@ -110,7 +118,10 @@ function userTurn(prompt: string, attachmentNames: readonly string[]): StubEleme
     tiles.append(new StubElement('DIV').append(new StubElement('DIV', name), new StubElement('SPAN', 'File')));
   }
   const body = new StubElement('DIV', null, { 'data-testid': 'collapsible-user-message-content' });
-  // ChatGPT keeps every other character verbatim, so the body is the prompt split on inline code.
+  if (rendering === 'plain') {
+    body.append(new StubElement('P', prompt.replace(/\n{2,}/g, '\n')));
+    return turn.append(heading, tiles, body);
+  }
   const segments = prompt.split('`');
   for (const [index, segment] of segments.entries()) {
     body.append(new StubElement(index % 2 === 0 ? 'DIV' : 'CODE', segment));
@@ -133,6 +144,20 @@ describe('user turn submission evidence', () => {
     const prompt = 'Read `grader.py` and `extract_answers.py` before answering.';
 
     expect(readEvidence(userTurn(prompt, []), prompt, [])).toBe(true);
+  });
+
+  it('matches the plain rendering that keeps backticks but collapses blank lines', () => {
+    // Regression: a long multi-paragraph turn rendered this way, so evidence keyed on the
+    // markdown path alone could not verify it and the submission stayed unprovable.
+    const prompt = `第一段提到 \`${attachment}\`。\n\n## 第二段\n\n- 列表项\n\n\`\`\`\ncode fence\n\`\`\``;
+
+    expect(readEvidence(userTurn(prompt, [attachment], 'plain'), prompt, [attachment])).toBe(true);
+  });
+
+  it('rejects a different prompt under the plain rendering too', () => {
+    const turn = userTurn('第一段。\n\n第二段。', [], 'plain');
+
+    expect(readEvidence(turn, '第一段。\n\n第三段。', [])).toBe(false);
   });
 
   it('matches a prompt with no markup at all', () => {
