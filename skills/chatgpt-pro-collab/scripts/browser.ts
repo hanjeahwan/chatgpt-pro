@@ -2808,6 +2808,34 @@ const SEND_TARGET_OK = `
     };`;
 
 /**
+ * Waits for a user turn to appear after the anchor before submission evidence is read.
+ *
+ * The anchor hydrates a beat before the turn under verification, and reading evidence inside
+ * that window reports zero candidates for a submission that is actually on the page. A prompt
+ * that was never submitted has no later turn at all, so the bounded expiry is an expected
+ * outcome and falls through to the evaluation that decides, rather than failing here.
+ */
+const SETTLE_LATER_USER_TURN = `
+    try {
+      await page.waitForFunction((anchorId) => {
+        const settleVisible = (element) => {
+          if (!(element instanceof HTMLElement)) return false;
+          const style = getComputedStyle(element);
+          return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
+        };
+        const settleTurns = [...document.querySelectorAll('[data-testid^="conversation-turn-"][data-turn]')]
+          .filter(settleVisible);
+        const settleAnchor = anchorId === null
+          ? -1
+          : settleTurns.findIndex((element) => element.getAttribute('data-testid') === anchorId);
+        if (anchorId !== null && settleAnchor < 0) return false;
+        return settleTurns.slice(settleAnchor + 1).some((element) => element.getAttribute('data-turn') === 'user');
+      }, previousUserTurnIdentity, { timeout: 15000, polling: 100 });
+    } catch {
+      // Nothing settled after the anchor; the evaluation below is the decision.
+    }`;
+
+/**
  * Page-local matcher that proves one user turn carries an exact prompt and attachment list.
  *
  * Exported so the submission-evidence rules can be exercised against a DOM without driving a
@@ -3955,7 +3983,7 @@ function autoVerifySubmissionScript(
         };
         return [...document.querySelectorAll('[data-testid^="conversation-turn-"][data-turn]')].filter(isVisible).length > 0;
       }, undefined, { timeout: 60000, polling: 100 });
-    }
+    }${SETTLE_LATER_USER_TURN}
     const turnState = await page.evaluate(({ previous, expectedPrompt, names }) => {
       const visible = (element) => {
         if (!(element instanceof HTMLElement)) return false;
@@ -4132,7 +4160,7 @@ function resolveSubmittedScript(
         };
         return [...document.querySelectorAll('[data-testid^="conversation-turn-"][data-turn]')].filter(visible).length > 0;
       }, undefined, { timeout: 60000, polling: 100 });
-    }
+    }${SETTLE_LATER_USER_TURN}
     const turnState = await page.evaluate(({ previous, expectedPrompt, names }) => {
       const visible = (element) => {
         if (!(element instanceof HTMLElement)) return false;
