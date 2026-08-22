@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import { readFile, rename, rm } from 'node:fs/promises';
 import { basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -2650,7 +2651,10 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-const invokedPath = process.argv[1] === undefined ? null : resolve(process.argv[1]);
+// Hosts commonly expose the Skill through a link such as `.claude/skills/<name>`, and Node
+// reports `import.meta.url` as the link target. Comparing an unresolved invocation path would
+// then silently skip the CLI, leaving every command a no-op that still exits zero.
+const invokedPath = process.argv[1] === undefined ? null : realpathSync(resolve(process.argv[1]));
 if (invokedPath !== null && invokedPath === fileURLToPath(import.meta.url)) {
   process.exitCode = await runCli(process.argv.slice(2));
 }

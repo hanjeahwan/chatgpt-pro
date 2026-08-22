@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, readFile, unlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -805,6 +805,21 @@ describe('BEH-001 through BEH-009 CLI orchestration', () => {
     const cliPath = fileURLToPath(new URL('../skills/chatgpt-pro-collab/scripts/collab.ts', import.meta.url));
 
     const result = spawnSync(process.execPath, [cliPath, 'help'], {
+      cwd: hostDirectory,
+      encoding: 'utf8',
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('node "<skill-directory>/scripts/collab.ts" start');
+  });
+
+  it('runs the Skill entry through a linked skill directory', async () => {
+    const hostDirectory = await mkdtemp(join(tmpdir(), 'collab-host-'));
+    const skillDirectory = fileURLToPath(new URL('../skills/chatgpt-pro-collab', import.meta.url));
+    const linkedSkill = join(hostDirectory, 'chatgpt-pro-collab');
+    await symlink(skillDirectory, linkedSkill, 'dir');
+
+    const result = spawnSync(process.execPath, [join(linkedSkill, 'scripts', 'collab.ts'), 'help'], {
       cwd: hostDirectory,
       encoding: 'utf8',
     });
