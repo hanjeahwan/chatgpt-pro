@@ -3163,7 +3163,12 @@ function sendScript(expectedConversationId: string | null, prompt: string): stri
           .filter((element) => element.getAttribute('data-turn') === 'user')
           .map((element) => element.getAttribute('data-testid'));
       });
-      await composer.fill(${JSON.stringify(prompt)});
+      // A long conversation keeps the composer mounted but not yet editable well past
+      // Playwright's default action timeout, so a page that is merely slow fails as if the
+      // contract had drifted. The wait stays before the ambiguity boundary below, so exhausting
+      // this budget is still a provable non-submission.
+      await composer.waitFor({ state: 'visible', timeout: 120000 });
+      await composer.fill(${JSON.stringify(prompt)}, { timeout: 120000 });
       clicked = true;
       await send.click();
       await page.waitForFunction((knownIds) => {
