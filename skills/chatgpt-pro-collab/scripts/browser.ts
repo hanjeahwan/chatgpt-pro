@@ -2807,19 +2807,46 @@ const SEND_TARGET_OK = `
       return match !== null && !match[1].startsWith('WEB:') && match[1] === expectedConversationId;
     };`;
 
-const USER_TURN_EVIDENCE = `
+/**
+ * Page-local matcher that proves one user turn carries an exact prompt and attachment list.
+ *
+ * Exported so the submission-evidence rules can be exercised against a DOM without driving a
+ * browser; production embeds this source into generated page scripts.
+ */
+export const USER_TURN_EVIDENCE = `
     const readUserTurnEvidence = (element, expectedPrompt, names) => {
       const visible = (candidate) => {
         if (!(candidate instanceof HTMLElement)) return false;
         const style = getComputedStyle(candidate);
         return style.visibility !== 'hidden' && style.display !== 'none' && candidate.getClientRects().length > 0;
       };
-      const leaves = [...element.querySelectorAll('*')].filter((leaf) => visible(leaf) && leaf.children.length === 0);
-      const isAccessibleHeading = (leaf) => {
-        const tagName = typeof leaf.tagName === 'string' ? leaf.tagName.toUpperCase() : '';
-        const role = typeof leaf.getAttribute === 'function' ? (leaf.getAttribute('role') || '') : '';
-        return /^H[1-6]$/.test(tagName) || role === 'heading';
+      // ChatGPT renders inline code inside a user message as <code>, so the backticks never
+      // reach the DOM text. Both sides drop backticks and every other character still has to
+      // match exactly; only prompts differing solely in backtick placement become
+      // indistinguishable, which is the smallest concession that keeps a submitted prompt
+      // provable once the page has rendered it.
+      const strip = (value) => (value || '').replace(/\`/g, '');
+      const expected = strip(expectedPrompt);
+      if (expected === '') return false;
+      const descendants = [...element.querySelectorAll('*')].filter(visible);
+      const within = (candidate, container) => {
+        let ancestor = candidate;
+        while (ancestor !== null && ancestor !== element) {
+          if (ancestor === container) return true;
+          ancestor = ancestor.parentElement;
+        }
+        return false;
       };
+      // The prompt body is the deepest element whose text is exactly the expected prompt.
+      // Locating it by text rather than by an internal test id keeps attachment chips strictly
+      // outside it, so a prompt that mentions its own attachment filename can no longer be read
+      // as a chip — that misread previously swallowed the whole message and left no prompt text.
+      let promptContainer = null;
+      for (const candidate of descendants) {
+        if (strip(candidate.textContent) !== expected) continue;
+        if (promptContainer === null || within(candidate, promptContainer)) promptContainer = candidate;
+      }
+      if (promptContainer === null) return false;
       const insideButton = (leaf) => {
         let ancestor = leaf;
         while (ancestor !== null && ancestor !== element) {
@@ -2828,44 +2855,18 @@ const USER_TURN_EVIDENCE = `
         }
         return false;
       };
-      const leafInside = (leaf, container) => {
-        let ancestor = leaf.parentElement;
-        while (ancestor !== null && ancestor !== element) {
-          if (ancestor === container) return true;
-          ancestor = ancestor.parentElement;
-        }
-        return false;
-      };
-      const chipContainers = new Set();
-      for (const leaf of leaves) {
-        const text = (leaf.textContent || '').trim();
-        if (!names.includes(text)) continue;
-        let container = leaf.parentElement;
-        while (container !== null && container !== element) {
-          const inside = leaves.filter((candidate) => leafInside(candidate, container));
-          if (inside.length > 1) break;
-          container = container.parentElement;
-        }
-        chipContainers.add(container === null || container === element ? leaf : container);
-      }
       const attachmentTexts = [];
-      const promptParts = [];
-      for (const leaf of leaves) {
-        if (insideButton(leaf)) continue;
-        const inChip = [...chipContainers].some((container) => leafInside(leaf, container));
+      for (const leaf of descendants) {
+        if (leaf.children.length !== 0) continue;
+        if (within(leaf, promptContainer) || insideButton(leaf)) continue;
         const text = (leaf.textContent || '').trim();
-        if (inChip) {
-          if (names.includes(text)) attachmentTexts.push(text);
-          continue;
-        }
-        if (isAccessibleHeading(leaf) && (text === 'You said:' || text === 'You said')) continue;
-        promptParts.push(leaf.textContent || '');
+        if (names.includes(text)) attachmentTexts.push(text);
       }
       if (attachmentTexts.length !== names.length) return false;
       for (let index = 0; index < names.length; index += 1) {
         if (attachmentTexts[index] !== names[index]) return false;
       }
-      return promptParts.join('') === expectedPrompt;
+      return true;
     };`;
 
 /**
