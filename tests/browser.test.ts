@@ -528,6 +528,26 @@ describe('BEH-008 detached browser cleanup', () => {
       }
     }
   });
+
+  it('treats a recycled PID owned by another user as an exited daemon', async () => {
+    // Regression: the liveness probe rethrew EPERM, so a PID recycled after the daemon exited
+    // failed cleanup and stranded the task in `closing`.
+    const sessionName = `chatgpt-pro-collab-${crypto.randomUUID()}`;
+    const realKill = process.kill.bind(process);
+    const permissionDenied = Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+    process.kill = ((pid: number, signal?: number | NodeJS.Signals) => {
+      if (pid === -424242 || pid === 424242) {
+        throw permissionDenied;
+      }
+      return realKill(pid, signal);
+    }) as typeof process.kill;
+
+    try {
+      await expect(terminateBrowserDaemon(424242, sessionName)).resolves.toBeUndefined();
+    } finally {
+      process.kill = realKill;
+    }
+  });
 });
 
 describe('BEH-002 fixed Project and GPT-5.6 Sol Power 5/5 start context', () => {

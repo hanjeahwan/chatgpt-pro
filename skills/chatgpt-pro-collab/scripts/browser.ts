@@ -1861,7 +1861,10 @@ function killIfAlive(pid: number, signal: NodeJS.Signals): void {
   try {
     process.kill(pid, signal);
   } catch (error) {
-    if (!(error instanceof Error) || !('code' in error) || error.code !== 'ESRCH') {
+    // ESRCH already exited; EPERM belongs to another user and therefore is not a process this
+    // one started. Neither is a cleanup failure, and treating EPERM as one aborts close.
+    const code = error instanceof Error && 'code' in error ? error.code : undefined;
+    if (code !== 'ESRCH' && code !== 'EPERM') {
       throw error;
     }
   }
@@ -1947,7 +1950,10 @@ function processGroupAlive(pid: number): boolean {
     process.kill(process.platform === 'win32' ? pid : -pid, 0);
     return true;
   } catch (error) {
-    if (error instanceof Error && 'code' in error && error.code === 'ESRCH') {
+    // ESRCH is an absent group. EPERM means the group exists but belongs to another user, so it
+    // cannot be the daemon this process started — the recorded PID was recycled after the daemon
+    // exited. Reporting that as alive strands the task in `closing` forever.
+    if (error instanceof Error && 'code' in error && (error.code === 'ESRCH' || error.code === 'EPERM')) {
       return false;
     }
     throw error;
@@ -2808,34 +2814,6 @@ const SEND_TARGET_OK = `
     };`;
 
 /**
- * Waits for a user turn to appear after the anchor before submission evidence is read.
- *
- * The anchor hydrates a beat before the turn under verification, and reading evidence inside
- * that window reports zero candidates for a submission that is actually on the page. A prompt
- * that was never submitted has no later turn at all, so the bounded expiry is an expected
- * outcome and falls through to the evaluation that decides, rather than failing here.
- */
-const SETTLE_LATER_USER_TURN = `
-    try {
-      await page.waitForFunction((anchorId) => {
-        const settleVisible = (element) => {
-          if (!(element instanceof HTMLElement)) return false;
-          const style = getComputedStyle(element);
-          return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
-        };
-        const settleTurns = [...document.querySelectorAll('[data-testid^="conversation-turn-"][data-turn]')]
-          .filter(settleVisible);
-        const settleAnchor = anchorId === null
-          ? -1
-          : settleTurns.findIndex((element) => element.getAttribute('data-testid') === anchorId);
-        if (anchorId !== null && settleAnchor < 0) return false;
-        return settleTurns.slice(settleAnchor + 1).some((element) => element.getAttribute('data-turn') === 'user');
-      }, previousUserTurnIdentity, { timeout: 15000, polling: 100 });
-    } catch {
-      // Nothing settled after the anchor; the evaluation below is the decision.
-    }`;
-
-/**
  * Page-local matcher that proves one user turn carries an exact prompt and attachment list.
  *
  * Exported so the submission-evidence rules can be exercised against a DOM without driving a
@@ -2899,6 +2877,43 @@ export const USER_TURN_EVIDENCE = `
       }
       return true;
     };`;
+
+/**
+ * Waits until submission evidence is actually readable before it is read.
+ *
+ * Evidence turns on `getClientRects`, which reports nothing while the page is still laying the
+ * turn out, so a submission that is present reads as absent for a beat after load. Settling on
+ * the turn merely existing is not enough — its body can still be unlaid-out — so this waits for
+ * the matcher itself to succeed. A prompt that was never submitted never matches, so the
+ * bounded expiry is an expected outcome that falls through to the evaluation that decides.
+ */
+const SETTLE_SUBMISSION_EVIDENCE = `
+    try {
+      await page.waitForFunction(({ previous, expectedPrompt, names }) => {
+        const visible = (element) => {
+          if (!(element instanceof HTMLElement)) return false;
+          const style = getComputedStyle(element);
+          return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0;
+        };${USER_TURN_EVIDENCE}
+        const settleTurns = [...document.querySelectorAll('[data-testid^="conversation-turn-"][data-turn]')]
+          .filter(visible);
+        let settleAnchor = -1;
+        if (previous !== null) {
+          const settleMatches = settleTurns.flatMap((element, index) => {
+            return element.getAttribute('data-testid') === previous ? [index] : [];
+          });
+          if (settleMatches.length !== 1) return false;
+          settleAnchor = settleMatches[0];
+        }
+        return settleTurns.slice(settleAnchor + 1).some((element) => {
+          return element.getAttribute('data-turn') === 'user' &&
+            readUserTurnEvidence(element, expectedPrompt, names);
+        });
+      }, { previous: previousUserTurnIdentity, expectedPrompt: prompt, names: attachmentNames },
+        { timeout: 20000, polling: 200 });
+    } catch {
+      // Evidence never became readable in the window; the evaluation below is the decision.
+    }`;
 
 /**
  * Builds the fixed Project blank-composer identity wait for a first send.
@@ -3983,7 +3998,7 @@ function autoVerifySubmissionScript(
         };
         return [...document.querySelectorAll('[data-testid^="conversation-turn-"][data-turn]')].filter(isVisible).length > 0;
       }, undefined, { timeout: 60000, polling: 100 });
-    }${SETTLE_LATER_USER_TURN}
+    }${SETTLE_SUBMISSION_EVIDENCE}
     const turnState = await page.evaluate(({ previous, expectedPrompt, names }) => {
       const visible = (element) => {
         if (!(element instanceof HTMLElement)) return false;
@@ -4160,7 +4175,7 @@ function resolveSubmittedScript(
         };
         return [...document.querySelectorAll('[data-testid^="conversation-turn-"][data-turn]')].filter(visible).length > 0;
       }, undefined, { timeout: 60000, polling: 100 });
-    }${SETTLE_LATER_USER_TURN}
+    }${SETTLE_SUBMISSION_EVIDENCE}
     const turnState = await page.evaluate(({ previous, expectedPrompt, names }) => {
       const visible = (element) => {
         if (!(element instanceof HTMLElement)) return false;
